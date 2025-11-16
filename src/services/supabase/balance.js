@@ -22,7 +22,9 @@ class SupabaseBalanceService {
       .from('namecheap_balance')
       .upsert({
         user_id: config.SUPABASE_USER_ID,
-        ...balanceData
+        balance_usd: balanceData.balance_usd,
+        balance_brl: balanceData.balance_brl,
+        last_synced_at: balanceData.last_synced_at
       }, {
         onConflict: 'user_id'
       })
