@@ -5,8 +5,7 @@ const requiredEnvVars = [
   'SUPABASE_SERVICE_ROLE_KEY',
   'SUPABASE_USER_ID',
   'NAMECHEAP_API_USER',
-  'NAMECHEAP_API_KEY',
-  'OPENAI_API_KEY'
+  'NAMECHEAP_API_KEY'
 ];
 
 const missingVars = requiredEnvVars.filter(varName => !process.env[varName]);
@@ -15,6 +14,11 @@ if (missingVars.length > 0) {
   console.error('Variáveis de ambiente obrigatórias ausentes:');
   missingVars.forEach(varName => console.error(`  - ${varName}`));
   throw new Error(`Configure as variáveis no Render: ${missingVars.join(', ')}`);
+}
+
+// Verificar se OPENAI_API_KEY está configurada (opcional, mas recomendado)
+if (!process.env.OPENAI_API_KEY) {
+  console.warn('⚠️ OPENAI_API_KEY não configurada - tradução de alertas desabilitada');
 }
 
 module.exports = {
@@ -36,5 +40,8 @@ module.exports = {
 
   ZAPI_INSTANCE: process.env.ZAPI_INSTANCE,
   ZAPI_TOKEN: process.env.ZAPI_TOKEN,
-  ZAPI_CLIENT_TOKEN: process.env.ZAPI_CLIENT_TOKEN
+  ZAPI_CLIENT_TOKEN: process.env.ZAPI_CLIENT_TOKEN,
+
+  // Chave OpenAI para tradução de alertas
+  OPENAI_API_KEY: process.env.OPENAI_API_KEY
 };
