@@ -49,7 +49,7 @@ class NamecheapDomainsService {
             }
           ],
           temperature: 0.3,
-          max_tokens: 1000
+          max_tokens: 200
         },
         {
           headers: {
@@ -154,7 +154,15 @@ class NamecheapDomainsService {
         const errorMatch = xmlData.match(/<Error[^>]*>([^<]+)<\/Error>/);
         const errorMessage = errorMatch ? errorMatch[1] : 'Erro desconhecido';
         
-        let statusType = 'active';
+        let extractedDomainName = domainName;
+        if (!extractedDomainName && errorMessage) {
+          const domainMatch = errorMessage.match(/\(([^)]+\.[a-z]+)\)/);
+          if (domainMatch) {
+            extractedDomainName = domainMatch[1];
+          }
+        }
+        
+        let statusType = 'suspended';
         const errorMsg = errorMessage.toLowerCase();
         
         if (errorMsg.includes('suspended')) {
@@ -167,16 +175,29 @@ class NamecheapDomainsService {
           statusType = 'pending';
         }
         
-        const translatedError = await this.translateAlert(errorMessage, domainName);
+        let unsuspensionLink = null;
+        const linkMatch = errorMessage.match(/https:\/\/[^\s]+/);
+        if (linkMatch) {
+          unsuspensionLink = linkMatch[0];
+        }
+        
+        const now = new Date();
+        const brasilTime = new Date(now.toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' }));
+        const timestampISO = brasilTime.toISOString().slice(0, 19) + '-03:00';
+        
+        const translatedError = await this.translateAlert(errorMessage, extractedDomainName);
         
         return {
-          domain_name: domainName,
+          domain_name: extractedDomainName,
           has_error: true,
           error_type: errorMessage.toLowerCase().includes('rate limit') ? 'rate_limit' : 'other_error',
           error_message: errorMessage,
           has_alert: translatedError,
           status: statusType,
-          last_stats_update: new Date().toISOString()
+          last_stats_update: timestampISO,
+          alert_details: {
+            unsuspension_link: unsuspensionLink
+          }
         };
       }
 
@@ -207,10 +228,14 @@ class NamecheapDomainsService {
       const autoRenewMatch = xmlData.match(/<UseAutoRenew>([^<]+)<\/UseAutoRenew>/);
       const auto_renew = autoRenewMatch ? autoRenewMatch[1] === 'true' : false;
 
+      const now = new Date();
+      const brasilTime = new Date(now.toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' }));
+      const timestampISO = brasilTime.toISOString().slice(0, 19) + '-03:00';
+
       let has_alert = null;
       if (status === 'suspended' || status === 'locked') {
         const alertMessage = 'Domain is suspended or locked';
-        has_alert = await this.translateAlert(alertMessage, domainName);
+        has_alert = await this.translateAlert(alertMessage, domain_name);
       }
 
       return {
@@ -223,17 +248,21 @@ class NamecheapDomainsService {
         nameservers: nameservers.length > 0 ? nameservers : null,
         dns_configured: nameservers.length > 0,
         auto_renew: auto_renew,
-        last_stats_update: new Date().toISOString(),
+        last_stats_update: timestampISO,
         has_alert: has_alert
       };
     } catch (error) {
+      const now = new Date();
+      const brasilTime = new Date(now.toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' }));
+      const timestampISO = brasilTime.toISOString().slice(0, 19) + '-03:00';
+      
       return {
         domain_name: domainName,
         has_error: true,
         error_type: 'request_failed',
         error_message: error.message,
-        status: 'unknown',
-        last_stats_update: new Date().toISOString()
+        status: 'suspended',
+        last_stats_update: timestampISO
       };
     }
   }
