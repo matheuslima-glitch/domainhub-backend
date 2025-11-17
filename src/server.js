@@ -69,22 +69,40 @@ cron.schedule('0 */4 * * *', async () => {
     const detailedDomains = [];
     const rateLimitDelay = 250;
     let processedCount = 0;
+    let rateLimitHits = 0;
+    const MAX_RATE_LIMIT_RETRIES = 3;
 
     for (const domain of domains) {
       processedCount++;
       console.log(`📋 [CRON] Processando ${processedCount}/${domains.length}: ${domain.domain_name}`);
       
-      const details = await namecheapDomains.getDomainInfo(domain.domain_name);
+      let details = await namecheapDomains.getDomainInfo(domain.domain_name);
       
       if (!details.has_error) {
         detailedDomains.push(details);
+        rateLimitHits = 0;
       } else if (details.error_type === 'rate_limit') {
-        console.warn(`⚠️ [CRON] Rate limit atingido em ${domain.domain_name}, aguardando 60s...`);
-        await namecheapDomains.delay(60000);
+        rateLimitHits++;
+        console.warn(`⚠️ [CRON] Rate limit atingido (${rateLimitHits}/${MAX_RATE_LIMIT_RETRIES}) em ${domain.domain_name}`);
         
-        const retry = await namecheapDomains.getDomainInfo(domain.domain_name);
-        if (!retry.has_error) {
-          detailedDomains.push(retry);
+        if (rateLimitHits >= MAX_RATE_LIMIT_RETRIES) {
+          console.error(`❌ [CRON] Rate limit persistente. Parando sincronização. Progresso: ${processedCount}/${domains.length}`);
+          break;
+        }
+        
+        console.log('⏳ [CRON] Aguardando 2 minutos antes de continuar...');
+        await namecheapDomains.delay(120000);
+        
+        details = await namecheapDomains.getDomainInfo(domain.domain_name);
+        if (!details.has_error) {
+          detailedDomains.push(details);
+          rateLimitHits = 0;
+        }
+      } else if (details.error_type === 'other_error') {
+        console.warn(`⚠️ [CRON] Erro em ${domain.domain_name}: ${details.error_message}`);
+        
+        if (details.has_alert) {
+          detailedDomains.push(details);
         }
       }
       
@@ -103,6 +121,13 @@ app.listen(config.PORT, async () => {
   console.log(`Servidor rodando na porta ${config.PORT}`);
   console.log(`Ambiente: ${config.NODE_ENV}`);
   console.log('🕐 Cron de domínios configurado: A cada 4 horas');
+  
+  console.log('========================================');
+  console.log('🔑 TESTE DE VARIÁVEIS DE AMBIENTE:');
+  console.log('OPENAI_API_KEY existe?', !!process.env.OPENAI_API_KEY);
+  console.log('OPENAI_API_KEY primeiros 15 chars:', process.env.OPENAI_API_KEY ? process.env.OPENAI_API_KEY.substring(0, 15) : 'UNDEFINED');
+  console.log('Todas as variáveis com OPENAI:', Object.keys(process.env).filter(k => k.includes('OPENAI')));
+  console.log('========================================');
   
   const namecheapBalance = require('./services/namecheap/balance');
   const ip = await namecheapBalance.getServerIP();
