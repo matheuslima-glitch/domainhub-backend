@@ -141,6 +141,19 @@ class NamecheapDomainsService {
         const errorMatch = xmlData.match(/<Error[^>]*>([^<]+)<\/Error>/);
         const errorMessage = errorMatch ? errorMatch[1] : 'Erro desconhecido';
         
+        let statusType = 'active';
+        const errorMsg = errorMessage.toLowerCase();
+        
+        if (errorMsg.includes('suspended')) {
+          statusType = 'suspended';
+        } else if (errorMsg.includes('locked')) {
+          statusType = 'suspended';
+        } else if (errorMsg.includes('expired')) {
+          statusType = 'expired';
+        } else if (errorMsg.includes('pending')) {
+          statusType = 'pending';
+        }
+        
         const translatedError = await this.translateAlert(errorMessage, domainName);
         
         return {
@@ -149,7 +162,7 @@ class NamecheapDomainsService {
           error_type: errorMessage.toLowerCase().includes('rate limit') ? 'rate_limit' : 'other_error',
           error_message: errorMessage,
           has_alert: translatedError,
-          status: 'suspended',
+          status: statusType,
           last_stats_update: new Date().toISOString()
         };
       }

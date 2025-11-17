@@ -33,22 +33,23 @@ class SupabaseDomainsService {
     const { data, error } = await this.client.rpc('upsert_domain_stats', payload);
 
     if (error) throw error;
+    return data;
+  }
 
-    if (domainData.has_alert) {
-      const { error: alertError } = await this.client
-        .from('domains')
-        .update({ 
-          has_alert: domainData.has_alert,
-          updated_at: new Date().toISOString()
-        })
-        .eq('domain_name', domainData.domain_name)
-        .eq('user_id', config.SUPABASE_USER_ID);
+  async updateDomainAlert(domainName, alertData) {
+    const { data, error } = await this.client
+      .from('domains')
+      .update({
+        status: alertData.status,
+        has_alert: alertData.has_alert,
+        last_stats_update: alertData.last_stats_update,
+        updated_at: new Date().toISOString()
+      })
+      .eq('domain_name', domainName)
+      .eq('user_id', config.SUPABASE_USER_ID)
+      .select();
 
-      if (alertError) {
-        console.error(`⚠️ Erro ao salvar alerta de ${domainData.domain_name}:`, alertError.message);
-      }
-    }
-
+    if (error) throw error;
     return data;
   }
 
@@ -61,7 +62,16 @@ class SupabaseDomainsService {
 
     for (const domain of domains) {
       try {
-        await this.upsertDomain(domain);
+        if (domain.has_error && domain.has_alert) {
+          await this.updateDomainAlert(domain.domain_name, {
+            status: domain.status,
+            has_alert: domain.has_alert,
+            last_stats_update: domain.last_stats_update
+          });
+          console.log(`✅ Alerta salvo: ${domain.domain_name}`);
+        } else {
+          await this.upsertDomain(domain);
+        }
         results.success++;
       } catch (error) {
         results.failed++;
@@ -69,6 +79,7 @@ class SupabaseDomainsService {
           domain: domain.domain_name,
           error: error.message
         });
+        console.error(`❌ Erro ao salvar ${domain.domain_name}:`, error.message);
       }
     }
 
