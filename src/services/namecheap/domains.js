@@ -21,7 +21,17 @@ class NamecheapDomainsService {
   }
 
   async translateAlert(alertText, domainName) {
-    if (!alertText || !config.OPENAI_API_KEY) return alertText;
+    if (!alertText) {
+      console.log(`⚠️ Sem texto para traduzir: ${domainName}`);
+      return alertText;
+    }
+    
+    if (!config.OPENAI_API_KEY) {
+      console.log(`⚠️ OPENAI_API_KEY não configurada`);
+      return alertText;
+    }
+    
+    console.log(`🔄 Iniciando tradução para ${domainName}: "${alertText.substring(0, 50)}..."`);
     
     try {
       const response = await axios.post(
@@ -39,7 +49,7 @@ class NamecheapDomainsService {
             }
           ],
           temperature: 0.3,
-          max_tokens: 200
+          max_tokens: 1000
         },
         {
           headers: {
@@ -53,7 +63,10 @@ class NamecheapDomainsService {
       console.log(`🌐 Alerta traduzido para ${domainName}: ${translated}`);
       return translated;
     } catch (error) {
-      console.error(`❌ Erro ao traduzir alerta de ${domainName}:`, error.message);
+      console.error(`❌ ERRO DETALHADO ao traduzir ${domainName}:`);
+      console.error(`   Status: ${error.response?.status}`);
+      console.error(`   Mensagem: ${error.response?.data?.error?.message || error.message}`);
+      console.error(`   Dados completos:`, JSON.stringify(error.response?.data, null, 2));
       return alertText;
     }
   }
