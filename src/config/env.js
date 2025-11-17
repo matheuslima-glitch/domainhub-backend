@@ -5,7 +5,8 @@ const requiredEnvVars = [
   'SUPABASE_SERVICE_ROLE_KEY',
   'SUPABASE_USER_ID',
   'NAMECHEAP_API_USER',
-  'NAMECHEAP_API_KEY'
+  'NAMECHEAP_API_KEY',
+  'OPENAI_API_KEY'
 ];
 
 const missingVars = requiredEnvVars.filter(varName => !process.env[varName]);
