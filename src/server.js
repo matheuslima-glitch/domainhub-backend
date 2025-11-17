@@ -122,13 +122,6 @@ app.listen(config.PORT, async () => {
   console.log(`Ambiente: ${config.NODE_ENV}`);
   console.log('🕐 Cron de domínios configurado: A cada 4 horas');
   
-  console.log('========================================');
-  console.log('🔑 TESTE DE VARIÁVEIS DE AMBIENTE:');
-  console.log('OPENAI_API_KEY existe?', !!process.env.OPENAI_API_KEY);
-  console.log('OPENAI_API_KEY primeiros 15 chars:', process.env.OPENAI_API_KEY ? process.env.OPENAI_API_KEY.substring(0, 15) : 'UNDEFINED');
-  console.log('Todas as variáveis com OPENAI:', Object.keys(process.env).filter(k => k.includes('OPENAI')));
-  console.log('========================================');
-  
   const namecheapBalance = require('./services/namecheap/balance');
   const ip = await namecheapBalance.getServerIP();
   console.log(`IP do servidor: ${ip}`);
