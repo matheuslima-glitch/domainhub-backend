@@ -1,10 +1,8 @@
 const axios = require('axios');
-const xml2js = require('xml2js');
 const config = require('../../config/env');
 
 class NamecheapDomainsService {
   constructor() {
-    this.parser = new xml2js.Parser({ explicitArray: false });
     this.baseURL = 'https://api.namecheap.com/xml.response';
     this.rateLimit = {
       perMinute: 300,
@@ -74,31 +72,50 @@ class NamecheapDomainsService {
     };
 
     const response = await axios.get(this.baseURL, { params });
-    const result = await this.parser.parseStringPromise(response.data);
-    
-    const apiResponse = result.ApiResponse;
-    if (apiResponse.$.Status === 'ERROR') {
-      throw new Error(apiResponse.Errors.Error);
+    const xmlData = response.data;
+
+    if (xmlData.includes('Status="ERROR"')) {
+      const errorMatch = xmlData.match(/<Error[^>]*>([^<]+)<\/Error>/);
+      const errorMessage = errorMatch ? errorMatch[1] : 'Erro desconhecido na API Namecheap';
+      throw new Error(errorMessage);
     }
 
-    const domainListResult = apiResponse.CommandResponse.DomainGetListResult;
-    const domains = domainListResult.Domain || [];
-    const domainArray = Array.isArray(domains) ? domains : [domains];
+    const totalItemsMatch = xmlData.match(/<TotalItems>(\d+)<\/TotalItems>/);
+    const pageSizeMatch = xmlData.match(/<PageSize>(\d+)<\/PageSize>/);
+    const currentPageMatch = xmlData.match(/<CurrentPage>(\d+)<\/CurrentPage>/);
 
-    const totalItems = parseInt(domainListResult.Paging.TotalItems);
-    const currentPage = parseInt(domainListResult.Paging.CurrentPage);
-    const totalPages = Math.ceil(totalItems / pageSize);
+    const totalDomains = totalItemsMatch ? parseInt(totalItemsMatch[1]) : 0;
+    const pageSizeValue = pageSizeMatch ? parseInt(pageSizeMatch[1]) : 100;
+    const currentPage = currentPageMatch ? parseInt(currentPageMatch[1]) : 1;
+    const totalPages = Math.ceil(totalDomains / pageSizeValue);
+
+    const domainRegex = /<Domain[^>]*Name="([^"]+)"[^>]*Expires="([^"]+)"[^>]*IsExpired="([^"]+)"[^>]*IsLocked="([^"]+)"/g;
+    const domains = [];
+    let match;
+
+    while ((match = domainRegex.exec(xmlData)) !== null) {
+      const [_, name, expires, isExpired, isLocked] = match;
+      
+      let status = 'active';
+      if (isExpired === 'true') {
+        status = 'expired';
+      } else if (isLocked === 'true') {
+        status = 'suspended';
+      }
+      
+      domains.push({
+        domain_name: name,
+        expiration_date: expires,
+        status: status
+      });
+    }
 
     return {
-      domains: domainArray.map(d => ({
-        domain_name: d.$.Name,
-        expiration_date: d.$.Expires,
-        status: d.$.IsExpired === 'true' ? 'expired' : (d.$.IsLocked === 'true' ? 'suspended' : 'active')
-      })),
+      domains: domains,
       pagination: {
         currentPage,
         totalPages,
-        totalItems,
+        totalItems: totalDomains,
         hasMore: currentPage < totalPages
       }
     };
@@ -118,12 +135,11 @@ class NamecheapDomainsService {
 
     try {
       const response = await axios.get(this.baseURL, { params });
-      const result = await this.parser.parseStringPromise(response.data);
+      const xmlData = response.data;
       
-      const apiResponse = result.ApiResponse;
-      if (apiResponse.$.Status === 'ERROR') {
-        const error = apiResponse.Errors.Error;
-        const errorMessage = typeof error === 'string' ? error : error._;
+      if (xmlData.includes('Status="ERROR"')) {
+        const errorMatch = xmlData.match(/<Error[^>]*>([^<]+)<\/Error>/);
+        const errorMessage = errorMatch ? errorMatch[1] : 'Erro desconhecido';
         
         const translatedError = await this.translateAlert(errorMessage, domainName);
         
@@ -138,37 +154,51 @@ class NamecheapDomainsService {
         };
       }
 
-      const domainInfo = apiResponse.CommandResponse.DomainGetInfoResult;
-      const dnsDetails = domainInfo.DnsDetails;
+      const domainNameMatch = xmlData.match(/DomainName="([^"]+)"/);
+      const domain_name = domainNameMatch ? domainNameMatch[1] : domainName;
       
-      let nameservers = [];
-      if (dnsDetails && dnsDetails.Nameserver) {
-        const ns = dnsDetails.Nameserver;
-        nameservers = Array.isArray(ns) ? ns : [ns];
+      const expiredDateMatch = xmlData.match(/<ExpiredDate>([^<]+)<\/ExpiredDate>/);
+      const expiration_date = expiredDateMatch ? expiredDateMatch[1] : null;
+      
+      const createdMatch = xmlData.match(/<CreatedDate>([^<]+)<\/CreatedDate>/);
+      const purchase_date = createdMatch ? createdMatch[1] : null;
+      
+      const statusMatch = xmlData.match(/DomainGetInfoResult Status="([^"]+)"/);
+      const status = statusMatch ? statusMatch[1].toLowerCase() : 'active';
+
+      const nameservers = [];
+      const nsPattern1 = /<Nameserver>([^<]+)<\/Nameserver>/g;
+      let nsMatch;
+      while ((nsMatch = nsPattern1.exec(xmlData)) !== null) {
+        if (nsMatch[1] && nsMatch[1].trim()) {
+          const ns = nsMatch[1].trim();
+          if (!nameservers.includes(ns)) {
+            nameservers.push(ns);
+          }
+        }
       }
 
-      const status = domainInfo.$.Status.toLowerCase();
-      let hasAlert = null;
+      const autoRenewMatch = xmlData.match(/<UseAutoRenew>([^<]+)<\/UseAutoRenew>/);
+      const auto_renew = autoRenewMatch ? autoRenewMatch[1] === 'true' : false;
 
+      let has_alert = null;
       if (status === 'suspended' || status === 'locked') {
-        const alertMessage = domainInfo.DomainDetails?.StatusDescription || 
-                            domainInfo.$.StatusDescription || 
-                            'Domain is suspended or locked';
-        hasAlert = await this.translateAlert(alertMessage, domainName);
+        const alertMessage = 'Domain is suspended or locked';
+        has_alert = await this.translateAlert(alertMessage, domainName);
       }
 
       return {
-        domain_name: domainInfo.$.DomainName,
-        expiration_date: domainInfo.DomainDetails.ExpiredDate,
-        purchase_date: domainInfo.DomainDetails.CreatedDate,
+        domain_name: domain_name,
+        expiration_date: expiration_date,
+        purchase_date: purchase_date,
         status: status,
         registrar: 'Namecheap',
         integration_source: 'namecheap',
         nameservers: nameservers.length > 0 ? nameservers : null,
         dns_configured: nameservers.length > 0,
-        auto_renew: domainInfo.Modificationrights?.All === 'true',
+        auto_renew: auto_renew,
         last_stats_update: new Date().toISOString(),
-        has_alert: hasAlert
+        has_alert: has_alert
       };
     } catch (error) {
       return {
