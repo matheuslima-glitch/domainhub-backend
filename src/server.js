@@ -64,54 +64,98 @@ cron.schedule('0 */4 * * *', async () => {
     const supabaseDomains = require('./services/supabase/domains');
     
     const domains = await namecheapDomains.syncAllDomains();
-    console.log(`✅ [CRON] ${domains.length} domínios listados`);
+    console.log(`✅ [CRON] ${domains.length} domínios listados da API Namecheap`);
     
-    const detailedDomains = [];
+    const BATCH_SIZE = 100; // Processar e salvar a cada 100 domínios
     const rateLimitDelay = 250;
     let processedCount = 0;
     let rateLimitHits = 0;
     const MAX_RATE_LIMIT_RETRIES = 3;
+    let totalSaved = 0;
+    let totalFailed = 0;
 
-    for (const domain of domains) {
-      processedCount++;
-      console.log(`📋 [CRON] Processando ${processedCount}/${domains.length}: ${domain.domain_name}`);
+    // Processar em lotes de 100
+    for (let i = 0; i < domains.length; i += BATCH_SIZE) {
+      const batch = domains.slice(i, i + BATCH_SIZE);
+      const batchNumber = Math.floor(i / BATCH_SIZE) + 1;
+      const totalBatches = Math.ceil(domains.length / BATCH_SIZE);
       
-      let details = await namecheapDomains.getDomainInfo(domain.domain_name);
+      console.log(`\n📦 [CRON] Processando lote ${batchNumber}/${totalBatches} (${batch.length} domínios)`);
       
-      if (!details.has_error) {
-        detailedDomains.push(details);
-        rateLimitHits = 0;
-      } else if (details.error_type === 'rate_limit') {
-        rateLimitHits++;
-        console.warn(`⚠️ [CRON] Rate limit atingido (${rateLimitHits}/${MAX_RATE_LIMIT_RETRIES}) em ${domain.domain_name}`);
+      const detailedDomains = [];
+
+      for (const domain of batch) {
+        processedCount++;
+        console.log(`📋 [CRON] Processando ${processedCount}/${domains.length}: ${domain.domain_name}`);
         
-        if (rateLimitHits >= MAX_RATE_LIMIT_RETRIES) {
-          console.error(`❌ [CRON] Rate limit persistente. Parando sincronização. Progresso: ${processedCount}/${domains.length}`);
-          break;
-        }
+        let details = await namecheapDomains.getDomainInfo(domain.domain_name);
         
-        console.log('⏳ [CRON] Aguardando 2 minutos antes de continuar...');
-        await namecheapDomains.delay(120000);
-        
-        details = await namecheapDomains.getDomainInfo(domain.domain_name);
         if (!details.has_error) {
           detailedDomains.push(details);
           rateLimitHits = 0;
+        } else if (details.error_type === 'rate_limit') {
+          rateLimitHits++;
+          console.warn(`⚠️ [CRON] Rate limit atingido (${rateLimitHits}/${MAX_RATE_LIMIT_RETRIES}) em ${domain.domain_name}`);
+          
+          if (rateLimitHits >= MAX_RATE_LIMIT_RETRIES) {
+            console.error(`❌ [CRON] Rate limit persistente. Salvando lote atual e parando. Progresso: ${processedCount}/${domains.length}`);
+            
+            // Salvar o que já foi processado neste lote antes de parar
+            if (detailedDomains.length > 0) {
+              console.log(`💾 [CRON] Salvando ${detailedDomains.length} domínios do lote incompleto...`);
+              const results = await supabaseDomains.batchUpsertDomains(detailedDomains);
+              totalSaved += results.success;
+              totalFailed += results.failed;
+              console.log(`✅ [CRON] Lote salvo: ${results.success} domínios, ${results.failed} falhas`);
+            }
+            
+            console.log(`\n📊 [CRON] Estatísticas finais (interrompido por rate limit):`);
+            console.log(`   Total processado: ${processedCount}/${domains.length} domínios`);
+            console.log(`   Total salvo no Supabase: ${totalSaved} domínios`);
+            console.log(`   Total de falhas: ${totalFailed} domínios`);
+            return; // Parar a execução
+          }
+          
+          console.log('⏳ [CRON] Aguardando 2 minutos antes de continuar...');
+          await namecheapDomains.delay(120000);
+          
+          details = await namecheapDomains.getDomainInfo(domain.domain_name);
+          if (!details.has_error) {
+            detailedDomains.push(details);
+            rateLimitHits = 0;
+          }
+        } else if (details.error_type === 'other_error') {
+          console.warn(`⚠️ [CRON] Erro em ${domain.domain_name}: ${details.error_message}`);
+          
+          if (details.has_alert) {
+            detailedDomains.push(details);
+          }
         }
-      } else if (details.error_type === 'other_error') {
-        console.warn(`⚠️ [CRON] Erro em ${domain.domain_name}: ${details.error_message}`);
         
-        if (details.has_alert) {
-          detailedDomains.push(details);
-        }
+        await namecheapDomains.delay(rateLimitDelay);
+      }
+
+      // Salvar o lote atual no Supabase
+      if (detailedDomains.length > 0) {
+        console.log(`💾 [CRON] Salvando lote ${batchNumber}/${totalBatches} com ${detailedDomains.length} domínios no Supabase...`);
+        const results = await supabaseDomains.batchUpsertDomains(detailedDomains);
+        totalSaved += results.success;
+        totalFailed += results.failed;
+        console.log(`✅ [CRON] Lote ${batchNumber} salvo: ${results.success} domínios atualizados, ${results.failed} falhas`);
+      } else {
+        console.log(`⚠️ [CRON] Lote ${batchNumber} vazio, nada para salvar`);
       }
       
-      await namecheapDomains.delay(rateLimitDelay);
+      // Pequeno delay entre lotes
+      if (i + BATCH_SIZE < domains.length) {
+        await namecheapDomains.delay(1000);
+      }
     }
 
-    console.log(`💾 [CRON] Salvando ${detailedDomains.length} domínios no Supabase...`);
-    const results = await supabaseDomains.batchUpsertDomains(detailedDomains);
-    console.log(`✅ [CRON] Sincronização concluída: ${results.success} domínios atualizados, ${results.failed} falhas`);
+    console.log(`\n📊 [CRON] Sincronização concluída com sucesso!`);
+    console.log(`   Total processado: ${processedCount}/${domains.length} domínios`);
+    console.log(`   Total salvo no Supabase: ${totalSaved} domínios`);
+    console.log(`   Total de falhas: ${totalFailed} domínios`);
   } catch (error) {
     console.error('❌ [CRON] Erro na sincronização automática:', error);
   }
@@ -121,6 +165,7 @@ app.listen(config.PORT, async () => {
   console.log(`Servidor rodando na porta ${config.PORT}`);
   console.log(`Ambiente: ${config.NODE_ENV}`);
   console.log('🕐 Cron de domínios configurado: A cada 4 horas');
+  console.log('📦 Processamento em lotes de 100 domínios');
   
   const namecheapBalance = require('./services/namecheap/balance');
   const ip = await namecheapBalance.getServerIP();
