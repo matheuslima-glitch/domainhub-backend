@@ -22,6 +22,44 @@ class NamecheapDomainsService {
     }
   }
 
+  async translateAlert(alertText, domainName) {
+    if (!alertText || !config.OPENAI_API_KEY) return alertText;
+    
+    try {
+      const response = await axios.post(
+        'https://api.openai.com/v1/chat/completions',
+        {
+          model: 'gpt-4o-mini',
+          messages: [
+            {
+              role: 'system',
+              content: 'Você é um tradutor profissional especializado em mensagens técnicas de domínios.'
+            },
+            {
+              role: 'user',
+              content: `Traduza esse texto para o PORTUGUÊS NATIVO: "${alertText}"\n\n- Quero apenas o TEXTO TRADUZIDO CORRETAMENTE, sem comentários\n- Remova o número do erro se vier na mensagem\n- Corrija erros de gramática e acentuação\n- Substitua SEMPRE a frase "entre em contato em/com" por "por favor clique no botão abaixo."\n- NUNCA remova informações de contato como e-mails e urls do texto`
+            }
+          ],
+          temperature: 0.3,
+          max_tokens: 200
+        },
+        {
+          headers: {
+            'Authorization': `Bearer ${config.OPENAI_API_KEY}`,
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+      
+      const translated = response.data.choices[0].message.content.trim();
+      console.log(`🌐 Alerta traduzido para ${domainName}: ${translated}`);
+      return translated;
+    } catch (error) {
+      console.error(`❌ Erro ao traduzir alerta de ${domainName}:`, error.message);
+      return alertText;
+    }
+  }
+
   async listDomains(page = 1, pageSize = 100) {
     const clientIP = await this.getClientIP();
     
@@ -87,11 +125,16 @@ class NamecheapDomainsService {
         const error = apiResponse.Errors.Error;
         const errorMessage = typeof error === 'string' ? error : error._;
         
+        const translatedError = await this.translateAlert(errorMessage, domainName);
+        
         return {
           domain_name: domainName,
           has_error: true,
           error_type: errorMessage.toLowerCase().includes('rate limit') ? 'rate_limit' : 'other_error',
-          error_message: errorMessage
+          error_message: errorMessage,
+          has_alert: translatedError,
+          status: 'suspended',
+          last_stats_update: new Date().toISOString()
         };
       }
 
@@ -104,24 +147,37 @@ class NamecheapDomainsService {
         nameservers = Array.isArray(ns) ? ns : [ns];
       }
 
+      const status = domainInfo.$.Status.toLowerCase();
+      let hasAlert = null;
+
+      if (status === 'suspended' || status === 'locked') {
+        const alertMessage = domainInfo.DomainDetails?.StatusDescription || 
+                            domainInfo.$.StatusDescription || 
+                            'Domain is suspended or locked';
+        hasAlert = await this.translateAlert(alertMessage, domainName);
+      }
+
       return {
         domain_name: domainInfo.$.DomainName,
         expiration_date: domainInfo.DomainDetails.ExpiredDate,
         purchase_date: domainInfo.DomainDetails.CreatedDate,
-        status: domainInfo.$.Status.toLowerCase(),
+        status: status,
         registrar: 'Namecheap',
         integration_source: 'namecheap',
         nameservers: nameservers.length > 0 ? nameservers : null,
         dns_configured: nameservers.length > 0,
         auto_renew: domainInfo.Modificationrights?.All === 'true',
-        last_stats_update: new Date().toISOString()
+        last_stats_update: new Date().toISOString(),
+        has_alert: hasAlert
       };
     } catch (error) {
       return {
         domain_name: domainName,
         has_error: true,
         error_type: 'request_failed',
-        error_message: error.message
+        error_message: error.message,
+        status: 'unknown',
+        last_stats_update: new Date().toISOString()
       };
     }
   }
