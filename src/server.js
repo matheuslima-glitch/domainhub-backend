@@ -45,6 +45,7 @@ app.get('/api/ip', async (req, res) => {
 });
 
 app.use('/api/balance', balanceRoutes);
+app.use('/api/domains', require('./routes/domains'));
 
 app.use((req, res) => {
   res.status(404).json({
