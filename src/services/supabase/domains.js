@@ -53,15 +53,59 @@ class SupabaseDomainsService {
     return data;
   }
 
+  /**
+   * Verifica se um domínio foi desativado manualmente pelo usuário
+   * @param {string} domainName - Nome do domínio
+   * @returns {Promise<boolean>} - true se foi desativado manualmente
+   */
+  async isManuallyDeactivated(domainName) {
+    try {
+      const { data, error } = await this.client
+        .from('domains')
+        .select('manually_deactivated, status')
+        .eq('domain_name', domainName)
+        .eq('user_id', config.SUPABASE_USER_ID)
+        .single();
+
+      if (error) {
+        // Se o domínio não existir ainda, retorna false
+        if (error.code === 'PGRST116') return false;
+        throw error;
+      }
+
+      // Retorna true se manually_deactivated for true OU se status for deactivated
+      return data?.manually_deactivated === true || data?.status === 'deactivated';
+    } catch (error) {
+      console.error(`⚠️ Erro ao verificar flag manually_deactivated para ${domainName}:`, error.message);
+      return false; // Em caso de erro, permite a atualização
+    }
+  }
+
   async batchUpsertDomains(domains) {
     const results = {
       success: 0,
       failed: 0,
+      skipped: 0, // Novo contador para domínios pulados
       errors: []
     };
 
     for (const domain of domains) {
       try {
+        // ═══════════════════════════════════════════════════════════════
+        // VERIFICAÇÃO: Domínio desativado manualmente?
+        // ═══════════════════════════════════════════════════════════════
+        const isProtected = await this.isManuallyDeactivated(domain.domain_name);
+        
+        if (isProtected) {
+          console.log(`🔒 DOMÍNIO PROTEGIDO (Desativado manualmente): ${domain.domain_name}`);
+          console.log(`   ⏭️ PULANDO atualização - flag manually_deactivated = TRUE`);
+          results.skipped++;
+          continue; // Pula este domínio
+        }
+
+        // ═══════════════════════════════════════════════════════════════
+        // ATUALIZAÇÃO NORMAL: Domínio não está protegido
+        // ═══════════════════════════════════════════════════════════════
         if (domain.has_error && domain.has_alert) {
           await this.updateDomainAlert(domain.domain_name, {
             status: domain.status,
@@ -71,6 +115,7 @@ class SupabaseDomainsService {
           console.log(`✅ Alerta salvo: ${domain.domain_name}`);
         } else {
           await this.upsertDomain(domain);
+          console.log(`✅ Domínio atualizado: ${domain.domain_name}`);
         }
         results.success++;
       } catch (error) {
@@ -81,6 +126,11 @@ class SupabaseDomainsService {
         });
         console.error(`❌ Erro ao salvar ${domain.domain_name}:`, error.message);
       }
+    }
+
+    // Log de resumo
+    if (results.skipped > 0) {
+      console.log(`\n🔒 Total de domínios PROTEGIDOS (pulados): ${results.skipped}`);
     }
 
     return results;
