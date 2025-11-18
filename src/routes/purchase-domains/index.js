@@ -1,6 +1,7 @@
 /**
- * ROTA PRINCIPAL DE COMPRA DE DOMÍNIOS
+ * ROTA PRINCIPAL DE COMPRA DE DOMÍNIOS - VERSÃO COMPLETA
  * Este arquivo gerencia as requisições de compra e direciona para WordPress ou AtomiCat
+ * Inclui suporte para compra manual (quando clicar na lupa)
  */
 
 const express = require('express');
@@ -24,7 +25,8 @@ const processingSessions = new Map();
  *   "idioma": "portuguese",
  *   "plataforma": "wordpress" ou "atomicat",
  *   "nicho": "saúde",
- *   "domainManual": null ou "dominio.online" (opcional para compra manual)
+ *   "domainManual": null ou "dominio.online" (opcional para compra manual),
+ *   "userId": "uuid-do-usuario"
  * }
  */
 router.post('/', async (req, res) => {
@@ -36,14 +38,18 @@ router.post('/', async (req, res) => {
       idioma = 'portuguese', 
       plataforma = 'wordpress', 
       nicho,
-      domainManual = null 
+      domainManual = null,
+      userId = null
     } = req.body;
+
+    // Se não tiver userId no body, tentar pegar do header
+    const finalUserId = userId || req.headers['x-user-id'] || config.SUPABASE_USER_ID;
 
     // Validação de entrada
     if (!nicho && !domainManual) {
       return res.status(400).json({
         success: false,
-        error: 'Nicho é obrigatório para geração com IA'
+        error: 'Nicho é obrigatório para geração com IA ou domínio manual deve ser fornecido'
       });
     }
 
@@ -57,17 +63,21 @@ router.post('/', async (req, res) => {
 
     // Gerar session ID único
     sessionId = uuidv4();
-    processingSessions.set(sessionId, Date.now());
+    processingSessions.set(sessionId, {
+      startTime: Date.now(),
+      userId: finalUserId
+    });
 
-    console.log(`\n${'='.repeat(60)}`);
+    console.log(`\n${'='.repeat(70)}`);
     console.log(`🚀 NOVA COMPRA DE DOMÍNIO INICIADA`);
     console.log(`📋 Session ID: ${sessionId}`);
+    console.log(`👤 User ID: ${finalUserId}`);
     console.log(`🎯 Plataforma: ${plataforma.toUpperCase()}`);
     console.log(`📊 Quantidade: ${quantidade}`);
     console.log(`🌐 Idioma: ${idioma}`);
     console.log(`🏷️ Nicho: ${nicho || 'N/A'}`);
     console.log(`✍️ Domínio Manual: ${domainManual || 'N/A'}`);
-    console.log(`${'='.repeat(60)}\n`);
+    console.log(`${'='.repeat(70)}\n`);
 
     // Responder imediatamente ao cliente (requisição assíncrona)
     res.json({
@@ -75,7 +85,8 @@ router.post('/', async (req, res) => {
       message: 'Processo de compra iniciado',
       sessionId: sessionId,
       plataforma: plataforma,
-      quantidade: quantidade
+      quantidade: domainManual ? 1 : quantidade,
+      manual: !!domainManual
     });
 
     // Processar compra de forma assíncrona
@@ -85,7 +96,8 @@ router.post('/', async (req, res) => {
       idioma,
       plataforma,
       nicho,
-      domainManual
+      domainManual,
+      userId: finalUserId
     });
 
   } catch (error) {
@@ -101,25 +113,97 @@ router.post('/', async (req, res) => {
 });
 
 /**
+ * POST /api/purchase-domains/manual
+ * Compra manual de domínio (quando clicar na lupa)
+ * SEMPRE usa WordPress para compra manual
+ */
+router.post('/manual', async (req, res) => {
+  let sessionId = null;
+  
+  try {
+    const { domain, userId } = req.body;
+    
+    // Se não tiver userId no body, tentar pegar do header
+    const finalUserId = userId || req.headers['x-user-id'] || config.SUPABASE_USER_ID;
+    
+    if (!domain) {
+      return res.status(400).json({
+        success: false,
+        error: 'Domínio é obrigatório'
+      });
+    }
+    
+    // Validar formato do domínio
+    if (!domain.endsWith('.online')) {
+      return res.status(400).json({
+        success: false,
+        error: 'Apenas domínios .online são suportados'
+      });
+    }
+    
+    sessionId = uuidv4();
+    processingSessions.set(sessionId, {
+      startTime: Date.now(),
+      userId: finalUserId
+    });
+    
+    console.log(`\n📝 [MANUAL] Compra manual iniciada`);
+    console.log(`   Domínio: ${domain}`);
+    console.log(`   Session: ${sessionId}`);
+    console.log(`   User ID: ${finalUserId}\n`);
+    
+    res.json({
+      success: true,
+      message: 'Compra manual iniciada',
+      sessionId: sessionId,
+      domain: domain
+    });
+    
+    // Processar de forma assíncrona (sempre WordPress para manual)
+    processAsyncPurchase({
+      sessionId,
+      quantidade: 1,
+      idioma: 'portuguese',
+      plataforma: 'wordpress',
+      nicho: null,
+      domainManual: domain,
+      userId: finalUserId
+    });
+    
+  } catch (error) {
+    console.error('❌ [MANUAL] Erro:', error);
+    
+    if (!res.headersSent) {
+      res.status(500).json({
+        success: false,
+        error: error.message
+      });
+    }
+  }
+});
+
+/**
  * PROCESSAR COMPRA DE FORMA ASSÍNCRONA
  * Executa a compra em background após responder ao cliente
  */
 async function processAsyncPurchase(params) {
-  const { sessionId, quantidade, idioma, plataforma, nicho, domainManual } = params;
+  const { sessionId, quantidade, idioma, plataforma, nicho, domainManual, userId } = params;
   
   try {
     let result;
     
-    // Se tem domínio manual, comprar direto com WordPress
+    // Se tem domínio manual, processar com WordPress
     if (domainManual) {
-      console.log(`📝 [MANUAL] Processando compra manual do domínio: ${domainManual}`);
+      console.log(`📝 [MANUAL] Processando compra manual: ${domainManual}`);
       
       const wordpressPurchase = new WordPressDomainPurchase();
       result = await wordpressPurchase.purchaseDomain({
         quantidade: 1,
         idioma,
-        nicho: domainManual,
-        sessionId
+        nicho: null,
+        sessionId,
+        domainManual,
+        userId
       });
       
     } else if (plataforma === 'wordpress') {
@@ -131,7 +215,9 @@ async function processAsyncPurchase(params) {
         quantidade,
         idioma,
         nicho,
-        sessionId
+        sessionId,
+        domainManual: null,
+        userId
       });
       
     } else if (plataforma === 'atomicat') {
@@ -143,19 +229,22 @@ async function processAsyncPurchase(params) {
         quantidade,
         idioma,
         nicho,
-        sessionId
+        sessionId,
+        domainManual: null,
+        userId
       });
     }
 
     // Log do resultado final
-    console.log(`\n${'='.repeat(60)}`);
+    console.log(`\n${'='.repeat(70)}`);
     console.log(`✅ COMPRA FINALIZADA - Session: ${sessionId}`);
+    console.log(`👤 User ID: ${userId}`);
     console.log(`📊 Resultado:`);
     console.log(`   - Sucesso: ${result?.success ? 'Sim' : 'Não'}`);
     console.log(`   - Domínios Registrados: ${result?.domainsRegistered?.join(', ') || 'Nenhum'}`);
     console.log(`   - Total Solicitado: ${result?.totalRequested || quantidade}`);
     console.log(`   - Total Registrado: ${result?.totalRegistered || 0}`);
-    console.log(`${'='.repeat(60)}\n`);
+    console.log(`${'='.repeat(70)}\n`);
     
     // Remover sessão do cache após conclusão
     processingSessions.delete(sessionId);
@@ -201,7 +290,8 @@ router.get('/status/:sessionId', async (req, res) => {
     const { sessionId } = req.params;
     
     // Verificar se a sessão existe no cache
-    const isProcessing = processingSessions.has(sessionId);
+    const sessionData = processingSessions.get(sessionId);
+    const isProcessing = !!sessionData;
     
     // Buscar status no banco
     const { createClient } = require('@supabase/supabase-js');
@@ -230,6 +320,7 @@ router.get('/status/:sessionId', async (req, res) => {
       success: true,
       sessionId,
       isProcessing,
+      userId: sessionData?.userId,
       progress: data
     });
     
@@ -269,12 +360,11 @@ router.get('/balance', async (req, res) => {
 });
 
 /**
- * POST /api/purchase-domains/manual
- * Compra manual de domínio (sempre WordPress)
+ * POST /api/purchase-domains/search
+ * Endpoint para busca/pesquisa de domínio (quando clicar na lupa)
+ * Verifica disponibilidade sem comprar
  */
-router.post('/manual', async (req, res) => {
-  let sessionId = null;
-  
+router.post('/search', async (req, res) => {
   try {
     const { domain } = req.body;
     
@@ -285,46 +375,28 @@ router.post('/manual', async (req, res) => {
       });
     }
     
-    // Validar formato do domínio
-    if (!domain.endsWith('.online')) {
-      return res.status(400).json({
-        success: false,
-        error: 'Apenas domínios .online são suportados'
-      });
-    }
+    console.log(`🔍 [SEARCH] Verificando disponibilidade de: ${domain}`);
     
-    sessionId = uuidv4();
-    
-    console.log(`\n📝 [MANUAL] Compra manual iniciada`);
-    console.log(`   Domínio: ${domain}`);
-    console.log(`   Session: ${sessionId}\n`);
+    // Usar WordPress para verificar disponibilidade
+    const wordpressPurchase = new WordPressDomainPurchase();
+    const availability = await wordpressPurchase.checkDomainAvailability(domain);
     
     res.json({
       success: true,
-      message: 'Compra manual iniciada',
-      sessionId: sessionId,
-      domain: domain
-    });
-    
-    // Processar de forma assíncrona
-    processAsyncPurchase({
-      sessionId,
-      quantidade: 1,
-      idioma: 'portuguese',
-      plataforma: 'wordpress',
-      nicho: null,
-      domainManual: domain
+      domain: domain,
+      available: availability.available,
+      price: availability.price,
+      message: availability.available 
+        ? `Domínio ${domain} está disponível por $${availability.price}`
+        : `Domínio ${domain} não está disponível`
     });
     
   } catch (error) {
-    console.error('❌ [MANUAL] Erro:', error);
-    
-    if (!res.headersSent) {
-      res.status(500).json({
-        success: false,
-        error: error.message
-      });
-    }
+    console.error('❌ [SEARCH] Erro:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
   }
 });
 
@@ -335,8 +407,8 @@ setInterval(() => {
   const oneHourAgo = Date.now() - 3600000;
   let cleaned = 0;
   
-  for (const [sessionId, timestamp] of processingSessions) {
-    if (timestamp < oneHourAgo) {
+  for (const [sessionId, sessionData] of processingSessions) {
+    if (sessionData.startTime < oneHourAgo) {
       processingSessions.delete(sessionId);
       cleaned++;
     }
@@ -346,5 +418,8 @@ setInterval(() => {
     console.log(`🧹 [CACHE] ${cleaned} sessões antigas removidas do cache`);
   }
 }, 3600000); // 1 hora
+
+// Importar config aqui para ter acesso nas funções
+const config = require('../../config/env');
 
 module.exports = router;
