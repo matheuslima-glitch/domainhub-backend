@@ -13,10 +13,19 @@ class NamecheapDomainsService {
 
   async getClientIP() {
     try {
-      const response = await axios.get('https://api.ipify.org?format=json');
+      const response = await axios.get('https://api.ipify.org?format=json', {
+        timeout: 5000
+      });
       return response.data.ip;
     } catch (error) {
-      throw new Error('Falha ao obter IP do cliente');
+      // Fallback: Usar variável de ambiente NAMECHEAP_CLIENT_IP
+      if (config.NAMECHEAP_CLIENT_IP) {
+        console.warn('⚠️ Falha ao obter IP via API, usando NAMECHEAP_CLIENT_IP');
+        return config.NAMECHEAP_CLIENT_IP;
+      }
+      
+      // Se não tiver variável de ambiente, lança erro
+      throw new Error('Falha ao obter IP do cliente e NAMECHEAP_CLIENT_IP não configurada');
     }
   }
 
