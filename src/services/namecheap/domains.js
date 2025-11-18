@@ -4,34 +4,74 @@ const config = require('../../config/env');
 class NamecheapDomainsService {
   constructor() {
     this.baseURL = 'https://api.namecheap.com/xml.response';
+    this.rateLimit = {
+      perMinute: 300,
+      perHour: 5000,
+      perDay: 30000
+    };
   }
 
-  // ============================================
-  // HELPER: OBTER IP DO CLIENTE
-  // ============================================
   async getClientIP() {
     try {
       const response = await axios.get('https://api.ipify.org?format=json');
       return response.data.ip;
     } catch (error) {
-      console.warn('⚠️ Erro ao obter IP, usando fallback');
-      return '127.0.0.1';
+      throw new Error('Falha ao obter IP do cliente');
     }
   }
 
-  // ============================================
-  // HELPER: DELAY ENTRE REQUISIÇÕES
-  // ============================================
-  async delay(ms) {
-    return new Promise(resolve => setTimeout(resolve, ms));
+  async translateAlert(alertText, domainName) {
+    if (!alertText) {
+      console.log(`⚠️ Sem texto para traduzir: ${domainName}`);
+      return alertText;
+    }
+    
+    if (!config.OPENAI_API_KEY) {
+      console.log(`⚠️ OPENAI_API_KEY não configurada`);
+      return alertText;
+    }
+    
+    console.log(`🔄 Iniciando tradução para ${domainName}: "${alertText.substring(0, 50)}..."`);
+    
+    try {
+      const response = await axios.post(
+        'https://api.openai.com/v1/chat/completions',
+        {
+          model: 'gpt-4o-mini',
+          messages: [
+            {
+              role: 'system',
+              content: 'Você é um tradutor profissional especializado em mensagens técnicas de domínios.'
+            },
+            {
+              role: 'user',
+              content: `Traduza esse texto para o PORTUGUÊS NATIVO: "${alertText}"\n\n- Quero apenas o TEXTO TRADUZIDO CORRETAMENTE, sem comentários\n- Remova o número do erro se vier na mensagem\n- Corrija erros de gramática e acentuação\n- Substitua SEMPRE a frase "entre em contato em/com" por "por favor clique no botão abaixo."\n- NUNCA remova informações de contato como e-mails e urls do texto`
+            }
+          ],
+          temperature: 0.3,
+          max_tokens: 1000
+        },
+        {
+          headers: {
+            'Authorization': `Bearer ${config.OPENAI_API_KEY}`,
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+      
+      const translated = response.data.choices[0].message.content.trim();
+      console.log(`🌐 Alerta traduzido para ${domainName}: ${translated}`);
+      return translated;
+    } catch (error) {
+      console.error(`❌ ERRO DETALHADO ao traduzir ${domainName}:`);
+      console.error(`   Status: ${error.response?.status}`);
+      console.error(`   Mensagem: ${error.response?.data?.error?.message || error.message}`);
+      console.error(`   Dados completos:`, JSON.stringify(error.response?.data, null, 2));
+      return alertText;
+    }
   }
 
-  // ============================================
-  // LISTAR DOMÍNIOS COM PAGINAÇÃO
-  // ============================================
-  async listDomains(page = 1, pageSize = 20) {
-    console.log(`📋 Buscando domínios - Página ${page} (${pageSize} por página)...`);
-    
+  async listDomains(page = 1, pageSize = 100) {
     const clientIP = await this.getClientIP();
     
     const params = {
@@ -41,53 +81,36 @@ class NamecheapDomainsService {
       Command: 'namecheap.domains.getList',
       ClientIp: clientIP,
       PageSize: pageSize,
-      Page: page,
-      SortBy: 'NAME'
+      Page: page
     };
 
-    const response = await axios.get(this.baseURL, { 
-      params,
-      timeout: 30000
-    });
-    
+    const response = await axios.get(this.baseURL, { params });
     const xmlData = response.data;
-    
-    // Verificar se há erro
+
     if (xmlData.includes('Status="ERROR"')) {
-      const errorMatch = xmlData.match(/<Error[^>]*>(.*?)<\/Error>/);
-      const errorMessage = errorMatch ? errorMatch[1] : 'Erro desconhecido';
-      
-      if (errorMessage.toLowerCase().includes('too many requests') || 
-          errorMessage.toLowerCase().includes('rate limit')) {
-        throw new Error('RATE_LIMIT');
-      }
-      
+      const errorMatch = xmlData.match(/<Error[^>]*>([^<]+)<\/Error>/);
+      const errorMessage = errorMatch ? errorMatch[1] : 'Erro desconhecido na API Namecheap';
       throw new Error(errorMessage);
     }
-    
-    // Extrair informações de paginação
-    const totalDomainsMatch = xmlData.match(/TotalItems="(\d+)"/);
-    const totalDomains = totalDomainsMatch ? parseInt(totalDomainsMatch[1]) : 0;
-    
-    const currentPageMatch = xmlData.match(/CurrentPage="(\d+)"/);
-    const currentPage = currentPageMatch ? parseInt(currentPageMatch[1]) : page;
-    
-    const pageSizeMatch = xmlData.match(/PageSize="(\d+)"/);
-    const actualPageSize = pageSizeMatch ? parseInt(pageSizeMatch[1]) : pageSize;
-    
-    const totalPages = Math.ceil(totalDomains / actualPageSize);
-    
-    console.log(`📊 Total: ${totalDomains} domínios | Página ${currentPage}/${totalPages}`);
-    
-    // Extrair domínios
+
+    const totalItemsMatch = xmlData.match(/<TotalItems>(\d+)<\/TotalItems>/);
+    const pageSizeMatch = xmlData.match(/<PageSize>(\d+)<\/PageSize>/);
+    const currentPageMatch = xmlData.match(/<CurrentPage>(\d+)<\/CurrentPage>/);
+
+    const totalDomains = totalItemsMatch ? parseInt(totalItemsMatch[1]) : 0;
+    const pageSizeValue = pageSizeMatch ? parseInt(pageSizeMatch[1]) : 100;
+    const currentPage = currentPageMatch ? parseInt(currentPageMatch[1]) : 1;
+    const totalPages = Math.ceil(totalDomains / pageSizeValue);
+
+    // PARSE 1: EXTRAIR DOMÍNIOS DA LISTA (IGUAL AO N8N)
+    const domainRegex = /<Domain[^>]*Name="([^"]+)"[^>]*Expires="([^"]+)"[^>]*IsExpired="([^"]+)"[^>]*IsLocked="([^"]+)"/g;
     const domains = [];
-    const domainPattern = /<Domain\s+ID="(\d+)"\s+Name="([^"]+)".*?Created="([^"]+)".*?Expires="([^"]+)".*?IsExpired="([^"]+)".*?IsLocked="([^"]+)".*?AutoRenew="([^"]+)"/g;
-    
     let match;
-    while ((match = domainPattern.exec(xmlData)) !== null) {
-      const [, id, name, created, expires, isExpired, isLocked, autoRenew] = match;
+
+    while ((match = domainRegex.exec(xmlData)) !== null) {
+      const [_, name, expires, isExpired, isLocked] = match;
       
-      // Determinar status baseado nos campos
+      // LÓGICA CORRETA: Status baseado em IsExpired e IsLocked (IGUAL AO N8N)
       let status = 'active';
       if (isExpired === 'true') {
         status = 'expired';
@@ -113,9 +136,6 @@ class NamecheapDomainsService {
     };
   }
 
-  // ============================================
-  // OBTER INFORMAÇÕES DETALHADAS DE UM DOMÍNIO
-  // ============================================
   async getDomainInfo(domainName) {
     const clientIP = await this.getClientIP();
     
@@ -129,11 +149,11 @@ class NamecheapDomainsService {
     };
 
     try {
-      const response = await axios.get(this.baseURL, { params, timeout: 30000 });
+      const response = await axios.get(this.baseURL, { params });
       const xmlData = response.data;
       
       // ============================================
-      // VERIFICAR ERROS PRIMEIRO (IGUAL AO N8N)
+      // PARSE 2: VERIFICAR ERROS (IGUAL AO N8N)
       // ============================================
       if (xmlData.includes('Status="ERROR"')) {
         console.log(`⚠️ Erro detectado para ${domainName}`);
@@ -141,13 +161,14 @@ class NamecheapDomainsService {
         const statusMatch = xmlData.match(/Status="([^"]+)"/);
         const errorNumberMatch = xmlData.match(/Error Number="([^"]+)"/);
         
-        // Extrair mensagem de erro
+        // MELHORADO: Captura mensagens multi-linha e com caracteres especiais
         let errorMessage = null;
         const errorMessageMatch = xmlData.match(/<Error[^>]*>([\s\S]+?)<\/Error>/);
         if (errorMessageMatch) {
           errorMessage = errorMessageMatch[1].trim();
         }
         
+        // Se não encontrou com o método acima, tenta alternativa
         if (!errorMessage) {
           const altMatch = xmlData.match(/<Error[^>]*>([^<]+)<\/Error>/);
           if (altMatch) {
@@ -155,7 +176,15 @@ class NamecheapDomainsService {
           }
         }
         
-        // Limpar tags XML da mensagem
+        // Se ainda não encontrou, busca qualquer texto entre tags Error
+        if (!errorMessage) {
+          const looseMatch = xmlData.match(/<Error[\s\S]*?>[\s\S]*?([A-Za-z].+?)[\s\S]*?<\/Error>/);
+          if (looseMatch) {
+            errorMessage = looseMatch[1].trim();
+          }
+        }
+        
+        // Limpar possíveis tags XML residuais da mensagem
         if (errorMessage) {
           errorMessage = errorMessage.replace(/<[^>]+>/g, '').trim();
         }
@@ -163,33 +192,76 @@ class NamecheapDomainsService {
         const status = statusMatch ? statusMatch[1] : null;
         const errorNumber = errorNumberMatch ? errorNumberMatch[1] : null;
         
-        console.log(`📋 Erro extraído: "${errorMessage}"`);
+        console.log(`📋 Mensagem de erro extraída: "${errorMessage}"`);
+        
+        // ============================================
+        // EXTRAIR DOMAIN_NAME - MÚLTIPLAS TENTATIVAS (IGUAL AO N8N)
+        // ============================================
+        let extractedDomainName = domainName; // Usar o que foi passado como fallback
+        
+        // Tentativa 1: Extrair da mensagem de erro (entre parênteses)
+        if (errorMessage) {
+          const domainMatch = errorMessage.match(/\(([^)]+\.[a-z]+)\)/i);
+          if (domainMatch) {
+            extractedDomainName = domainMatch[1];
+          }
+        }
+        
+        // Tentativa 2: Extrair do XML - DomainName attribute
+        if (!extractedDomainName && xmlData) {
+          const xmlDomainMatch = xmlData.match(/DomainName[>=\s"']+([a-z0-9.-]+\.[a-z]+)/i);
+          if (xmlDomainMatch) {
+            extractedDomainName = xmlDomainMatch[1];
+          }
+        }
+        
+        // Tentativa 3: Buscar pattern de domínio em todo o XML
+        if (!extractedDomainName) {
+          const generalDomainMatch = xmlData.match(/([a-z0-9-]+\.(online|com|net|org|io|co|br))/i);
+          if (generalDomainMatch) {
+            extractedDomainName = generalDomainMatch[1];
+          }
+        }
+        
+        console.log(`📋 Domínio extraído: ${extractedDomainName}`);
         
         // Determinar tipo de erro
         let errorType = 'unknown';
-        const msg = (errorMessage || '').toLowerCase();
-        
-        if (msg.includes('too many requests') || msg.includes('rate limit')) {
-          errorType = 'rate_limit';
-          console.log(`⏱️ Rate limit detectado para ${domainName}`);
-          throw new Error('RATE_LIMIT');
-        } else if (msg.includes('locked') || msg.includes('suspended')) {
-          errorType = 'domain_suspended';
-        } else if (msg.includes('expired')) {
-          errorType = 'domain_expired';
+        if (errorMessage) {
+          const msg = errorMessage.toLowerCase();
+          
+          if (msg.includes('too many requests') || msg.includes('rate limit')) {
+            errorType = 'rate_limit';
+            console.log(`🚫 Rate limit detectado para ${extractedDomainName}`);
+          } else if (msg.includes('locked') || msg.includes('suspended')) {
+            errorType = 'domain_suspended';
+            console.log(`🔒 Domínio suspenso/bloqueado: ${extractedDomainName}`);
+          } else {
+            errorType = 'other_error';
+            console.log(`⚠️ Outro tipo de erro para ${extractedDomainName}`);
+          }
         }
         
-        // Determinar status baseado no erro
+        // ============================================
+        // PARSE 3: EXTRAIR ALERTAS (IGUAL AO N8N)
+        // ============================================
+        // IMPORTANTE: Para domínios suspensos, o status vem da MENSAGEM DE ERRO
+        // NÃO do campo Status="ERROR" ou de IsExpired/IsLocked (que não existem no XML de erro)
         let statusType = 'active';
+        const errorMsg = (errorMessage || '').toLowerCase();
         
-        if (msg.includes('suspended') || msg.includes('locked')) {
+        if (errorMsg.includes('suspended')) {
           statusType = 'suspended';
-          console.log(`📊 Status: suspended (domínio bloqueado)`);
-        } else if (msg.includes('expired')) {
+          console.log(`📊 Status definido: suspended (baseado na mensagem de erro)`);
+        } else if (errorMsg.includes('locked')) {
+          statusType = 'suspended';
+          console.log(`📊 Status definido: suspended (domínio locked)`);
+        } else if (errorMsg.includes('expired')) {
           statusType = 'expired';
-          console.log(`📊 Status: expired (baseado no erro)`);
-        } else if (msg.includes('pending')) {
+          console.log(`📊 Status definido: expired (baseado na mensagem de erro)`);
+        } else if (errorMsg.includes('pending')) {
           statusType = 'pending';
+          console.log(`📊 Status definido: pending (baseado na mensagem de erro)`);
         }
         
         // Extrair link de unsuspension se existir
@@ -197,13 +269,27 @@ class NamecheapDomainsService {
         const linkMatch = errorMessage ? errorMessage.match(/https:\/\/[^\s]+/) : null;
         if (linkMatch) {
           unsuspensionLink = linkMatch[0];
+          console.log(`🔗 Link de unsuspension encontrado: ${unsuspensionLink}`);
         }
         
-        // Traduzir alerta se necessário
-        const translatedError = await this.translateAlert(errorMessage, domainName);
+        // ============================================
+        // TIMESTAMP - Formato ISO com timezone Brasil
+        // ============================================
+        const now = new Date();
+        const brasilTime = new Date(now.toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' }));
+        const timestampISO = brasilTime.toISOString().slice(0, 19) + '-03:00';
+        
+        // Traduzir mensagem de alerta
+        console.log(`🌐 Iniciando tradução do alerta para ${extractedDomainName}...`);
+        const translatedError = await this.translateAlert(errorMessage, extractedDomainName);
+        
+        console.log(`✅ Parse de erro completo para ${extractedDomainName}`);
+        console.log(`   Status: ${statusType}`);
+        console.log(`   Tipo de erro: ${errorType}`);
+        console.log(`   Tem alerta: ${translatedError ? 'Sim' : 'Não'}`);
         
         return {
-          domain_name: domainName,
+          domain_name: extractedDomainName,
           has_error: true,
           error_type: errorType,
           error_message: errorMessage,
@@ -214,102 +300,56 @@ class NamecheapDomainsService {
             error_number: errorNumber,
             unsuspension_link: unsuspensionLink
           },
-          last_stats_update: new Date().toISOString()
+          last_stats_update: timestampISO
         };
       }
 
       // ============================================
-      // SUCESSO: EXTRAIR DADOS DO DOMÍNIO
+      // SUCESSO: EXTRAIR DADOS DO DOMÍNIO ATIVO/EXPIRADO
       // ============================================
-      console.log(`✅ Processando domínio: ${domainName}`);
+      console.log(`✅ Resposta bem-sucedida para ${domainName}, fazendo parse...`);
       
-      // Extrair nome do domínio
       const domainNameMatch = xmlData.match(/DomainName="([^"]+)"/);
       const domain_name = domainNameMatch ? domainNameMatch[1] : domainName;
       
-      // Extrair data de expiração
       const expiredDateMatch = xmlData.match(/<ExpiredDate>([^<]+)<\/ExpiredDate>/);
       const expiration_date = expiredDateMatch ? expiredDateMatch[1] : null;
       
-      // Extrair data de criação
       const createdMatch = xmlData.match(/<CreatedDate>([^<]+)<\/CreatedDate>/);
       const purchase_date = createdMatch ? createdMatch[1] : null;
       
       // ============================================
-      // 🚨 CORREÇÃO CRÍTICA: EXTRAIR STATUS CORRETAMENTE
-      // Usando o regex CORRETO do N8N
+      // IMPORTANTE: O STATUS VEM DE IsExpired e IsLocked
+      // NÃO do atributo Status="OK" do ApiResponse
       // ============================================
-      const statusMatch = xmlData.match(/DomainGetInfoResult Status="([^"]+)"/);
-      let status = 'active'; // Status padrão
+      const domainGetInfoMatch = xmlData.match(/<DomainGetInfoResult[^>]*IsExpired="([^"]+)"[^>]*IsLocked="([^"]+)"/);
       
-      if (statusMatch) {
-        const statusValue = statusMatch[1];
-        console.log(`📊 Status REAL do domínio ${domainName}: "${statusValue}"`);
+      let status = 'active';
+      if (domainGetInfoMatch) {
+        const isExpired = domainGetInfoMatch[1];
+        const isLocked = domainGetInfoMatch[2];
         
-        // Mapear EXATAMENTE como no N8N (case-sensitive)
-        switch(statusValue) {
-          case 'Expired':
-            status = 'expired';
-            console.log(`⚠️ DOMÍNIO EXPIRADO DETECTADO: ${domainName}`);
-            break;
-          case 'Locked':
-          case 'ServerHold':
-          case 'ClientHold':
-          case 'Suspended':
-            status = 'suspended';
-            console.log(`🔒 DOMÍNIO SUSPENSO/BLOQUEADO: ${domainName}`);
-            break;
-          case 'Ok':
-          case 'OK':
-          case 'Active':
-            status = 'active';
-            console.log(`✅ DOMÍNIO ATIVO: ${domainName}`);
-            break;
-          case 'Pending':
-            status = 'pending';
-            console.log(`⏳ DOMÍNIO PENDENTE: ${domainName}`);
-            break;
-          default:
-            // Log do status desconhecido
-            console.warn(`❓ Status desconhecido: "${statusValue}" para ${domainName}`);
-            
-            // Verificação adicional por data de expiração
-            if (expiration_date) {
-              const expDate = new Date(expiration_date);
-              const today = new Date();
-              if (expDate < today) {
-                status = 'expired';
-                console.log(`⚠️ DOMÍNIO EXPIRADO (por data): ${domainName}`);
-              } else {
-                status = 'active';
-              }
-            } else {
-              status = 'active';
-            }
+        console.log(`📊 Atributos encontrados - IsExpired: ${isExpired}, IsLocked: ${isLocked}`);
+        
+        // LÓGICA CORRETA: Igual ao listDomains e ao N8N
+        if (isExpired === 'true') {
+          status = 'expired';
+          console.log(`📊 Status definido: expired`);
+        } else if (isLocked === 'true') {
+          status = 'suspended';
+          console.log(`📊 Status definido: suspended`);
+        } else {
+          console.log(`📊 Status definido: active`);
         }
       } else {
-        console.warn(`⚠️ Não foi possível extrair status para ${domainName}, verificando por data...`);
-        
-        // Verificar se está expirado pela data
-        if (expiration_date) {
-          const expDate = new Date(expiration_date);
-          const today = new Date();
-          if (expDate < today) {
-            status = 'expired';
-            console.log(`⚠️ DOMÍNIO EXPIRADO (por data): ${domainName}`);
-          }
-        }
+        console.warn(`⚠️ Não foi possível extrair IsExpired/IsLocked de ${domainName}`);
       }
 
-      // ============================================
-      // EXTRAIR NAMESERVERS (MÚLTIPLOS PADRÕES)
-      // ============================================
+      // Extrair nameservers
       const nameservers = [];
-      
-      // Padrão 1: <Nameserver>ns1.example.com</Nameserver>
-      const nsPattern1 = /<Nameserver>([^<]+)<\/Nameserver>/g;
+      const nsPattern = /<Nameserver>([^<]+)<\/Nameserver>/g;
       let nsMatch;
-      while ((nsMatch = nsPattern1.exec(xmlData)) !== null) {
+      while ((nsMatch = nsPattern.exec(xmlData)) !== null) {
         if (nsMatch[1] && nsMatch[1].trim()) {
           const ns = nsMatch[1].trim();
           if (!nameservers.includes(ns)) {
@@ -317,33 +357,22 @@ class NamecheapDomainsService {
           }
         }
       }
-      
-      // Padrão 2: Nameserver="ns1.example.com"
-      const nsPattern2 = /Nameserver="([^"]+)"/g;
-      while ((nsMatch = nsPattern2.exec(xmlData)) !== null) {
-        if (nsMatch[1] && nsMatch[1].trim()) {
-          const ns = nsMatch[1].trim();
-          if (!nameservers.includes(ns)) {
-            nameservers.push(ns);
-          }
-        }
-      }
-      
-      // Verificar AutoRenew
+      console.log(`📋 Nameservers encontrados: ${nameservers.length}`);
+
+      // Extrair auto renew
       const autoRenewMatch = xmlData.match(/<UseAutoRenew>([^<]+)<\/UseAutoRenew>/);
       const auto_renew = autoRenewMatch ? autoRenewMatch[1] === 'true' : false;
-      
-      // Verificar WhoisGuard
-      const whoisGuardMatch = xmlData.match(/Whoisguard Enabled="([^"]+)"/);
-      const whois_guard = whoisGuardMatch ? 
-        (whoisGuardMatch[1] === 'true' || whoisGuardMatch[1] === 'Enabled') : false;
-      
-      // Log de resultado
-      console.log(`📋 Domínio: ${domain_name}`);
+
+      // Timestamp Brasil
+      const now = new Date();
+      const brasilTime = new Date(now.toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' }));
+      const timestampISO = brasilTime.toISOString().slice(0, 19) + '-03:00';
+
+      console.log(`✅ Parse completo para ${domain_name}`);
       console.log(`   Status: ${status}`);
-      console.log(`   Expira: ${expiration_date}`);
-      console.log(`   Nameservers: ${nameservers.length > 0 ? nameservers.join(', ') : 'NENHUM'}`);
-      
+      console.log(`   Expiração: ${expiration_date}`);
+      console.log(`   Nameservers: ${nameservers.length > 0 ? 'Configurados' : 'Não configurados'}`);
+
       return {
         domain_name: domain_name,
         expiration_date: expiration_date,
@@ -351,69 +380,57 @@ class NamecheapDomainsService {
         status: status,
         registrar: 'Namecheap',
         integration_source: 'namecheap',
-        last_stats_update: new Date().toISOString(),
         nameservers: nameservers.length > 0 ? nameservers : null,
         dns_configured: nameservers.length > 0,
         auto_renew: auto_renew,
-        whois_guard: whois_guard,
-        has_error: false
+        last_stats_update: timestampISO,
+        has_alert: null
       };
-      
     } catch (error) {
-      // Propagar erro de rate limit
-      if (error.message === 'RATE_LIMIT') {
-        throw error;
-      }
+      console.error(`❌ Erro na requisição para ${domainName}:`, error.message);
       
-      console.error(`❌ Erro ao obter info de ${domainName}:`, error.message);
-      throw error;
+      const now = new Date();
+      const brasilTime = new Date(now.toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' }));
+      const timestampISO = brasilTime.toISOString().slice(0, 19) + '-03:00';
+      
+      return {
+        domain_name: domainName,
+        has_error: true,
+        error_type: 'request_failed',
+        error_message: error.message,
+        status: 'unknown',
+        last_stats_update: timestampISO
+      };
     }
   }
 
-  // ============================================
-  // TRADUZIR ALERTAS (OPCIONAL)
-  // ============================================
-  async translateAlert(errorMessage, domainName) {
-    if (!config.OPENAI_API_KEY) {
-      console.log('⚠️ OpenAI não configurado, retornando mensagem original');
-      return errorMessage;
-    }
+  async syncAllDomains() {
+    const allDomains = [];
+    let currentPage = 1;
+    let hasMore = true;
 
-    try {
-      const response = await axios.post(
-        'https://api.openai.com/v1/chat/completions',
-        {
-          model: 'gpt-3.5-turbo',
-          messages: [
-            {
-              role: 'system',
-              content: 'Você é um tradutor técnico de mensagens de erro de domínios. Traduza para português brasileiro de forma clara e concisa.'
-            },
-            {
-              role: 'user',
-              content: `Traduza este erro de domínio para português: "${errorMessage}". Domínio: ${domainName}`
-            }
-          ],
-          max_tokens: 150,
-          temperature: 0.3
-        },
-        {
-          headers: {
-            'Authorization': `Bearer ${config.OPENAI_API_KEY}`,
-            'Content-Type': 'application/json'
-          },
-          timeout: 10000
-        }
-      );
-
-      const translatedMessage = response.data.choices[0].message.content.trim();
-      console.log(`🌐 Alerta traduzido: ${translatedMessage}`);
-      return translatedMessage;
+    console.log('🔄 Iniciando listagem de todos os domínios...');
+    
+    while (hasMore) {
+      const result = await this.listDomains(currentPage);
+      allDomains.push(...result.domains);
       
-    } catch (error) {
-      console.error('❌ Erro ao traduzir alerta:', error.message);
-      return errorMessage;
+      console.log(`📋 Página ${currentPage}/${result.pagination.totalPages} - ${result.domains.length} domínios`);
+      
+      hasMore = result.pagination.hasMore;
+      currentPage++;
+      
+      if (hasMore) {
+        await this.delay(200);
+      }
     }
+
+    console.log(`✅ Total de ${allDomains.length} domínios listados`);
+    return allDomains;
+  }
+
+  delay(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
   }
 }
 
