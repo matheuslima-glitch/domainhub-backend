@@ -1,5 +1,5 @@
 // Arquivo: src/config/env.js
-// Configuração COMPLETA de variáveis de ambiente para o sistema DomainHub
+// Configuração COMPLETA com GoDaddy API
 
 const requiredEnvVars = [
   'SUPABASE_URL',
@@ -7,7 +7,9 @@ const requiredEnvVars = [
   'SUPABASE_USER_ID',
   'NAMECHEAP_API_USER',
   'NAMECHEAP_API_KEY',
-  'NAMECHEAP_CLIENT_IP' // NOVA - Obrigatória
+  'NAMECHEAP_CLIENT_IP',
+  'GODADDY_API_KEY', // NOVA - Obrigatória
+  'GODADDY_API_SECRET' // NOVA - Obrigatória
 ];
 
 const missingVars = requiredEnvVars.filter(varName => !process.env[varName]);
@@ -65,6 +67,7 @@ if (!process.env.ZAPI_INSTANCE || !process.env.ZAPI_CLIENT_TOKEN) {
 console.log('\n📋 CONFIGURAÇÃO DO SISTEMA DOMAINHUB');
 console.log('=====================================');
 console.log(`✅ Namecheap API: Configurado`);
+console.log(`✅ GoDaddy API: ${process.env.GODADDY_API_KEY ? 'Configurado' : 'NÃO CONFIGURADO'}`);
 console.log(`✅ IP Cliente: ${process.env.NAMECHEAP_CLIENT_IP}`);
 console.log(`${process.env.OPENAI_API_KEY ? '✅' : '❌'} OpenAI: ${process.env.OPENAI_API_KEY ? 'Configurado' : 'NÃO CONFIGURADO'}`);
 console.log(`${missingWordpress.length === 0 ? '✅' : '⚠️'} WordPress: ${missingWordpress.length === 0 ? 'Configurado' : 'Parcialmente configurado'}`);
@@ -82,10 +85,14 @@ module.exports = {
   SUPABASE_SERVICE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY,
   SUPABASE_USER_ID: process.env.SUPABASE_USER_ID,
 
-  // Namecheap (Domínios)
+  // Namecheap (Compra de Domínios)
   NAMECHEAP_API_USER: process.env.NAMECHEAP_API_USER,
   NAMECHEAP_API_KEY: process.env.NAMECHEAP_API_KEY,
-  NAMECHEAP_CLIENT_IP: process.env.NAMECHEAP_CLIENT_IP,
+  NAMECHEAP_CLIENT_IP: process.env.NAMECHEAP_CLIENT_IP || '18.216.155.225',
+
+  // GoDaddy (Verificação de Disponibilidade) - NOVAS
+  GODADDY_API_KEY: process.env.GODADDY_API_KEY,
+  GODADDY_API_SECRET: process.env.GODADDY_API_SECRET,
 
   // OpenAI (Geração de domínios com IA)
   OPENAI_API_KEY: process.env.OPENAI_API_KEY,
@@ -96,10 +103,10 @@ module.exports = {
   CLOUDFLARE_ACCOUNT_ID: process.env.CLOUDFLARE_ACCOUNT_ID,
 
   // cPanel/Softaculous (WordPress)
-  CPANEL_URL: process.env.CPANEL_URL,
-  CPANEL_USERNAME: process.env.CPANEL_USERNAME,
+  CPANEL_URL: process.env.CPANEL_URL || 'https://nexus.servidor.net.br:2083',
+  CPANEL_USERNAME: process.env.CPANEL_USERNAME || 'institutoexperience',
   CPANEL_API_TOKEN: process.env.CPANEL_API_TOKEN,
-  CPANEL_DOMAIN: process.env.CPANEL_DOMAIN,
+  CPANEL_DOMAIN: process.env.CPANEL_DOMAIN || 'nexus.servidor.net.br',
 
   // WordPress Configurações
   WORDPRESS_DEFAULT_USER: process.env.WORDPRESS_DEFAULT_USER,

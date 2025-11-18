@@ -1,6 +1,6 @@
 /**
- * COMPRA DE DOMÍNIOS ATOMICAT - VERSÃO COMPLETA CORRIGIDA
- * Domínios genéricos com todas as funcionalidades
+ * COMPRA DE DOMÍNIOS ATOMICAT - VERSÃO COMPLETA COM GODADDY
+ * Verificação de disponibilidade usando APENAS GoDaddy API
  */
 
 const axios = require('axios');
@@ -18,6 +18,7 @@ class AtomiCatDomainPurchase {
     // Configurações de APIs
     this.namecheapAPI = 'https://api.namecheap.com/xml.response';
     this.openaiAPI = 'https://api.openai.com/v1/chat/completions';
+    this.godaddyAPI = 'https://api.godaddy.com/v1';
     
     // Configurações de compra
     this.maxRetries = 10;
@@ -57,7 +58,7 @@ class AtomiCatDomainPurchase {
     if (domainManual) {
       console.log(`🔍 [MANUAL-ATOMICAT] Processando domínio manual: ${domainManual}`);
       
-      // Verificar disponibilidade
+      // Verificar disponibilidade com GoDaddy
       const availabilityCheck = await this.checkDomainAvailability(domainManual);
       
       if (!availabilityCheck.available) {
@@ -93,8 +94,8 @@ class AtomiCatDomainPurchase {
             
             const generatedDomain = await this.generateGenericDomainWithAI(nicho, idioma, retries > 0);
             
-            // VERIFICAR DISPONIBILIDADE
-            console.log(`🔍 [ATOMICAT] Verificando: ${generatedDomain}`);
+            // VERIFICAR DISPONIBILIDADE COM GODADDY
+            console.log(`🔍 [GODADDY] Verificando: ${generatedDomain}`);
             await this.updateProgress(sessionId, 'checking', 'in_progress', 
               `Verificando disponibilidade de ${generatedDomain}...`);
             
@@ -187,6 +188,71 @@ class AtomiCatDomainPurchase {
   }
 
   /**
+   * VERIFICAR DISPONIBILIDADE - APENAS GODADDY
+   */
+  async checkDomainAvailability(domain) {
+    if (!config.GODADDY_API_KEY || !config.GODADDY_API_SECRET) {
+      console.error('❌ [GODADDY] API não configurada!');
+      console.error('   Configure GODADDY_API_KEY e GODADDY_API_SECRET no Render');
+      return { available: false, error: 'GoDaddy API não configurada' };
+    }
+
+    try {
+      console.log(`🔍 [GODADDY-ATOMICAT] Verificando disponibilidade de ${domain}...`);
+      
+      const response = await axios.get(
+        `${this.godaddyAPI}/domains/available`,
+        {
+          params: {
+            domain: domain,
+            checkType: 'FULL',
+            forTransfer: false
+          },
+          headers: {
+            'Authorization': `sso-key ${config.GODADDY_API_KEY}:${config.GODADDY_API_SECRET}`,
+            'Content-Type': 'application/json'
+          },
+          timeout: 10000
+        }
+      );
+
+      const data = response.data;
+      const isAvailable = data.available === true;
+      
+      // Pegar preço se disponível
+      let price = 0.99;
+      if (data.price) {
+        price = data.price / 1000000; // GoDaddy retorna em micro unidades
+      }
+
+      console.log(`📊 [GODADDY-ATOMICAT] ${domain}`);
+      console.log(`   Disponível: ${isAvailable ? '✅ SIM' : '❌ NÃO'}`);
+      console.log(`   Preço: $${price.toFixed(2)}`);
+      
+      return {
+        available: isAvailable,
+        price: price
+      };
+
+    } catch (error) {
+      console.error('❌ [GODADDY-ATOMICAT] Erro na verificação:', error.message);
+      
+      if (error.response?.status === 401) {
+        console.error('❌ [GODADDY] Credenciais inválidas');
+        return { available: false, error: 'Credenciais GoDaddy inválidas' };
+      }
+      
+      if (error.response?.status === 429) {
+        console.error('❌ [GODADDY] Rate limit atingido');
+        await this.delay(5000);
+        return { available: false, error: 'Rate limit GoDaddy' };
+      }
+      
+      return { available: false, error: error.message };
+    }
+  }
+
+  /**
    * GERAR DOMÍNIO GENÉRICO COM IA
    */
   async generateGenericDomainWithAI(nicho, idioma, isRetry = false) {
@@ -264,58 +330,6 @@ class AtomiCatDomainPurchase {
     }
     
     return prompt;
-  }
-
-  /**
-   * VERIFICAR DISPONIBILIDADE
-   */
-  async checkDomainAvailability(domain) {
-    try {
-      const clientIP = config.NAMECHEAP_CLIENT_IP;
-      
-      const params = {
-        ApiUser: config.NAMECHEAP_API_USER,
-        ApiKey: config.NAMECHEAP_API_KEY,
-        UserName: config.NAMECHEAP_API_USER,
-        Command: 'namecheap.domains.check',
-        ClientIp: clientIP,
-        DomainList: domain
-      };
-      
-      const response = await axios.get(this.namecheapAPI, { params });
-      const xmlData = response.data;
-      
-      if (xmlData.includes('Status="ERROR"')) {
-        const errorMatch = xmlData.match(/<Error[^>]*>(.*?)<\/Error>/);
-        const errorMessage = errorMatch ? errorMatch[1] : 'Erro desconhecido';
-        
-        if (errorMessage.includes('Too many requests') || errorMessage.includes('rate limit')) {
-          console.warn('⚠️ Rate limit atingido, aguardando...');
-          await this.delay(5000);
-          return { available: false, error: 'rate_limit' };
-        }
-        
-        return { available: false, error: errorMessage };
-      }
-      
-      const availableMatch = xmlData.match(/Available="([^"]+)"/);
-      const isAvailable = availableMatch && availableMatch[1] === 'true';
-      
-      let price = 0.99;
-      const isPremiumMatch = xmlData.match(/IsPremiumName="([^"]+)"/);
-      if (isPremiumMatch && isPremiumMatch[1] === 'true') {
-        const priceMatch = xmlData.match(/PremiumRegistrationPrice="([^"]+)"/);
-        if (priceMatch) price = parseFloat(priceMatch[1]);
-      }
-      
-      console.log(`📊 [ATOMICAT] ${domain} - Disponível: ${isAvailable ? 'SIM' : 'NÃO'} - Preço: $${price}`);
-      
-      return { available: isAvailable, price: price };
-      
-    } catch (error) {
-      console.error('❌ Erro ao verificar:', error.message);
-      return { available: false, error: error.message };
-    }
   }
 
   /**
@@ -429,7 +443,7 @@ class AtomiCatDomainPurchase {
         p_registrar: 'Namecheap',
         p_integration_source: 'ai_purchase_atomicat',
         p_last_stats_update: currentDate,
-        p_nameservers: null, // AtomiCat não configura nameservers
+        p_nameservers: null,
         p_dns_configured: false,
         p_auto_renew: false
       };

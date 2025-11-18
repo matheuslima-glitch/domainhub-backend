@@ -1,5 +1,6 @@
 /**
- * COMPRA DE DOMÍNIOS WORDPRESS - VERSÃO COMPLETA CORRIGIDA
+ * COMPRA DE DOMÍNIOS WORDPRESS - VERSÃO COMPLETA COM GODADDY
+ * Verificação de disponibilidade usando APENAS GoDaddy API
  */
 
 const axios = require('axios');
@@ -18,6 +19,7 @@ class WordPressDomainPurchase {
     this.namecheapAPI = 'https://api.namecheap.com/xml.response';
     this.cloudflareAPI = 'https://api.cloudflare.com/client/v4';
     this.openaiAPI = 'https://api.openai.com/v1/chat/completions';
+    this.godaddyAPI = 'https://api.godaddy.com/v1';
     
     // Configurações de compra
     this.maxRetries = 10;
@@ -57,7 +59,7 @@ class WordPressDomainPurchase {
     if (domainManual) {
       console.log(`🔍 [MANUAL] Processando domínio manual: ${domainManual}`);
       
-      // Verificar disponibilidade
+      // Verificar disponibilidade com GoDaddy
       const availabilityCheck = await this.checkDomainAvailability(domainManual);
       
       if (!availabilityCheck.available) {
@@ -92,8 +94,8 @@ class WordPressDomainPurchase {
             
             const generatedDomain = await this.generateDomainWithAI(nicho, idioma, retries > 0);
             
-            // VERIFICAR DISPONIBILIDADE
-            console.log(`🔍 [NAMECHEAP] Verificando: ${generatedDomain}`);
+            // VERIFICAR DISPONIBILIDADE COM GODADDY
+            console.log(`🔍 [GODADDY] Verificando: ${generatedDomain}`);
             await this.updateProgress(sessionId, 'checking', 'in_progress', 
               `Verificando disponibilidade de ${generatedDomain}...`);
             
@@ -160,6 +162,71 @@ class WordPressDomainPurchase {
       totalRequested: quantidade,
       totalRegistered: successCount
     };
+  }
+
+  /**
+   * VERIFICAR DISPONIBILIDADE - APENAS GODADDY
+   */
+  async checkDomainAvailability(domain) {
+    if (!config.GODADDY_API_KEY || !config.GODADDY_API_SECRET) {
+      console.error('❌ [GODADDY] API não configurada!');
+      console.error('   Configure GODADDY_API_KEY e GODADDY_API_SECRET no Render');
+      return { available: false, error: 'GoDaddy API não configurada' };
+    }
+
+    try {
+      console.log(`🔍 [GODADDY] Verificando disponibilidade de ${domain}...`);
+      
+      const response = await axios.get(
+        `${this.godaddyAPI}/domains/available`,
+        {
+          params: {
+            domain: domain,
+            checkType: 'FULL',
+            forTransfer: false
+          },
+          headers: {
+            'Authorization': `sso-key ${config.GODADDY_API_KEY}:${config.GODADDY_API_SECRET}`,
+            'Content-Type': 'application/json'
+          },
+          timeout: 10000
+        }
+      );
+
+      const data = response.data;
+      const isAvailable = data.available === true;
+      
+      // Pegar preço se disponível
+      let price = 0.99;
+      if (data.price) {
+        price = data.price / 1000000; // GoDaddy retorna em micro unidades
+      }
+
+      console.log(`📊 [GODADDY] ${domain}`);
+      console.log(`   Disponível: ${isAvailable ? '✅ SIM' : '❌ NÃO'}`);
+      console.log(`   Preço: $${price.toFixed(2)}`);
+      
+      return {
+        available: isAvailable,
+        price: price
+      };
+
+    } catch (error) {
+      console.error('❌ [GODADDY] Erro na verificação:', error.message);
+      
+      if (error.response?.status === 401) {
+        console.error('❌ [GODADDY] Credenciais inválidas');
+        return { available: false, error: 'Credenciais GoDaddy inválidas' };
+      }
+      
+      if (error.response?.status === 429) {
+        console.error('❌ [GODADDY] Rate limit atingido');
+        await this.delay(5000);
+        return { available: false, error: 'Rate limit GoDaddy' };
+      }
+      
+      return { available: false, error: error.message };
+    }
   }
 
   /**
@@ -241,50 +308,6 @@ class WordPressDomainPurchase {
       console.error('❌ [AI] Erro:', error.message);
       const randomNum = Math.floor(Math.random() * 9999);
       return `${nicho.toLowerCase().replace(/\s+/g, '')}${randomNum}.online`;
-    }
-  }
-
-  /**
-   * VERIFICAR DISPONIBILIDADE
-   */
-  async checkDomainAvailability(domain) {
-    try {
-      const clientIP = config.NAMECHEAP_CLIENT_IP;
-      
-      const params = {
-        ApiUser: config.NAMECHEAP_API_USER,
-        ApiKey: config.NAMECHEAP_API_KEY,
-        UserName: config.NAMECHEAP_API_USER,
-        Command: 'namecheap.domains.check',
-        ClientIp: clientIP,
-        DomainList: domain
-      };
-      
-      const response = await axios.get(this.namecheapAPI, { params });
-      const xmlData = response.data;
-      
-      if (xmlData.includes('Status="ERROR"')) {
-        const errorMatch = xmlData.match(/<Error[^>]*>(.*?)<\/Error>/);
-        return { available: false, error: errorMatch?.[1] };
-      }
-      
-      const availableMatch = xmlData.match(/Available="([^"]+)"/);
-      const isAvailable = availableMatch && availableMatch[1] === 'true';
-      
-      let price = 0.99;
-      const isPremiumMatch = xmlData.match(/IsPremiumName="([^"]+)"/);
-      if (isPremiumMatch && isPremiumMatch[1] === 'true') {
-        const priceMatch = xmlData.match(/PremiumRegistrationPrice="([^"]+)"/);
-        if (priceMatch) price = parseFloat(priceMatch[1]);
-      }
-      
-      console.log(`📊 ${domain} - Disponível: ${isAvailable ? 'SIM' : 'NÃO'} - Preço: $${price}`);
-      
-      return { available: isAvailable, price: price };
-      
-    } catch (error) {
-      console.error('❌ Erro ao verificar:', error.message);
-      return { available: false, error: error.message };
     }
   }
 
