@@ -14,7 +14,8 @@
     "compression": "^1.7.4",
     "axios": "^1.6.2",
     "@supabase/supabase-js": "^2.39.0",
-    "node-cron": "^3.0.3"
+    "node-cron": "^3.0.3",
+    "uuid": "^9.0.1"
   },
   "engines": {
     "node": ">=18.0.0"

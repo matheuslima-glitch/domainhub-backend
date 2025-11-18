@@ -1,291 +1,440 @@
 # DomainHub Backend
 
-Backend Node.js/Express para gerenciamento automatizado de domínios, melhor performance e escalabilidade.
+Sistema profissional completo para gerenciamento automatizado de domínios com IA, oferecendo máxima performance e escalabilidade.
 
-## Descrição
+## 🚀 Descrição
 
-Sistema profissional para:
-- Consulta de saldo Namecheap em tempo real com conversão USD/BRL
-- Sincronização automática de domínios
-- Analytics Cloudflare
-- Compra automatizada de domínios via IA ou manual
-- Gestão de DNS e configurações cPanel
+Backend robusto em Node.js/Express para gerenciamento completo de domínios:
+- **Compra automatizada com IA** (GPT-4) ou manual
+- **Plataformas:** WordPress com instalação automática e AtomiCat para domínios genéricos
+- **Consulta de saldo** Namecheap em tempo real com conversão USD/BRL
+- **Sincronização automática** de 1.300+ domínios
+- **Analytics Cloudflare** para 465+ domínios
+- **Configuração DNS** e segurança automatizada
+- **Instalação WordPress** via Softaculous/cPanel
+- **Notificações WhatsApp** em tempo real
 
-## Arquitetura
+## 💡 Arquitetura
 
 ```
-Frontend React → Render Backend (IP estático) → APIs (Namecheap/Cloudflare) → Supabase DB
+Frontend React → Supabase Edge Functions → Render Backend (IP estático) → APIs Externas → Supabase DB
+                                                    ↓
+                                            [Namecheap, OpenAI, Cloudflare, cPanel, WhatsApp]
 ```
 
-### Vantagens sobre N8N
-- IP estático (whitelist Namecheap)
-- Saldo em tempo real via SSE
-- Cache inteligente
-- Logs detalhados
-- Custo zero (Free Tier Render)
-- Altamente escalável
+### Vantagens da Arquitetura
+- **IP estático** garantido (whitelist Namecheap)
+- **Processamento assíncrono** com callbacks em tempo real
+- **Cache inteligente** multi-nível
+- **Retry automático** com backoff exponencial
+- **Logs estruturados** com emojis para debug
+- **Zero custo** (Free Tier Render)
+- **Alta disponibilidade** e escalabilidade horizontal
 
-## Estrutura do Projeto
+## 📁 Estrutura do Projeto
 
 ```
 src/
 ├── server.js                    # Servidor Express principal
 ├── config/
-│   └── env.js                   # Variáveis de ambiente
+│   └── env.js                   # Configuração de variáveis
+├── purchase-domains/            # 🆕 LÓGICA DE COMPRA COM IA
+│   ├── wordpress/
+│   │   └── index.js             # Compra + Cloudflare + WordPress (750+ linhas)
+│   └── atomicat/
+│       └── index.js             # Compra genérica simplificada (600+ linhas)
 ├── services/
 │   ├── namecheap/
-│   │   ├── balance.js           # Consulta saldo (ATIVO)
-│   │   ├── domains.js           # Gestão domínios
-│   │   └── purchase.js          # Compra domínios
-│   ├── cloudflare/
-│   │   ├── analytics.js         # Analytics
-│   │   └── dns.js               # DNS management
-│   ├── supabase/
-│   │   ├── balance.js           # Operações saldo
-│   │   └── domains.js           # Operações domínios
-│   ├── cpanel/
-│   │   └── wordpress.js         # Setup WordPress
-│   └── notifications/
-│       └── whatsapp.js          # ZAPI WhatsApp
+│   │   ├── balance.js           # Consulta saldo em tempo real
+│   │   └── domains.js           # Sync e gestão de domínios
+│   └── supabase/
+│       ├── balance.js           # Persistência de saldo
+│       └── domains.js           # Operações de domínios
 ├── routes/
 │   ├── balance/
-│   │   └── index.js             # Endpoints saldo (ATIVO)
+│   │   └── index.js             # Endpoints de saldo
 │   ├── domains/
-│   │   └── index.js             # Endpoints domínios
-│   ├── cloudflare/
-│   │   └── index.js             # Endpoints Cloudflare
-│   └── purchase/
-│       └── index.js             # Endpoints compra
-├── cron/
-│   ├── sync-namecheap.js        # Job - domínios
-│   └── sync-cloudflare.js       # Job diário - analytics
+│   │   └── index.js             # Endpoints de domínios  
+│   └── purchase-domains/        # 🆕 ROTAS DE COMPRA
+│       └── index.js             # Orquestração de compras (300+ linhas)
 ├── middlewares/
-│   ├── error.js                 # Error handler
-│   └── validator.js             # Validação requests
-└── utils/
-    ├── cache.js                 # Sistema cache
-    ├── logger.js                # Logs estruturados
-    └── xml-parser.js            # Parser XML
+│   └── error.js                 # Tratamento global de erros
+└── cron/
+    └── sync-domains.js          # Job 4/4h - sincronização
 ```
 
-## Instalação
+## 🛠️ Instalação
 
 ```bash
-git clone https://github.com/matheuslima-glitch/domainhub-backend.git
+# Clone o repositório
+git clone https://github.com/seu-usuario/domainhub-backend.git
 cd domainhub-backend
+
+# Instale as dependências
 npm install
+
+# Para desenvolvimento local
+npm run dev
 ```
 
-## Configuração
+## ⚙️ Configuração
 
-### Variáveis de Ambiente (Render)
+### Variáveis de Ambiente Obrigatórias
 
-Adicione no Render Dashboard → Environment:
+```bash
+# Supabase (Database)
+SUPABASE_URL=https://xxx.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=eyJhbGc...
+SUPABASE_USER_ID=uuid-do-usuario
 
-```
-PORT=3000
-NODE_ENV=production
+# Namecheap (Domínios)
+NAMECHEAP_API_USER=seu-usuario
+NAMECHEAP_API_KEY=sua-api-key
 
-SUPABASE_URL=sua_url
-SUPABASE_SERVICE_ROLE_KEY=sua_chave_service_role
-SUPABASE_USER_ID=seu_user_id
-
-NAMECHEAP_API_USER=seu_usuario
-NAMECHEAP_API_KEY=sua_key
-
-CLOUDFLARE_EMAIL=seu_email
-CLOUDFLARE_API_KEY=sua_key
-
-CPANEL_URL=sua_url
-CPANEL_API_TOKEN=seu_token
-
-ZAPI_INSTANCE=sua_instance
-ZAPI_TOKEN=seu_token
-ZAPI_CLIENT_TOKEN=seu_client_token
+# OpenAI (Geração com IA)
+OPENAI_API_KEY=sk-proj-xxx
 ```
 
-## Deploy no Render
+### Variáveis Opcionais (Recomendadas)
+
+```bash
+# Cloudflare (DNS e Segurança)
+CLOUDFLARE_EMAIL=seu@email.com
+CLOUDFLARE_API_KEY=sua-api-key
+CLOUDFLARE_ACCOUNT_ID=seu-account-id
+
+# cPanel/Softaculous (WordPress)
+CPANEL_URL=https://seu-cpanel.com
+CPANEL_USERNAME=usuario
+CPANEL_API_TOKEN=token-api
+
+# WhatsApp (Notificações)
+ZAPI_INSTANCE=instancia
+ZAPI_CLIENT_TOKEN=token
+WHATSAPP_PHONE_NUMBER=5531999999999
+```
+
+## 🚀 Deploy no Render
 
 ### 1. Criar Web Service
-- Acesse: https://dashboard.render.com
-- New → Web Service
-- Conecte repositório GitHub
-- Configure:
-  - **Name:** domainhub-backend
-  - **Region:** Oregon (US West)
-  - **Branch:** main
-  - **Runtime:** Node
-  - **Build Command:** `npm install`
-  - **Start Command:** `npm start`
-  - **Instance Type:** Free
+```
+Dashboard → New → Web Service
+├── Repository: Conectar GitHub
+├── Name: domainhub-backend
+├── Region: Oregon (US West)
+├── Branch: main
+├── Runtime: Node
+├── Build Command: npm install
+├── Start Command: npm start
+└── Instance Type: Free
+```
 
-### 2. Adicionar Variáveis
-Cole todas as variáveis acima em Environment
+### 2. Configurar Variáveis
+Dashboard → Environment → Add todas as variáveis
 
-### 3. Deploy
-Clique em "Create Web Service"
+### 3. Whitelist IP (CRÍTICO!)
+```bash
+# Após deploy, obtenha o IP
+curl https://seu-app.onrender.com/api/ip
 
-### 4. Whitelist Namecheap (CRÍTICO)
-Após deploy:
-1. Acesse: `https://seu-app.onrender.com/api/ip`
-2. Copie o IP retornado
-3. Adicione em: https://ap.www.namecheap.com/settings/tools/apiaccess/
-4. Aguarde 5-10 minutos para propagação
+# Adicione na Namecheap
+https://ap.www.namecheap.com/settings/tools/apiaccess/
+```
 
-## API Endpoints
+## 📡 API Endpoints
 
-### Saldo Namecheap (Ativo)
+### 🎯 Compra de Domínios
 
-#### Consulta Única
+#### Compra com IA
+```http
+POST /api/purchase-domains
+Content-Type: application/json
+
+{
+  "quantidade": 1,
+  "idioma": "portuguese",
+  "plataforma": "wordpress",  // ou "atomicat"
+  "nicho": "saúde"
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Processo de compra iniciado",
+  "sessionId": "uuid-v4",
+  "plataforma": "wordpress",
+  "quantidade": 1
+}
+```
+
+#### Compra Manual
+```http
+POST /api/purchase-domains/manual
+Content-Type: application/json
+
+{
+  "domain": "exemplo.online"
+}
+```
+
+#### Verificar Status
+```http
+GET /api/purchase-domains/status/:sessionId
+```
+
+**Response com progresso em tempo real:**
+```json
+{
+  "success": true,
+  "progress": {
+    "session_id": "uuid",
+    "step": "cloudflare",
+    "status": "in_progress",
+    "message": "Configurando Cloudflare...",
+    "domain_name": "exemplo.online"
+  }
+}
+```
+
+### 💰 Saldo Namecheap
+
+#### Consulta com Conversão BRL
 ```http
 GET /api/balance
 ```
-Consulta saldo na Namecheap, converte USD→BRL, salva no Supabase.
 
 **Response:**
 ```json
 {
   "success": true,
   "data": {
-    "balance_usd": 1234.56,
-    "balance_brl": 6543.21,
+    "balance_usd": 50.00,
+    "balance_brl": 265.00,
     "exchange_rate": 5.30,
-    "exchange_source": "Wise",
-    "last_synced_at": "2025-01-15T10:30:00.000Z"
+    "currency": "USD",
+    "last_synced_at": "2025-01-18T10:30:00Z"
   }
 }
 ```
 
-#### Cache
-```http
-GET /api/balance/cached
-```
-Retorna último saldo salvo (sem consultar API).
-
-#### Tempo Real (SSE)
+#### Stream Tempo Real (SSE)
 ```http
 GET /api/balance/stream
 ```
-Server-Sent Events com updates a cada 2 minutos.
 
-**Uso:**
 ```javascript
+// Frontend usage
 const eventSource = new EventSource('/api/balance/stream');
 eventSource.onmessage = (e) => {
   const balance = JSON.parse(e.data);
-  console.log(balance);
+  updateUI(balance);
 };
 ```
 
-#### Sincronização Manual
-```http
-POST /api/balance/sync
-```
-Força atualização imediata.
+### 📊 Domínios
 
-### Utilidades
+#### Sincronizar Todos
+```http
+GET /api/domains/sync-all
+```
+
+#### Listar com Paginação
+```http
+GET /api/domains?page=1&limit=50
+```
+
+#### Informações Detalhadas
+```http
+GET /api/domains/:domainName/info
+```
+
+### 🔧 Utilidades
 
 #### IP do Servidor
 ```http
 GET /api/ip
 ```
-Retorna IP do Render para whitelist.
 
 #### Health Check
 ```http
 GET /health
 ```
-Status do servidor.
 
-## Integrações
+## 🔄 Fluxos de Compra
+
+### WordPress Flow
+```mermaid
+1. Gerar com IA (OpenAI GPT-4) → 3 palavras criativas
+2. Verificar Disponibilidade (Namecheap API)
+3. Verificar Preço → Limite $1.00
+4. Comprar Domínio (Namecheap)
+5. Configurar Nameservers → Cloudflare
+6. Setup Cloudflare → DNS + SSL + WAF
+7. Instalar WordPress → Softaculous/cPanel
+8. Notificar WhatsApp → Status completo
+9. Callbacks Supabase → Progresso real-time
+```
+
+### AtomiCat Flow
+```mermaid
+1. Gerar Genérico (OpenAI) → Palavras comerciais
+2. Verificar Disponibilidade (Namecheap)
+3. Verificar Preço → Limite $1.00
+4. Comprar Domínio (Namecheap)
+5. Notificar WhatsApp → Domínio pronto
+6. Callbacks Supabase → Status updates
+```
+
+## 🔌 Integrações
+
+### OpenAI GPT-4
+- Modelo: `gpt-4o-mini`
+- Geração inteligente de domínios
+- Prompts otimizados por plataforma
+- Retry com criatividade aumentada
 
 ### Namecheap API
-- Consulta saldo
-- Lista domínios (paginado)
-- Info detalhada domínio
-- Compra domínios
-- Gestão DNS
+- Verificação disponibilidade
+- Análise de preços
+- Compra automatizada
+- Gestão de nameservers
+- Sincronização de 1.300+ domínios
 
 ### Cloudflare API
+- Criação de zonas DNS
+- Configuração SSL Full
+- Regras WAF (firewall)
 - Analytics de tráfego
-- Gestão DNS
-- Cache purge
+- Cache e otimização
 
-### Supabase
-- Tabela: `namecheap_balance` (saldo)
-- Tabela: `domains` (domínios)
-- Tabela: `cloudflare_analytics` (métricas)
+### Softaculous/cPanel
+- Instalação WordPress automática
+- Configuração de plugins
+- Credenciais seguras
+- Backup automático
 
-### APIs Cotação
-- Wise API (principal)
-- ExchangeRate API (fallback)
+### WhatsApp Z-API
+- Notificações em tempo real
+- Status de compra
+- Alertas de erro
+- Confirmações de instalação
 
-## Performance
+### Supabase Realtime
+- Callbacks de progresso
+- Updates em tempo real
+- Persistência de dados
+- Logs de atividade
+
+## ⚡ Performance
 
 ### Cache Strategy
-- Saldo: 2 minutos
-- Lista domínios: 4 horas
-- Analytics: 24 horas
+```
+Saldo............: Tempo Real
+Domínios.........: 4 horas  
+Analytics........: 24 horas
+```
 
 ### Otimizações
-- Compression middleware
-- Helmet security
-- Connection pooling Supabase
-- Batch processing (50 domínios/lote)
-- Rate limiting protection
+- **Compression:** Gzip responses
+- **Helmet:** Security headers
+- **Connection Pool:** Supabase reuse
+- **Batch Processing:** 100 domínios/lote
+- **Rate Limit:** Proteção automática
+- **Async Processing:** Non-blocking
+- **Retry Logic:** Exponential backoff
 
-## Monitoramento
+## 📊 Monitoramento
 
-### Logs
-Render Dashboard → Logs (tempo real)
+### Logs Estruturados
+```
+🚀 [WORDPRESS] Iniciando compra
+🤖 [AI] Domínio gerado: exemplo.online
+🔍 [NAMECHEAP] Verificando disponibilidade
+💳 [NAMECHEAP] Comprando domínio
+☁️ [CLOUDFLARE] Configurando DNS
+📦 [WORDPRESS] Instalando via Softaculous
+✅ [SUCCESS] Domínio comprado com sucesso
+```
 
 ### Métricas
-- Tempo resposta: < 4s
-- Uptime: 99.9% (com UptimeRobot)
-- Taxa erro: < 0.1%
+- **Tempo resposta:** < 2s (endpoints síncronos)
+- **Taxa sucesso:** > 95% (com retry)
+- **Uptime:** 99.9% (Free Tier)
+- **Rate limits:** Respeitados automaticamente
 
-### Health Check
-UptimeRobot monitora `/health` a cada 5 minutos (evita sleep mode).
+### Health Monitoring
+```bash
+# Configure UptimeRobot
+URL: https://seu-backend.onrender.com/health
+Interval: 5 minutos
+```
 
-## Segurança
+## 🛡️ Segurança
 
-- Helmet.js (headers security)
-- CORS configurado
-- Variáveis nunca no código
-- Service Role Key Supabase
-- Rate limiting APIs
-- Timeout 30s (evita travamentos)
+- **Helmet.js:** Headers de segurança
+- **CORS:** Configurado para frontend
+- **Service Keys:** Apenas em variáveis
+- **Rate Limiting:** Proteção contra abuse
+- **Timeout:** 30s para evitar travamentos
+- **IP Whitelist:** Namecheap obrigatório
+- **SSL/TLS:** Comunicação criptografada
 
-## Troubleshooting
+## 🐛 Troubleshooting
 
 ### "IP not whitelisted"
-1. Confirme IP: `curl seu-app.onrender.com/api/ip`
-2. Adicione na Namecheap
-3. Aguarde 10 minutos
+```bash
+# Obtenha o IP atual
+curl https://seu-backend.onrender.com/api/ip
+# Adicione em: https://ap.www.namecheap.com/settings/tools/apiaccess/
+# Aguarde 10 minutos
+```
 
-### "Service unavailable"
-1. Verifique Render Dashboard
-2. Revise logs
-3. Confirme variáveis de ambiente
+### "OPENAI_API_KEY não configurada"
+```bash
+# Adicione no Render Dashboard → Environment
+OPENAI_API_KEY=sk-proj-xxxxx
+```
 
-### "Exchange rate failed"
-APIs cotação temporariamente indisponíveis. Sistema tenta 2 fontes automaticamente.
+### "Rate limit atingido"
+Sistema aguarda automaticamente. Verifique logs para detalhes.
 
-## Desenvolvimento
+### "Domínio indisponível após 10 tentativas"
+IA gerará alternativas automaticamente. Aumente criatividade se necessário.
 
-## Roadmap
+## 🔄 Jobs Automáticos (Cron)
 
+### Sincronização de Domínios
+```javascript
+// A cada 4 horas
+Horário: '0 */4 * * *'
+Função: Sincronizar 1.300+ domínios Namecheap
+Batch: 100 domínios por vez
+Retry: 3 tentativas com delay
+```
+
+## 📈 Roadmap
+
+- [x] Compra de domínios com IA (WordPress + AtomiCat)
 - [x] Saldo Namecheap em tempo real
-- [ ] Sync 1.300 domínios (4h)
-- [ ] Sync 465 analytics Cloudflare (diário)
-- [ ] Compra domínios com IA
-- [ ] Webhooks N8N compatibility
-- [ ] Dashboard métricas
+- [x] Sincronização automática de domínios
+- [x] Instalação WordPress automática
+- [x] Notificações WhatsApp
+- [x] Callbacks em tempo real
+- [ ] Analytics Cloudflare (465 domínios)
+- [ ] Dashboard de métricas
+- [ ] Renovação automática
 
-## Licença
 
-Proprietário - GEX Corporation LTDA
+## 📝 Licença
 
-## Suporte
+Proprietário - GEX Corporation LTDA © 2025
 
-Repositório: https://github.com/matheuslima-glitch/domainhub-backend
+## 🤝 Suporte
+
+**Desenvolvido para:** DomainHub - Sistema Profissional de Gestão de Domínios
+
+**Stack:** Node.js, Express, OpenAI, Namecheap, Cloudflare, Supabase, WhatsApp
+
+**Ambiente:** Render.com (Production Ready)
