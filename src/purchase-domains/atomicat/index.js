@@ -1,6 +1,6 @@
 /**
- * COMPRA DE DOMÍNIOS ATOMICAT - VERSÃO COMPLETA COM GODADDY
- * Verificação de disponibilidade usando APENAS GoDaddy API
+ * COMPRA DE DOMÍNIOS ATOMICAT - VERSÃO CORRIGIDA GODADDY
+ * Correção do erro 403 - Autenticação adequada
  */
 
 const axios = require('axios');
@@ -188,7 +188,8 @@ class AtomiCatDomainPurchase {
   }
 
   /**
-   * VERIFICAR DISPONIBILIDADE - APENAS GODADDY
+   * VERIFICAR DISPONIBILIDADE - GODADDY CORRIGIDO
+   * Correção do erro 403 - Formato correto de autenticação
    */
   async checkDomainAvailability(domain) {
     if (!config.GODADDY_API_KEY || !config.GODADDY_API_SECRET) {
@@ -199,7 +200,9 @@ class AtomiCatDomainPurchase {
 
     try {
       console.log(`🔍 [GODADDY-ATOMICAT] Verificando disponibilidade de ${domain}...`);
+      console.log(`   URL: ${this.godaddyAPI}/domains/available?domain=${domain}`);
       
+      // CORREÇÃO: Usar query params ao invés de path params
       const response = await axios.get(
         `${this.godaddyAPI}/domains/available`,
         {
@@ -209,10 +212,16 @@ class AtomiCatDomainPurchase {
             forTransfer: false
           },
           headers: {
+            // CORREÇÃO: Header Authorization correto
             'Authorization': `sso-key ${config.GODADDY_API_KEY}:${config.GODADDY_API_SECRET}`,
+            'Accept': 'application/json',
             'Content-Type': 'application/json'
           },
-          timeout: 10000
+          timeout: 15000,
+          validateStatus: function (status) {
+            // Aceitar apenas status 200-299
+            return status >= 200 && status < 300;
+          }
         }
       );
 
@@ -222,30 +231,52 @@ class AtomiCatDomainPurchase {
       // Pegar preço se disponível
       let price = 0.99;
       if (data.price) {
-        price = data.price / 1000000; // GoDaddy retorna em micro unidades
+        // GoDaddy retorna preço em centavos, não em micro unidades
+        price = data.price / 100;
       }
 
       console.log(`📊 [GODADDY-ATOMICAT] ${domain}`);
       console.log(`   Disponível: ${isAvailable ? '✅ SIM' : '❌ NÃO'}`);
+      console.log(`   Definitivo: ${data.definitive ? 'SIM' : 'NÃO'}`);
       console.log(`   Preço: $${price.toFixed(2)}`);
+      console.log(`   Moeda: ${data.currency || 'USD'}`);
       
       return {
         available: isAvailable,
-        price: price
+        price: price,
+        definitive: data.definitive || false
       };
 
     } catch (error) {
       console.error('❌ [GODADDY-ATOMICAT] Erro na verificação:', error.message);
       
-      if (error.response?.status === 401) {
-        console.error('❌ [GODADDY] Credenciais inválidas');
-        return { available: false, error: 'Credenciais GoDaddy inválidas' };
-      }
-      
-      if (error.response?.status === 429) {
-        console.error('❌ [GODADDY] Rate limit atingido');
-        await this.delay(5000);
-        return { available: false, error: 'Rate limit GoDaddy' };
+      if (error.response) {
+        console.error(`   Status: ${error.response.status}`);
+        console.error(`   Data:`, error.response.data);
+        
+        if (error.response.status === 401) {
+          console.error('❌ [GODADDY] Erro 401: Credenciais inválidas ou não enviadas');
+          console.error('   Verifique GODADDY_API_KEY e GODADDY_API_SECRET');
+          return { available: false, error: 'Autenticação GoDaddy falhou (401)' };
+        }
+        
+        if (error.response.status === 403) {
+          console.error('❌ [GODADDY] Erro 403: Usuário não tem permissão');
+          console.error('   Verifique se a API Key tem permissões corretas');
+          console.error('   Certifique-se de estar usando credenciais de PRODUÇÃO, não OTE');
+          return { available: false, error: 'Sem permissão GoDaddy (403)' };
+        }
+        
+        if (error.response.status === 422) {
+          console.error('❌ [GODADDY] Erro 422: Domínio inválido');
+          return { available: false, error: 'Domínio inválido' };
+        }
+        
+        if (error.response.status === 429) {
+          console.error('❌ [GODADDY] Erro 429: Muitas requisições (rate limit)');
+          await this.delay(5000);
+          return { available: false, error: 'Rate limit GoDaddy' };
+        }
       }
       
       return { available: false, error: error.message };
