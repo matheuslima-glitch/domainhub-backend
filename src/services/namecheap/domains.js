@@ -11,6 +11,127 @@ class NamecheapDomainsService {
     };
   }
 
+  /**
+   * Verifica se uma data está expirada comparando com a data atual
+   * @param {string} dateString - Data no formato MM/DD/YYYY ou outros formatos suportados
+   * @returns {boolean} - true se a data está expirada
+   */
+  isDateExpired(dateString) {
+    try {
+      if (!dateString) return false;
+      
+      // Parse da data de expiração
+      const expirationDate = new Date(dateString);
+      
+      // Validar se a data é válida
+      if (isNaN(expirationDate.getTime())) {
+        console.warn(`⚠️ Data inválida para parse: ${dateString}`);
+        return false;
+      }
+      
+      // Comparar com data atual (considera timezone Brasil)
+      const now = new Date();
+      const brasilTime = new Date(now.toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' }));
+      
+      // Se a data de expiração é menor que hoje, está expirada
+      const isExpired = expirationDate < brasilTime;
+      
+      console.log(`📅 Verificação de data: ${dateString}`);
+      console.log(`   Data de expiração: ${expirationDate.toISOString()}`);
+      console.log(`   Data atual (Brasil): ${brasilTime.toISOString()}`);
+      console.log(`   Está expirada: ${isExpired ? 'SIM' : 'NÃO'}`);
+      
+      return isExpired;
+    } catch (error) {
+      console.error(`❌ Erro ao verificar data de expiração: ${error.message}`);
+      return false;
+    }
+  }
+
+  /**
+   * Determina o status do domínio usando múltiplas verificações robustas
+   * @param {string} xmlData - XML completo da resposta
+   * @param {string} domainName - Nome do domínio para logs
+   * @returns {string} - Status: 'expired', 'suspended', ou 'active'
+   */
+  determineExpiredStatus(xmlData, domainName) {
+    console.log(`🔍 Iniciando verificação robusta de status para ${domainName}`);
+    
+    // ═══════════════════════════════════════════════════════════════
+    // MÉTODO 1: Verificar IsExpired (método primário)
+    // ═══════════════════════════════════════════════════════════════
+    const domainGetInfoMatch = xmlData.match(/<DomainGetInfoResult[^>]*IsExpired="([^"]+)"[^>]*IsLocked="([^"]+)"/);
+    
+    if (domainGetInfoMatch) {
+      const isExpired = domainGetInfoMatch[1];
+      const isLocked = domainGetInfoMatch[2];
+      
+      console.log(`✅ MÉTODO 1 - Atributos encontrados:`);
+      console.log(`   IsExpired: ${isExpired}`);
+      console.log(`   IsLocked: ${isLocked}`);
+      
+      if (isExpired === 'true') {
+        console.log(`📊 Status definido: expired (via IsExpired=true)`);
+        return 'expired';
+      }
+      if (isLocked === 'true') {
+        console.log(`📊 Status definido: suspended (via IsLocked=true)`);
+        return 'suspended';
+      }
+    } else {
+      console.log(`⚠️ MÉTODO 1 - IsExpired/IsLocked não encontrados, tentando método alternativo...`);
+    }
+    
+    // ═══════════════════════════════════════════════════════════════
+    // MÉTODO 2: Verificar IsActive + ExpiredDate (método de fallback)
+    // ═══════════════════════════════════════════════════════════════
+    console.log(`🔍 MÉTODO 2 - Verificando IsActive e ExpiredDate...`);
+    
+    // Extrair IsActive do PremiumDnsSubscription ou outros locais
+    const isActiveMatch = xmlData.match(/<IsActive>([^<]+)<\/IsActive>/);
+    const isActive = isActiveMatch ? isActiveMatch[1] : null;
+    
+    console.log(`   IsActive encontrado: ${isActive || 'não encontrado'}`);
+    
+    // Extrair ExpiredDate
+    const expiredDateMatch = xmlData.match(/<ExpiredDate>([^<]+)<\/ExpiredDate>/);
+    const expiredDate = expiredDateMatch ? expiredDateMatch[1] : null;
+    
+    console.log(`   ExpiredDate encontrado: ${expiredDate || 'não encontrado'}`);
+    
+    // Se IsActive=false E a data está expirada, marcar como expired
+    if (isActive === 'false' && expiredDate) {
+      console.log(`🔍 IsActive=false detectado, verificando se a data está vencida...`);
+      
+      const dateIsExpired = this.isDateExpired(expiredDate);
+      
+      if (dateIsExpired) {
+        console.log(`📊 Status definido: expired (via IsActive=false + data vencida)`);
+        return 'expired';
+      } else {
+        console.log(`✅ Data ainda não vencida, mantendo como active`);
+      }
+    }
+    
+    // ═══════════════════════════════════════════════════════════════
+    // MÉTODO 3: Verificar apenas ExpiredDate se nenhum indicador foi encontrado
+    // ═══════════════════════════════════════════════════════════════
+    if (expiredDate && !isActiveMatch && !domainGetInfoMatch) {
+      console.log(`🔍 MÉTODO 3 - Verificando apenas ExpiredDate como último recurso...`);
+      
+      const dateIsExpired = this.isDateExpired(expiredDate);
+      
+      if (dateIsExpired) {
+        console.log(`📊 Status definido: expired (apenas via data vencida)`);
+        return 'expired';
+      }
+    }
+    
+    // Se chegou aqui, o domínio está ativo
+    console.log(`📊 Status definido: active (nenhum indicador de expiração encontrado)`);
+    return 'active';
+  }
+
   async getClientIP() {
     try {
       const response = await axios.get('https://api.ipify.org?format=json', {
@@ -210,25 +331,17 @@ class NamecheapDomainsService {
         
         // Tentativa 1: Extrair da mensagem de erro (entre parênteses)
         if (errorMessage) {
-          const domainMatch = errorMessage.match(/\(([^)]+\.[a-z]+)\)/i);
-          if (domainMatch) {
-            extractedDomainName = domainMatch[1];
+          const domainInParentheses = errorMessage.match(/\(([a-zA-Z0-9.-]+\.[a-zA-Z]{2,})\)/);
+          if (domainInParentheses) {
+            extractedDomainName = domainInParentheses[1];
           }
         }
         
-        // Tentativa 2: Extrair do XML - DomainName attribute
-        if (!extractedDomainName && xmlData) {
-          const xmlDomainMatch = xmlData.match(/DomainName[>=\s"']+([a-z0-9.-]+\.[a-z]+)/i);
-          if (xmlDomainMatch) {
-            extractedDomainName = xmlDomainMatch[1];
-          }
-        }
-        
-        // Tentativa 3: Buscar pattern de domínio em todo o XML
-        if (!extractedDomainName) {
-          const generalDomainMatch = xmlData.match(/([a-z0-9-]+\.(online|com|net|org|io|co|br))/i);
-          if (generalDomainMatch) {
-            extractedDomainName = generalDomainMatch[1];
+        // Tentativa 2: Extrair do XML (DomainName attribute)
+        if (extractedDomainName === domainName) {
+          const domainNameAttr = xmlData.match(/DomainName="([^"]+)"/);
+          if (domainNameAttr) {
+            extractedDomainName = domainNameAttr[1];
           }
         }
         
@@ -327,32 +440,10 @@ class NamecheapDomainsService {
       const createdMatch = xmlData.match(/<CreatedDate>([^<]+)<\/CreatedDate>/);
       const purchase_date = createdMatch ? createdMatch[1] : null;
       
-      // ============================================
-      // IMPORTANTE: O STATUS VEM DE IsExpired e IsLocked
-      // NÃO do atributo Status="OK" do ApiResponse
-      // ============================================
-      const domainGetInfoMatch = xmlData.match(/<DomainGetInfoResult[^>]*IsExpired="([^"]+)"[^>]*IsLocked="([^"]+)"/);
-      
-      let status = 'active';
-      if (domainGetInfoMatch) {
-        const isExpired = domainGetInfoMatch[1];
-        const isLocked = domainGetInfoMatch[2];
-        
-        console.log(`📊 Atributos encontrados - IsExpired: ${isExpired}, IsLocked: ${isLocked}`);
-        
-        // LÓGICA CORRETA: Igual ao listDomains e ao N8N
-        if (isExpired === 'true') {
-          status = 'expired';
-          console.log(`📊 Status definido: expired`);
-        } else if (isLocked === 'true') {
-          status = 'suspended';
-          console.log(`📊 Status definido: suspended`);
-        } else {
-          console.log(`📊 Status definido: active`);
-        }
-      } else {
-        console.warn(`⚠️ Não foi possível extrair IsExpired/IsLocked de ${domainName}`);
-      }
+      // ═══════════════════════════════════════════════════════════════
+      // LÓGICA ROBUSTA: Usar método com múltiplas verificações
+      // ═══════════════════════════════════════════════════════════════
+      const status = this.determineExpiredStatus(xmlData, domain_name);
 
       // Extrair nameservers
       const nameservers = [];
