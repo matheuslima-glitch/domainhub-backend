@@ -3,6 +3,9 @@ const router = express.Router();
 const namecheapService = require('../../services/namecheap/domains');
 const supabaseService = require('../../services/supabase/domains');
 
+// Importar rotas de nameservers
+router.use('/nameservers', require('./nameservers'));
+
 router.post('/sync', async (req, res, next) => {
   try {
     console.log('🚀 Iniciando sincronização de domínios...');
