@@ -70,6 +70,58 @@ router.post('/update', async (req, res, next) => {
 });
 
 /**
+ * POST /api/domains/nameservers/set-default
+ * Configura DNS predefinido da Namecheap (BasicDNS ou WebHostingDNS)
+ */
+router.post('/set-default', async (req, res, next) => {
+  try {
+    const { domainName, dnsType } = req.body;
+    
+    console.log(`\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+    console.log(`📝 [API] Configurar DNS predefinido`);
+    console.log(`   Domínio: ${domainName}`);
+    console.log(`   Tipo DNS: ${dnsType}`);
+    console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`);
+    
+    // Validações básicas
+    if (!domainName) {
+      return res.status(400).json({
+        success: false,
+        error: 'Nome do domínio é obrigatório'
+      });
+    }
+    
+    if (!dnsType || !['BasicDNS', 'WebHostingDNS'].includes(dnsType)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Tipo de DNS inválido. Use "BasicDNS" ou "WebHostingDNS"'
+      });
+    }
+    
+    // Configurar DNS predefinido na Namecheap
+    const result = await namecheapNameservers.setDefaultDNS(domainName, dnsType);
+    
+    console.log(`\n✅ [API] ${dnsType} configurado com sucesso`);
+    console.log(`   Domínio: ${result.domain}`);
+    console.log(`   Status: ${result.updated ? 'Atualizado' : 'Processado'}`);
+    
+    res.json({
+      success: true,
+      data: result
+    });
+    
+  } catch (error) {
+    console.error(`\n❌ [API] Erro ao configurar DNS predefinido:`);
+    console.error(`   Mensagem: ${error.message}`);
+    
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Erro ao configurar DNS predefinido na Namecheap'
+    });
+  }
+});
+
+/**
  * GET /api/domains/nameservers/:domainName
  * Consulta os nameservers atuais de um domínio na Namecheap
  */

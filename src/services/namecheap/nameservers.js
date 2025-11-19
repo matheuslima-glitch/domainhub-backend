@@ -1,5 +1,3 @@
-// Atualiza Namerservers na namecheap
-
 const axios = require('axios');
 const config = require('../../config/env');
 
@@ -279,6 +277,151 @@ class NamecheapNameserversService {
       
     } catch (error) {
       console.error(`❌ Erro ao consultar nameservers de ${domainName}:`, error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * Configura DNS predefinido da Namecheap (BasicDNS ou WebHostingDNS)
+   * @param {string} domainName - Nome do domínio
+   * @param {string} dnsType - Tipo de DNS: 'BasicDNS' ou 'WebHostingDNS'
+   * @returns {Promise<Object>} - Resultado da operação
+   */
+  async setDefaultDNS(domainName, dnsType) {
+    try {
+      console.log(`🔄 Configurando ${dnsType} para ${domainName}`);
+      
+      // ═══════════════════════════════════════════════════════════════
+      // VALIDAÇÕES
+      // ═══════════════════════════════════════════════════════════════
+      
+      if (!dnsType || !['BasicDNS', 'WebHostingDNS'].includes(dnsType)) {
+        throw new Error('Tipo de DNS inválido. Use "BasicDNS" ou "WebHostingDNS"');
+      }
+      
+      // ═══════════════════════════════════════════════════════════════
+      // SEPARAR DOMÍNIO EM SLD E TLD
+      // ═══════════════════════════════════════════════════════════════
+      
+      const parts = domainName.split('.');
+      let SLD, TLD;
+      
+      const compositeTLDs = ['com.br', 'net.br', 'org.br', 'co.uk', 'com.au'];
+      const possibleTLD = parts.slice(-2).join('.');
+      
+      if (compositeTLDs.includes(possibleTLD)) {
+        TLD = possibleTLD;
+        SLD = parts.slice(0, -2).join('.');
+      } else {
+        TLD = parts[parts.length - 1];
+        SLD = parts.slice(0, -1).join('.');
+      }
+      
+      console.log(`📋 Domínio separado:`);
+      console.log(`   SLD: ${SLD}`);
+      console.log(`   TLD: ${TLD}`);
+      
+      // ═══════════════════════════════════════════════════════════════
+      // OBTER IP DO CLIENTE
+      // ═══════════════════════════════════════════════════════════════
+      
+      const clientIP = await this.getClientIP();
+      console.log(`🌐 IP do cliente: ${clientIP}`);
+      
+      // ═══════════════════════════════════════════════════════════════
+      // CONSTRUIR PARÂMETROS DA API
+      // ═══════════════════════════════════════════════════════════════
+      
+      const params = {
+        ApiUser: config.NAMECHEAP_API_USER,
+        ApiKey: config.NAMECHEAP_API_KEY,
+        UserName: config.NAMECHEAP_API_USER,
+        Command: 'namecheap.domains.dns.setDefault',
+        ClientIp: clientIP,
+        SLD: SLD,
+        TLD: TLD
+      };
+      
+      console.log(`📤 Parâmetros da API preparados`);
+      console.log(`   Command: ${params.Command}`);
+      console.log(`   Domínio: ${SLD}.${TLD}`);
+      console.log(`   Tipo DNS: ${dnsType}`);
+      
+      // ═══════════════════════════════════════════════════════════════
+      // FAZER REQUISIÇÃO À API DA NAMECHEAP
+      // ═══════════════════════════════════════════════════════════════
+      
+      console.log(`🚀 Enviando requisição para Namecheap...`);
+      
+      const response = await axios.get(this.baseURL, { 
+        params,
+        timeout: 30000
+      });
+      
+      const xmlData = response.data;
+      
+      console.log(`📥 Resposta recebida da Namecheap`);
+      
+      // ═══════════════════════════════════════════════════════════════
+      // PARSE DA RESPOSTA XML
+      // ═══════════════════════════════════════════════════════════════
+      
+      if (xmlData.includes('Status="ERROR"')) {
+        console.error(`❌ Erro retornado pela Namecheap`);
+        
+        let errorMessage = 'Erro desconhecido ao configurar DNS';
+        const errorMatch = xmlData.match(/<Error[^>]*>([\s\S]+?)<\/Error>/);
+        if (errorMatch) {
+          errorMessage = errorMatch[1].trim().replace(/<[^>]+>/g, '');
+        }
+        
+        console.error(`   Mensagem: ${errorMessage}`);
+        throw new Error(errorMessage);
+      }
+      
+      if (xmlData.includes('Status="OK"')) {
+        console.log(`✅ ${dnsType} configurado com sucesso na Namecheap!`);
+        
+        // Extrair informações da resposta
+        const isSuccessMatch = xmlData.match(/<DomainDNSSetDefaultResult[^>]*Domain="([^"]+)"[^>]*Updated="([^"]+)"/);
+        
+        if (isSuccessMatch) {
+          const domain = isSuccessMatch[1];
+          const updated = isSuccessMatch[2];
+          
+          console.log(`   Domínio: ${domain}`);
+          console.log(`   Atualizado: ${updated}`);
+          
+          return {
+            success: true,
+            domain: domain,
+            updated: updated === 'true',
+            dnsType: dnsType,
+            message: `${dnsType} configurado com sucesso na Namecheap`
+          };
+        }
+        
+        return {
+          success: true,
+          domain: domainName,
+          dnsType: dnsType,
+          message: `${dnsType} configurado com sucesso na Namecheap`
+        };
+      }
+      
+      console.warn(`⚠️ Resposta inesperada da Namecheap`);
+      console.warn(`   XML completo:`, xmlData.substring(0, 500));
+      
+      throw new Error('Resposta inesperada da API Namecheap');
+      
+    } catch (error) {
+      console.error(`❌ Erro ao configurar ${dnsType} para ${domainName}:`, error.message);
+      
+      if (error.response) {
+        console.error(`   Status HTTP: ${error.response.status}`);
+        console.error(`   Dados:`, error.response.data?.substring(0, 500));
+      }
+      
       throw error;
     }
   }
