@@ -13,33 +13,43 @@ class NamecheapDomainsService {
 
   /**
    * Verifica se uma data está expirada comparando com a data atual
-   * @param {string} dateString - Data no formato MM/DD/YYYY ou outros formatos suportados
+   * @param {string} dateString - Data no formato MM/DD/YYYY
    * @returns {boolean} - true se a data está expirada
    */
   isDateExpired(dateString) {
     try {
-      if (!dateString) return false;
-      
-      // Parse da data de expiração
-      const expirationDate = new Date(dateString);
-      
-      // Validar se a data é válida
-      if (isNaN(expirationDate.getTime())) {
-        console.warn(`⚠️ Data inválida para parse: ${dateString}`);
+      if (!dateString) {
+        console.warn(`⚠️ Data vazia recebida para verificação`);
         return false;
       }
       
-      // Comparar com data atual (considera timezone Brasil)
+      // Limpar espaços
+      const cleanDate = dateString.trim();
+      
+      // Parse da data de expiração - IMPORTANTE: MM/DD/YYYY
+      // Forçar interpretação americana (MM/DD/YYYY)
+      const expirationDate = new Date(cleanDate);
+      
+      // Validar se a data é válida
+      if (isNaN(expirationDate.getTime())) {
+        console.warn(`⚠️ Data inválida para parse: ${cleanDate}`);
+        return false;
+      }
+      
+      // Data atual sem horas (apenas dia)
       const now = new Date();
-      const brasilTime = new Date(now.toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' }));
+      const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
       
-      // Se a data de expiração é menor que hoje, está expirada
-      const isExpired = expirationDate < brasilTime;
+      // Data de expiração sem horas (apenas dia)
+      const expiryDay = new Date(expirationDate.getFullYear(), expirationDate.getMonth(), expirationDate.getDate());
       
-      console.log(`📅 Verificação de data: ${dateString}`);
-      console.log(`   Data de expiração: ${expirationDate.toISOString()}`);
-      console.log(`   Data atual (Brasil): ${brasilTime.toISOString()}`);
-      console.log(`   Está expirada: ${isExpired ? 'SIM' : 'NÃO'}`);
+      // Se a data de expiração é MENOR OU IGUAL que hoje, está expirada
+      const isExpired = expiryDay <= today;
+      
+      console.log(`📅 Verificação de data: ${cleanDate}`);
+      console.log(`   Data de expiração (sem hora): ${expiryDay.toISOString().split('T')[0]}`);
+      console.log(`   Data atual (sem hora): ${today.toISOString().split('T')[0]}`);
+      console.log(`   Está expirada: ${isExpired ? 'SIM ⚠️' : 'NÃO ✅'}`);
       
       return isExpired;
     } catch (error) {
@@ -55,80 +65,99 @@ class NamecheapDomainsService {
    * @returns {string} - Status: 'expired', 'suspended', ou 'active'
    */
   determineExpiredStatus(xmlData, domainName) {
-    console.log(`🔍 Iniciando verificação robusta de status para ${domainName}`);
+    console.log(`🔍 ═══════════════════════════════════════════════════════════`);
+    console.log(`🔍 ANÁLISE DE STATUS PARA: ${domainName}`);
+    console.log(`🔍 ═══════════════════════════════════════════════════════════`);
+    
+    // Variável para rastrear qual método detectou expiração
+    let detectionMethod = null;
     
     // ═══════════════════════════════════════════════════════════════
-    // MÉTODO 1: Verificar IsExpired (método primário)
+    // EXTRAÇÃO DE TODOS OS INDICADORES POSSÍVEIS
     // ═══════════════════════════════════════════════════════════════
-    const domainGetInfoMatch = xmlData.match(/<DomainGetInfoResult[^>]*IsExpired="([^"]+)"[^>]*IsLocked="([^"]+)"/);
     
-    if (domainGetInfoMatch) {
-      const isExpired = domainGetInfoMatch[1];
-      const isLocked = domainGetInfoMatch[2];
-      
-      console.log(`✅ MÉTODO 1 - Atributos encontrados:`);
-      console.log(`   IsExpired: ${isExpired}`);
-      console.log(`   IsLocked: ${isLocked}`);
-      
-      if (isExpired === 'true') {
-        console.log(`📊 Status definido: expired (via IsExpired=true)`);
-        return 'expired';
-      }
-      if (isLocked === 'true') {
-        console.log(`📊 Status definido: suspended (via IsLocked=true)`);
-        return 'suspended';
-      }
-    } else {
-      console.log(`⚠️ MÉTODO 1 - IsExpired/IsLocked não encontrados, tentando método alternativo...`);
-    }
+    // Extrair IsExpired (pode vir em qualquer ordem no XML)
+    const isExpiredMatch = xmlData.match(/IsExpired="([^"]+)"/);
+    const isExpiredValue = isExpiredMatch ? isExpiredMatch[1].trim().toLowerCase() : null;
     
-    // ═══════════════════════════════════════════════════════════════
-    // MÉTODO 2: Verificar IsActive + ExpiredDate (método de fallback)
-    // ═══════════════════════════════════════════════════════════════
-    console.log(`🔍 MÉTODO 2 - Verificando IsActive e ExpiredDate...`);
+    // Extrair IsLocked (pode vir em qualquer ordem no XML)
+    const isLockedMatch = xmlData.match(/IsLocked="([^"]+)"/);
+    const isLockedValue = isLockedMatch ? isLockedMatch[1].trim().toLowerCase() : null;
     
-    // Extrair IsActive do PremiumDnsSubscription ou outros locais
+    // Extrair IsActive
     const isActiveMatch = xmlData.match(/<IsActive>([^<]+)<\/IsActive>/);
-    const isActive = isActiveMatch ? isActiveMatch[1] : null;
-    
-    console.log(`   IsActive encontrado: ${isActive || 'não encontrado'}`);
+    const isActiveValue = isActiveMatch ? isActiveMatch[1].trim().toLowerCase() : null;
     
     // Extrair ExpiredDate
     const expiredDateMatch = xmlData.match(/<ExpiredDate>([^<]+)<\/ExpiredDate>/);
-    const expiredDate = expiredDateMatch ? expiredDateMatch[1] : null;
+    const expiredDateValue = expiredDateMatch ? expiredDateMatch[1].trim() : null;
     
-    console.log(`   ExpiredDate encontrado: ${expiredDate || 'não encontrado'}`);
+    console.log(`📊 INDICADORES EXTRAÍDOS:`);
+    console.log(`   IsExpired: ${isExpiredValue || 'NÃO ENCONTRADO'}`);
+    console.log(`   IsLocked: ${isLockedValue || 'NÃO ENCONTRADO'}`);
+    console.log(`   IsActive: ${isActiveValue || 'NÃO ENCONTRADO'}`);
+    console.log(`   ExpiredDate: ${expiredDateValue || 'NÃO ENCONTRADO'}`);
     
-    // Se IsActive=false E a data está expirada, marcar como expired
-    if (isActive === 'false' && expiredDate) {
-      console.log(`🔍 IsActive=false detectado, verificando se a data está vencida...`);
-      
-      const dateIsExpired = this.isDateExpired(expiredDate);
+    // ═══════════════════════════════════════════════════════════════
+    // VERIFICAÇÃO 1: IsExpired="true" (mais confiável)
+    // ═══════════════════════════════════════════════════════════════
+    if (isExpiredValue === 'true') {
+      console.log(`✅ VERIFICAÇÃO 1: IsExpired="true" detectado`);
+      console.log(`📊 STATUS FINAL: expired`);
+      console.log(`🔍 ═══════════════════════════════════════════════════════════\n`);
+      return 'expired';
+    }
+    
+    // ═══════════════════════════════════════════════════════════════
+    // VERIFICAÇÃO 2: IsLocked="true" (domínio suspenso)
+    // ═══════════════════════════════════════════════════════════════
+    if (isLockedValue === 'true') {
+      console.log(`✅ VERIFICAÇÃO 2: IsLocked="true" detectado`);
+      console.log(`📊 STATUS FINAL: suspended`);
+      console.log(`🔍 ═══════════════════════════════════════════════════════════\n`);
+      return 'suspended';
+    }
+    
+    // ═══════════════════════════════════════════════════════════════
+    // VERIFICAÇÃO 3: Data de expiração vencida (SEMPRE verificar)
+    // ═══════════════════════════════════════════════════════════════
+    if (expiredDateValue) {
+      console.log(`🔍 VERIFICAÇÃO 3: Verificando data de expiração...`);
+      const dateIsExpired = this.isDateExpired(expiredDateValue);
       
       if (dateIsExpired) {
-        console.log(`📊 Status definido: expired (via IsActive=false + data vencida)`);
+        console.log(`✅ VERIFICAÇÃO 3: Data de expiração vencida!`);
+        console.log(`📊 STATUS FINAL: expired (via data vencida)`);
+        console.log(`🔍 ═══════════════════════════════════════════════════════════\n`);
         return 'expired';
       } else {
-        console.log(`✅ Data ainda não vencida, mantendo como active`);
+        console.log(`✅ VERIFICAÇÃO 3: Data ainda válida`);
       }
     }
     
     // ═══════════════════════════════════════════════════════════════
-    // MÉTODO 3: Verificar apenas ExpiredDate se nenhum indicador foi encontrado
+    // VERIFICAÇÃO 4: IsActive="false" + data vencida
     // ═══════════════════════════════════════════════════════════════
-    if (expiredDate && !isActiveMatch && !domainGetInfoMatch) {
-      console.log(`🔍 MÉTODO 3 - Verificando apenas ExpiredDate como último recurso...`);
+    if (isActiveValue === 'false' && expiredDateValue) {
+      console.log(`🔍 VERIFICAÇÃO 4: IsActive="false" detectado`);
+      console.log(`   Verificando se combina com data vencida...`);
       
-      const dateIsExpired = this.isDateExpired(expiredDate);
+      const dateIsExpired = this.isDateExpired(expiredDateValue);
       
       if (dateIsExpired) {
-        console.log(`📊 Status definido: expired (apenas via data vencida)`);
+        console.log(`✅ VERIFICAÇÃO 4: IsActive="false" + data vencida confirmada`);
+        console.log(`📊 STATUS FINAL: expired`);
+        console.log(`🔍 ═══════════════════════════════════════════════════════════\n`);
         return 'expired';
       }
     }
     
-    // Se chegou aqui, o domínio está ativo
-    console.log(`📊 Status definido: active (nenhum indicador de expiração encontrado)`);
+    // ═══════════════════════════════════════════════════════════════
+    // NENHUMA CONDIÇÃO DE EXPIRAÇÃO DETECTADA
+    // ═══════════════════════════════════════════════════════════════
+    console.log(`✅ Nenhum indicador de expiração ou suspensão encontrado`);
+    console.log(`📊 STATUS FINAL: active`);
+    console.log(`🔍 ═══════════════════════════════════════════════════════════\n`);
     return 'active';
   }
 
@@ -232,7 +261,7 @@ class NamecheapDomainsService {
     const currentPage = currentPageMatch ? parseInt(currentPageMatch[1]) : 1;
     const totalPages = Math.ceil(totalDomains / pageSizeValue);
 
-    // PARSE 1: EXTRAIR DOMÍNIOS DA LISTA (IGUAL AO N8N)
+    // PARSE 1: EXTRAIR DOMÍNIOS DA LISTA
     const domainRegex = /<Domain[^>]*Name="([^"]+)"[^>]*Expires="([^"]+)"[^>]*IsExpired="([^"]+)"[^>]*IsLocked="([^"]+)"/g;
     const domains = [];
     let match;
@@ -240,17 +269,32 @@ class NamecheapDomainsService {
     while ((match = domainRegex.exec(xmlData)) !== null) {
       const [_, name, expires, isExpired, isLocked] = match;
       
-      // LÓGICA CORRETA: Status baseado em IsExpired e IsLocked (IGUAL AO N8N)
+      // Limpar valores
+      const cleanName = name.trim();
+      const cleanExpires = expires.trim();
+      const cleanIsExpired = isExpired.trim().toLowerCase();
+      const cleanIsLocked = isLocked.trim().toLowerCase();
+      
+      // LÓGICA ROBUSTA: Verificar TODAS as condições
       let status = 'active';
-      if (isExpired === 'true') {
+      
+      // Primeiro: verificar IsExpired
+      if (cleanIsExpired === 'true') {
         status = 'expired';
-      } else if (isLocked === 'true') {
+      } 
+      // Segundo: verificar IsLocked
+      else if (cleanIsLocked === 'true') {
         status = 'suspended';
+      }
+      // Terceiro: verificar data mesmo que IsExpired="false"
+      else if (this.isDateExpired(cleanExpires)) {
+        status = 'expired';
+        console.log(`⚠️ IMPORTANTE: ${cleanName} tem IsExpired="false" mas data vencida!`);
       }
       
       domains.push({
-        domain_name: name,
-        expiration_date: expires,
+        domain_name: cleanName,
+        expiration_date: cleanExpires,
         status: status
       });
     }
@@ -325,7 +369,7 @@ class NamecheapDomainsService {
         console.log(`📋 Mensagem de erro extraída: "${errorMessage}"`);
         
         // ============================================
-        // EXTRAIR DOMAIN_NAME - MÚLTIPLAS TENTATIVAS (IGUAL AO N8N)
+        // EXTRAIR DOMAIN_NAME - MÚLTIPLAS TENTATIVAS
         // ============================================
         let extractedDomainName = domainName; // Usar o que foi passado como fallback
         
@@ -365,10 +409,8 @@ class NamecheapDomainsService {
         }
         
         // ============================================
-        // PARSE 3: EXTRAIR ALERTAS (IGUAL AO N8N)
+        // PARSE 3: EXTRAIR ALERTAS
         // ============================================
-        // IMPORTANTE: Para domínios suspensos, o status vem da MENSAGEM DE ERRO
-        // NÃO do campo Status="ERROR" ou de IsExpired/IsLocked (que não existem no XML de erro)
         let statusType = 'active';
         const errorMsg = (errorMessage || '').toLowerCase();
         
@@ -432,13 +474,13 @@ class NamecheapDomainsService {
       console.log(`✅ Resposta bem-sucedida para ${domainName}, fazendo parse...`);
       
       const domainNameMatch = xmlData.match(/DomainName="([^"]+)"/);
-      const domain_name = domainNameMatch ? domainNameMatch[1] : domainName;
+      const domain_name = domainNameMatch ? domainNameMatch[1].trim() : domainName;
       
       const expiredDateMatch = xmlData.match(/<ExpiredDate>([^<]+)<\/ExpiredDate>/);
-      const expiration_date = expiredDateMatch ? expiredDateMatch[1] : null;
+      const expiration_date = expiredDateMatch ? expiredDateMatch[1].trim() : null;
       
       const createdMatch = xmlData.match(/<CreatedDate>([^<]+)<\/CreatedDate>/);
-      const purchase_date = createdMatch ? createdMatch[1] : null;
+      const purchase_date = createdMatch ? createdMatch[1].trim() : null;
       
       // ═══════════════════════════════════════════════════════════════
       // LÓGICA ROBUSTA: Usar método com múltiplas verificações
@@ -461,7 +503,7 @@ class NamecheapDomainsService {
 
       // Extrair auto renew
       const autoRenewMatch = xmlData.match(/<UseAutoRenew>([^<]+)<\/UseAutoRenew>/);
-      const auto_renew = autoRenewMatch ? autoRenewMatch[1] === 'true' : false;
+      const auto_renew = autoRenewMatch ? autoRenewMatch[1].trim().toLowerCase() === 'true' : false;
 
       // Timestamp Brasil
       const now = new Date();
