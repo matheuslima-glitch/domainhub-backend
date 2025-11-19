@@ -1,6 +1,9 @@
 /**
- * COMPRA DE DOMÍNIOS ATOMICAT - VERSÃO CORRIGIDA GODADDY
- * Correção do erro 403 - Autenticação adequada
+ * COMPRA DE DOMÍNIOS ATOMICAT - VERSÃO CORRIGIDA FINAL
+ * IMPORTANTE: AtomiCat APENAS compra o domínio
+ * NÃO configura Cloudflare
+ * NÃO instala WordPress
+ * NÃO adiciona ao cPanel
  */
 
 const axios = require('axios');
@@ -41,6 +44,7 @@ class AtomiCatDomainPurchase {
 
   /**
    * FUNÇÃO PRINCIPAL - ORQUESTRA TODO O PROCESSO ATOMICAT
+   * ATENÇÃO: Apenas compra o domínio, sem configurações adicionais
    */
   async purchaseDomain(params) {
     const { quantidade, idioma, nicho, sessionId, domainManual, userId } = params;
@@ -48,6 +52,7 @@ class AtomiCatDomainPurchase {
     console.log(`🚀 [ATOMICAT] Iniciando compra`);
     console.log(`   Usuário: ${userId}`);
     console.log(`   Manual: ${domainManual ? 'SIM' : 'NÃO'}`);
+    console.log(`   ⚠️ MODO ATOMICAT: Apenas compra de domínio, SEM Cloudflare e SEM WordPress`);
     
     await this.updateProgress(sessionId, 'generating', 'in_progress', 'Iniciando processo AtomiCat...');
     
@@ -74,9 +79,16 @@ class AtomiCatDomainPurchase {
         domainsToRegister.push(domainManual);
         successCount = 1;
         
-        // Salvar no banco e notificar
-        await this.saveDomainToSupabase(domainManual, userId);
+        // ATOMICAT: Apenas salvar no banco e notificar
+        const savedDomain = await this.saveDomainToSupabase(domainManual, userId);
+        if (savedDomain?.domain_id) {
+          await this.saveActivityLog(savedDomain.domain_id, userId);
+        }
         await this.sendWhatsAppNotification(domainManual, 'success');
+      } else {
+        await this.updateProgress(sessionId, 'error', 'error', 
+          `Erro na compra: ${purchaseResult.error}`);
+        return { success: false, error: purchaseResult.error };
       }
       
     } else {
@@ -93,6 +105,13 @@ class AtomiCatDomainPurchase {
               `Gerando domínio genérico ${i + 1}/${quantidade}`);
             
             const generatedDomain = await this.generateGenericDomainWithAI(nicho, idioma, retries > 0);
+            
+            if (!generatedDomain) {
+              console.error('❌ Falha ao gerar domínio com IA');
+              retries++;
+              await this.delay(2000);
+              continue;
+            }
             
             // VERIFICAR DISPONIBILIDADE COM GODADDY
             console.log(`🔍 [GODADDY] Verificando: ${generatedDomain}`);
@@ -130,17 +149,14 @@ class AtomiCatDomainPurchase {
               domainsToRegister.push(domain);
               successCount++;
               
-              console.log(`✅ Domínio comprado: ${domain}`);
+              console.log(`✅ [ATOMICAT] Domínio comprado: ${domain}`);
+              console.log(`   ⚠️ Configurações Cloudflare e WordPress NÃO serão executadas (modo AtomiCat)`);
               
-              // SALVAR NO BANCO COM USER_ID
+              // ATOMICAT: Apenas salvar no banco e notificar
               const savedDomain = await this.saveDomainToSupabase(domain, userId);
-              
-              // REGISTRAR NO LOG
               if (savedDomain?.domain_id) {
                 await this.saveActivityLog(savedDomain.domain_id, userId);
               }
-              
-              // NOTIFICAR WHATSAPP
               await this.sendWhatsAppNotification(domain, 'success');
               
             } else {
@@ -164,7 +180,7 @@ class AtomiCatDomainPurchase {
         }
         
         if (!domain) {
-          console.error(`❌ Não foi possível comprar o domínio ${i + 1}`);
+          console.error(`❌ Não foi possível comprar o domínio ${i + 1} após ${this.maxRetries} tentativas`);
         }
       }
     }
@@ -175,7 +191,7 @@ class AtomiCatDomainPurchase {
         `${successCount} domínio(s) AtomiCat comprado(s) com sucesso!`, 
         domainsToRegister[domainsToRegister.length - 1]);
     } else {
-      await this.updateProgress(sessionId, 'completed', 'error', 
+      await this.updateProgress(sessionId, 'error', 'error', 
         'Nenhum domínio foi comprado');
     }
     
@@ -188,8 +204,8 @@ class AtomiCatDomainPurchase {
   }
 
   /**
-   * VERIFICAR DISPONIBILIDADE - GODADDY CORRIGIDO
-   * Correção do erro 403 - Formato correto de autenticação
+   * VERIFICAR DISPONIBILIDADE - GODADDY
+   * Esta implementação está correta e funcional
    */
   async checkDomainAvailability(domain) {
     if (!config.GODADDY_API_KEY || !config.GODADDY_API_SECRET) {
@@ -202,7 +218,6 @@ class AtomiCatDomainPurchase {
       console.log(`🔍 [GODADDY-ATOMICAT] Verificando disponibilidade de ${domain}...`);
       console.log(`   URL: ${this.godaddyAPI}/domains/available?domain=${domain}`);
       
-      // CORREÇÃO: Usar query params ao invés de path params
       const response = await axios.get(
         `${this.godaddyAPI}/domains/available`,
         {
@@ -212,14 +227,12 @@ class AtomiCatDomainPurchase {
             forTransfer: false
           },
           headers: {
-            // CORREÇÃO: Header Authorization correto
             'Authorization': `sso-key ${config.GODADDY_API_KEY}:${config.GODADDY_API_SECRET}`,
             'Accept': 'application/json',
             'Content-Type': 'application/json'
           },
           timeout: 15000,
           validateStatus: function (status) {
-            // Aceitar apenas status 200-299
             return status >= 200 && status < 300;
           }
         }
@@ -231,7 +244,6 @@ class AtomiCatDomainPurchase {
       // Pegar preço se disponível
       let price = 0.99;
       if (data.price) {
-        // GoDaddy retorna preço em centavos, não em micro unidades
         price = data.price / 100;
       }
 
@@ -255,122 +267,129 @@ class AtomiCatDomainPurchase {
         console.error(`   Data:`, error.response.data);
         
         if (error.response.status === 401) {
-          console.error('❌ [GODADDY] Erro 401: Credenciais inválidas ou não enviadas');
+          console.error('❌ [GODADDY] Erro 401: Credenciais inválidas');
           console.error('   Verifique GODADDY_API_KEY e GODADDY_API_SECRET');
           return { available: false, error: 'Autenticação GoDaddy falhou (401)' };
         }
         
         if (error.response.status === 403) {
-          console.error('❌ [GODADDY] Erro 403: Usuário não tem permissão');
+          console.error('❌ [GODADDY] Erro 403: Sem permissão');
           console.error('   Verifique se a API Key tem permissões corretas');
-          console.error('   Certifique-se de estar usando credenciais de PRODUÇÃO, não OTE');
           return { available: false, error: 'Sem permissão GoDaddy (403)' };
         }
         
-        if (error.response.status === 422) {
-          console.error('❌ [GODADDY] Erro 422: Domínio inválido');
-          return { available: false, error: 'Domínio inválido' };
-        }
-        
-        if (error.response.status === 429) {
-          console.error('❌ [GODADDY] Erro 429: Muitas requisições (rate limit)');
-          await this.delay(5000);
-          return { available: false, error: 'Rate limit GoDaddy' };
+        if (error.response.status === 404) {
+          console.error('❌ [GODADDY] Erro 404: Domínio não encontrado ou inválido');
+          return { available: false, error: 'Domínio inválido (404)' };
         }
       }
       
-      return { available: false, error: error.message };
+      return { 
+        available: false, 
+        error: error.message || 'Erro na verificação de disponibilidade' 
+      };
     }
   }
 
   /**
    * GERAR DOMÍNIO GENÉRICO COM IA
+   * AtomiCat gera domínios mais genéricos e versáteis
    */
-  async generateGenericDomainWithAI(nicho, idioma, isRetry = false) {
-    const prompt = this.buildAtomiCatPrompt(nicho, idioma, isRetry);
-    
+  async generateGenericDomainWithAI(nicho, idioma, isRetry) {
+    if (!config.OPENAI_API_KEY) {
+      console.error('❌ OpenAI API não configurada');
+      throw new Error('OpenAI API Key não configurada');
+    }
+
     try {
-      const response = await axios.post(this.openaiAPI, {
-        model: 'gpt-4o-mini',
-        messages: [
-          {
-            role: 'system',
-            content: 'Você é um especialista em criação de domínios genéricos para múltiplos usos.'
+      console.log(`🤖 [AI-ATOMICAT] Gerando domínio genérico para nicho: ${nicho}`);
+      
+      const prompt = this.buildGenericPrompt(nicho, idioma, isRetry);
+      
+      const response = await axios.post(
+        this.openaiAPI,
+        {
+          model: 'gpt-3.5-turbo',
+          messages: [
+            { role: 'system', content: 'Você é um especialista em criar nomes de domínios genéricos, versáteis e memoráveis para múltiplos usos.' },
+            { role: 'user', content: prompt }
+          ],
+          temperature: isRetry ? 1.0 : 0.7,
+          max_tokens: 150
+        },
+        {
+          headers: {
+            'Authorization': `Bearer ${config.OPENAI_API_KEY}`,
+            'Content-Type': 'application/json'
           },
-          {
-            role: 'user',
-            content: prompt
-          }
-        ],
-        temperature: isRetry ? 0.95 : 0.8,
-        max_tokens: 200,
-        response_format: { type: "json_object" }
-      }, {
-        headers: {
-          'Authorization': `Bearer ${config.OPENAI_API_KEY}`,
-          'Content-Type': 'application/json'
+          timeout: 30000
         }
-      });
+      );
+
+      const content = response.data.choices[0].message.content.trim();
+      console.log(`🤖 [AI-ATOMICAT] Resposta bruta:`, content);
       
-      const result = JSON.parse(response.data.choices[0].message.content);
-      const domain = result.domains[0];
+      // Tentar extrair JSON
+      let domains = [];
       
-      console.log(`✅ [AI-ATOMICAT] Domínio genérico: ${domain}`);
+      // Remover markdown se houver
+      const cleanContent = content.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+      
+      try {
+        const parsed = JSON.parse(cleanContent);
+        domains = parsed.domains || [];
+      } catch (parseError) {
+        console.error('❌ Erro ao parsear JSON:', parseError.message);
+        // Tentar extrair domínio manualmente
+        const match = content.match(/([a-z0-9]+)\.online/i);
+        if (match) {
+          domains = [match[0].toLowerCase()];
+        }
+      }
+      
+      if (domains.length === 0) {
+        console.error('❌ Nenhum domínio gerado pela IA');
+        return null;
+      }
+      
+      const domain = domains[0].toLowerCase().trim();
+      console.log(`✅ [AI-ATOMICAT] Domínio genérico gerado: ${domain}`);
+      
+      // Validar formato
+      if (!domain.endsWith('.online')) {
+        console.error(`❌ Domínio inválido (sem .online): ${domain}`);
+        return null;
+      }
+      
+      if (!/^[a-z0-9]+\.online$/.test(domain)) {
+        console.error(`❌ Domínio com caracteres inválidos: ${domain}`);
+        return null;
+      }
+      
       return domain;
       
     } catch (error) {
       console.error('❌ [AI-ATOMICAT] Erro:', error.message);
-      const randomNum = Math.floor(Math.random() * 99999);
-      const genericWords = ['mega', 'super', 'ultra', 'power', 'pro', 'max', 'plus'];
-      const randomWord = genericWords[Math.floor(Math.random() * genericWords.length)];
-      return `${randomWord}${nicho.toLowerCase().replace(/\s+/g, '')}${randomNum}.online`;
+      if (error.response) {
+        console.error('   Status:', error.response.status);
+        console.error('   Data:', error.response.data);
+      }
+      throw error;
     }
   }
 
   /**
-   * CONSTRUIR PROMPT ATOMICAT
-   */
-  buildAtomiCatPrompt(nicho, idioma, isRetry) {
-    const idiomaMap = {
-      'portuguese': 'português',
-      'english': 'inglês',
-      'spanish': 'espanhol',
-      'german': 'alemão',
-      'french': 'francês'
-    };
-    
-    const lang = idiomaMap[idioma] || 'português';
-    
-    let prompt = `
-    Gere um nome de domínio GENÉRICO seguindo EXATAMENTE estas regras:
-    1. Use SEMPRE a extensão .online
-    2. Use SEMPRE exatamente 3 palavras juntas
-    3. NUNCA use acentos, cedilha, traços ou caracteres especiais
-    4. O domínio deve ser em ${lang}
-    5. Relacionado ao nicho: ${nicho}
-    6. IMPORTANTE: O domínio deve ser GENÉRICO para múltiplos produtos
-    7. Use palavras como: mega, super, top, melhor, oferta, promo, loja, shop, store
-    8. Seja criativo mas mantenha o aspecto comercial genérico
-    
-    Retorne APENAS um JSON no formato:
-    {"domains": ["dominio.online"]}
-    `;
-    
-    if (isRetry) {
-      prompt += '\n\nSeja EXTREMAMENTE criativo e use combinações ÚNICAS.';
-    }
-    
-    return prompt;
-  }
-
-  /**
-   * COMPRAR DOMÍNIO NAMECHEAP
+   * COMPRAR DOMÍNIO NA NAMECHEAP
    */
   async purchaseDomainNamecheap(domain) {
     try {
-      const clientIP = config.NAMECHEAP_CLIENT_IP;
+      console.log(`💳 [NAMECHEAP-ATOMICAT] Comprando: ${domain}`);
       
-      console.log(`💳 [NAMECHEAP-ATOMICAT] Comprando ${domain} com IP: ${clientIP}`);
+      const domainParts = domain.split('.');
+      const domainName = domainParts[0];
+      const tld = domainParts.slice(1).join('.');
+      
+      const clientIP = config.NAMECHEAP_CLIENT_IP;
       
       const params = {
         ApiUser: config.NAMECHEAP_API_USER,
@@ -378,20 +397,9 @@ class AtomiCatDomainPurchase {
         UserName: config.NAMECHEAP_API_USER,
         Command: 'namecheap.domains.create',
         ClientIp: clientIP,
-        DomainName: domain,
-        Years: 1,
-        
-        // Dados do registrante
-        AuxBillingFirstName: this.registrantInfo.FirstName,
-        AuxBillingLastName: this.registrantInfo.LastName,
-        AuxBillingAddress1: this.registrantInfo.Address1,
-        AuxBillingCity: this.registrantInfo.City,
-        AuxBillingStateProvince: this.registrantInfo.StateProvince,
-        AuxBillingPostalCode: this.registrantInfo.PostalCode,
-        AuxBillingCountry: this.registrantInfo.Country,
-        AuxBillingPhone: this.registrantInfo.Phone,
-        AuxBillingEmailAddress: this.registrantInfo.EmailAddress,
-        AuxBillingOrganizationName: this.registrantInfo.OrganizationName,
+        DomainName: domainName,
+        TLD: tld,
+        Years: '1',
         
         // Tech Contact
         TechFirstName: this.registrantInfo.FirstName,
@@ -402,7 +410,7 @@ class AtomiCatDomainPurchase {
         TechPostalCode: this.registrantInfo.PostalCode,
         TechCountry: this.registrantInfo.Country,
         TechPhone: this.registrantInfo.Phone,
-        TechEmailAddress: 'lerricke.nunes@gmail.com',
+        TechEmailAddress: this.registrantInfo.EmailAddress,
         TechOrganizationName: this.registrantInfo.OrganizationName,
         
         // Admin Contact
@@ -435,30 +443,33 @@ class AtomiCatDomainPurchase {
         IsPremiumDomain: 'False'
       };
       
-      const response = await axios.get(this.namecheapAPI, { params });
+      const response = await axios.get(this.namecheapAPI, { params, timeout: 30000 });
       const xmlData = response.data;
       
       if (xmlData.includes('Status="ERROR"') || xmlData.includes('<Error')) {
         const errorMatch = xmlData.match(/<Error[^>]*>(.*?)<\/Error>/);
         const errorMessage = errorMatch ? errorMatch[1] : 'Erro desconhecido';
+        console.error(`❌ [NAMECHEAP-ATOMICAT] Erro: ${errorMessage}`);
         return { success: false, error: errorMessage };
       }
       
       if (xmlData.includes('Status="OK"') && xmlData.includes('DomainCreate')) {
-        console.log(`✅ [ATOMICAT] Domínio ${domain} comprado!`);
+        console.log(`✅ [NAMECHEAP-ATOMICAT] Domínio ${domain} comprado!`);
         return { success: true, domain: domain };
       }
       
-      return { success: false, error: 'Resposta inesperada' };
+      console.error(`❌ [NAMECHEAP-ATOMICAT] Resposta inesperada`);
+      return { success: false, error: 'Resposta inesperada da Namecheap' };
       
     } catch (error) {
-      console.error(`❌ Erro na compra:`, error.message);
+      console.error(`❌ [NAMECHEAP-ATOMICAT] Erro na compra:`, error.message);
       return { success: false, error: error.message };
     }
   }
 
   /**
    * SALVAR DOMÍNIO NO SUPABASE
+   * AtomiCat salva sem nameservers e sem dns_configured
    */
   async saveDomainToSupabase(domain, userId) {
     try {
@@ -474,8 +485,8 @@ class AtomiCatDomainPurchase {
         p_registrar: 'Namecheap',
         p_integration_source: 'ai_purchase_atomicat',
         p_last_stats_update: currentDate,
-        p_nameservers: null,
-        p_dns_configured: false,
+        p_nameservers: null, // AtomiCat não configura nameservers
+        p_dns_configured: false, // AtomiCat não configura DNS
         p_auto_renew: false
       };
       
@@ -516,7 +527,7 @@ class AtomiCatDomainPurchase {
           user_id: userId || config.SUPABASE_USER_ID,
           action_type: 'created',
           old_value: null,
-          new_value: 'Domínio comprado com IA - AtomiCat'
+          new_value: 'Domínio comprado com IA - AtomiCat (sem WordPress)'
         });
       
       if (error) {
@@ -542,7 +553,6 @@ class AtomiCatDomainPurchase {
     try {
       const phoneNumber = config.WHATSAPP_PHONE_NUMBER || '5531999999999';
       
-      // Data formatada pt-BR
       const dataFormatada = new Intl.DateTimeFormat('pt-BR', {
         timeZone: 'America/Sao_Paulo',
         hour: '2-digit',
@@ -563,6 +573,7 @@ class AtomiCatDomainPurchase {
           `✅ *Status:* Compra realizada com sucesso\n\n` +
           `🎨 Domínio genérico pronto para múltiplos usos!\n` +
           `Ideal para campanhas e produtos variados.\n\n` +
+          `⚠️ Cloudflare e WordPress NÃO foram configurados (modo AtomiCat)\n\n` +
           `_Sistema DomainHub - AtomiCat_`;
       } else {
         message = `❌ *ERRO NA COMPRA ATOMICAT*\n\n` +
@@ -578,7 +589,8 @@ class AtomiCatDomainPurchase {
         {
           phone: phoneNumber.replace(/\D/g, ''),
           message: message
-        }
+        },
+        { timeout: 10000 }
       );
       
       console.log('✅ [WHATSAPP-ATOMICAT] Notificação enviada');
@@ -631,7 +643,7 @@ class AtomiCatDomainPurchase {
         ClientIp: clientIP
       };
       
-      const response = await axios.get(this.namecheapAPI, { params });
+      const response = await axios.get(this.namecheapAPI, { params, timeout: 15000 });
       const xmlData = response.data;
       
       const balanceMatch = xmlData.match(/Balance="([^"]+)"/);
@@ -649,6 +661,43 @@ class AtomiCatDomainPurchase {
   /**
    * HELPERS
    */
+  buildGenericPrompt(nicho, idioma, isRetry) {
+    const idiomaMap = {
+      'portuguese': 'português',
+      'english': 'inglês',
+      'spanish': 'espanhol',
+      'german': 'alemão',
+      'french': 'francês'
+    };
+    
+    const lang = idiomaMap[idioma] || 'português';
+    
+    let prompt = `
+    Gere um nome de domínio GENÉRICO e VERSÁTIL seguindo estas regras:
+    1. Use SEMPRE a extensão .online
+    2. Use 2 ou 3 palavras juntas que sejam genéricas e amplas
+    3. NUNCA use acentos, cedilha, traços ou caracteres especiais
+    4. O domínio deve ser em ${lang}
+    5. Inspirado no nicho: ${nicho} (mas não específico demais)
+    6. Deve ser adaptável para múltiplos produtos e campanhas
+    7. Evite termos muito específicos ou técnicos
+    
+    Exemplos de domínios genéricos bons:
+    - vidasaudavel.online (genérico para saúde)
+    - sucessototal.online (genérico para negócios)
+    - belezaperfeita.online (genérico para beleza)
+    
+    Retorne APENAS um JSON no formato:
+    {"domains": ["dominio.online"]}
+    `;
+    
+    if (isRetry) {
+      prompt += '\n\nSeja MUITO criativo e use combinações incomuns mas ainda genéricas.';
+    }
+    
+    return prompt;
+  }
+
   async delay(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
   }
