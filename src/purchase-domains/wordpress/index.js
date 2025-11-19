@@ -376,6 +376,18 @@ class WordPressDomainPurchase {
         DomainName: domain,
         Years: '1',
         
+        // AuxBilling Contact
+        AuxBillingFirstName: this.registrantInfo.FirstName,
+        AuxBillingLastName: this.registrantInfo.LastName,
+        AuxBillingAddress1: this.registrantInfo.Address1,
+        AuxBillingCity: this.registrantInfo.City,
+        AuxBillingStateProvince: this.registrantInfo.StateProvince,
+        AuxBillingPostalCode: this.registrantInfo.PostalCode,
+        AuxBillingCountry: this.registrantInfo.Country,
+        AuxBillingPhone: this.registrantInfo.Phone,
+        AuxBillingEmailAddress: this.registrantInfo.EmailAddress,
+        AuxBillingOrganizationName: this.registrantInfo.OrganizationName,
+        
         // Tech Contact
         TechFirstName: this.registrantInfo.FirstName,
         TechLastName: this.registrantInfo.LastName,
