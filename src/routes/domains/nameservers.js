@@ -1,6 +1,13 @@
 const express = require('express');
 const router = express.Router();
 const namecheapNameservers = require('../../services/namecheap/nameservers');
+const { createClient } = require('@supabase/supabase-js');
+
+// Inicializar Supabase
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY
+);
 
 /**
  * POST /api/domains/nameservers/update
@@ -98,16 +105,57 @@ router.post('/set-default', async (req, res, next) => {
       });
     }
     
-    // Configurar DNS predefinido na Namecheap
+    // ═══════════════════════════════════════════════════════════════
+    // ETAPA 1: Configurar DNS predefinido na Namecheap
+    // ═══════════════════════════════════════════════════════════════
+    
     const result = await namecheapNameservers.setDefaultDNS(domainName, dnsType);
     
-    console.log(`\n✅ [API] ${dnsType} configurado com sucesso`);
+    console.log(`\n✅ [API] ${dnsType} configurado com sucesso na Namecheap`);
     console.log(`   Domínio: ${result.domain}`);
     console.log(`   Status: ${result.updated ? 'Atualizado' : 'Processado'}`);
     
+    // ═══════════════════════════════════════════════════════════════
+    // ETAPA 2: Buscar os novos nameservers da Namecheap
+    // ═══════════════════════════════════════════════════════════════
+    
+    console.log(`\n🔍 [API] Buscando nameservers atualizados da Namecheap...`);
+    
+    const nameserversData = await namecheapNameservers.getNameservers(domainName);
+    const newNameservers = nameserversData.nameservers || [];
+    
+    console.log(`   Nameservers obtidos: ${newNameservers.length}`);
+    console.log(`   Lista:`, newNameservers);
+    
+    // ═══════════════════════════════════════════════════════════════
+    // ETAPA 3: Atualizar nameservers no Supabase
+    // ═══════════════════════════════════════════════════════════════
+    
+    console.log(`\n💾 [API] Salvando nameservers no banco de dados...`);
+    
+    const { error: updateError } = await supabase
+      .from('domains')
+      .update({ nameservers: newNameservers })
+      .eq('domain_name', domainName);
+    
+    if (updateError) {
+      console.error(`❌ [API] Erro ao salvar no banco:`, updateError);
+      // Não falha a requisição, apenas loga o erro
+      console.warn(`⚠️ [API] DNS configurado na Namecheap mas não salvo no banco`);
+    } else {
+      console.log(`✅ [API] Nameservers salvos no banco de dados`);
+    }
+    
+    // ═══════════════════════════════════════════════════════════════
+    // RETORNAR SUCESSO
+    // ═══════════════════════════════════════════════════════════════
+    
     res.json({
       success: true,
-      data: result
+      data: {
+        ...result,
+        nameservers: newNameservers
+      }
     });
     
   } catch (error) {
