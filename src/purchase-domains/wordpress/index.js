@@ -1,10 +1,5 @@
-/**
- * COMPRA DE DOMÍNIOS WORDPRESS - VERSÃO FINAL CORRIGIDA
- * Correções aplicadas:
- * - Preço GoDaddy corrigido (divisão por 1.000.000 - microdollars)
- * - Salvamento correto no Supabase após compra
- * - Sintaxe validada linha por linha
- */
+// COMPRA DE DOMÍNIOS WORDPRESS 
+
 
 const axios = require('axios');
 const config = require('../../config/env');
@@ -26,7 +21,7 @@ class WordPressDomainPurchase {
     
     // Configurações de compra
     this.maxRetries = 10;
-    this.priceLimit = 1.00; // Máximo $1.00
+    this.priceLimit = 1.00;
     
     // Dados de contato para registro
     this.registrantInfo = {
@@ -191,12 +186,11 @@ class WordPressDomainPurchase {
 
   /**
    * VERIFICAR DISPONIBILIDADE - GODADDY
-   * CORREÇÃO CRÍTICA: Preço em microdollars (÷ 1.000.000)
+   * Preço convertido de microdollars para dólares
    */
   async checkDomainAvailability(domain) {
     if (!config.GODADDY_API_KEY || !config.GODADDY_API_SECRET) {
       console.error('❌ [GODADDY] API não configurada!');
-      console.error('   Configure GODADDY_API_KEY e GODADDY_API_SECRET no Render');
       return { available: false, error: 'GoDaddy API não configurada' };
     }
 
@@ -216,33 +210,23 @@ class WordPressDomainPurchase {
             'Accept': 'application/json',
             'Content-Type': 'application/json'
           },
-          timeout: 15000,
-          validateStatus: function (status) {
-            return status >= 200 && status < 300;
-          }
+          timeout: 15000
         }
       );
 
       const data = response.data;
       const isAvailable = data.available === true;
       
-      // CORREÇÃO CRÍTICA: GoDaddy retorna preço em MICRODOLLARS
-      // 1 dólar = 1.000.000 microdollars
-      // Então $0.99 = 990.000 microdollars
-      let price = 0.99; // Valor padrão
-      
+      // Converter microdollars para dólares (1 USD = 1.000.000 microdollars)
+      let price = 0.99;
       if (data.price && typeof data.price === 'number') {
-        // Dividir por 1.000.000 para converter microdollars em dólares
         price = data.price / 1000000;
-        console.log(`   Preço bruto da API: ${data.price} microdollars`);
-        console.log(`   Preço convertido: $${price.toFixed(2)}`);
       }
 
       console.log(`📊 [GODADDY] ${domain}`);
       console.log(`   Disponível: ${isAvailable ? '✅ SIM' : '❌ NÃO'}`);
       console.log(`   Definitivo: ${data.definitive ? 'SIM' : 'NÃO'}`);
       console.log(`   Preço: $${price.toFixed(2)}`);
-      console.log(`   Moeda: ${data.currency || 'USD'}`);
       
       return {
         available: isAvailable,
@@ -255,28 +239,19 @@ class WordPressDomainPurchase {
       
       if (error.response) {
         console.error(`   Status: ${error.response.status}`);
-        console.error(`   Data:`, error.response.data);
         
         if (error.response.status === 401) {
-          console.error('❌ [GODADDY] Erro 401: Credenciais inválidas');
           return { available: false, error: 'Autenticação GoDaddy falhou' };
         }
-        
         if (error.response.status === 403) {
-          console.error('❌ [GODADDY] Erro 403: Sem permissão');
           return { available: false, error: 'Sem permissão GoDaddy' };
         }
-        
         if (error.response.status === 404) {
-          console.error('❌ [GODADDY] Erro 404: Domínio inválido');
           return { available: false, error: 'Domínio inválido' };
         }
       }
       
-      return { 
-        available: false, 
-        error: error.message || 'Erro na verificação de disponibilidade' 
-      };
+      return { available: false, error: error.message };
     }
   }
 
@@ -290,8 +265,6 @@ class WordPressDomainPurchase {
     }
 
     try {
-      console.log(`🤖 [AI] Gerando domínio para nicho: ${nicho}`);
-      
       const prompt = this.buildPrompt(nicho, idioma, isRetry);
       
       const response = await axios.post(
@@ -315,20 +288,14 @@ class WordPressDomainPurchase {
       );
 
       const content = response.data.choices[0].message.content.trim();
-      console.log(`🤖 [AI] Resposta bruta:`, content);
       
-      // Tentar extrair JSON
       let domains = [];
-      
-      // Remover markdown se houver
       const cleanContent = content.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
       
       try {
         const parsed = JSON.parse(cleanContent);
         domains = parsed.domains || [];
       } catch (parseError) {
-        console.error('❌ Erro ao parsear JSON:', parseError.message);
-        // Tentar extrair domínio manualmente
         const match = content.match(/([a-z0-9]+)\.online/i);
         if (match) {
           domains = [match[0].toLowerCase()];
@@ -341,7 +308,6 @@ class WordPressDomainPurchase {
       }
       
       const domain = domains[0].toLowerCase().trim();
-      console.log(`✅ [AI] Domínio gerado: ${domain}`);
       
       // Validar formato
       if (!domain.endsWith('.online')) {
@@ -354,28 +320,58 @@ class WordPressDomainPurchase {
         return null;
       }
       
+      console.log(`✅ [AI] Domínio gerado: ${domain}`);
       return domain;
       
     } catch (error) {
       console.error('❌ [AI] Erro:', error.message);
-      if (error.response) {
-        console.error('   Status:', error.response.status);
-        console.error('   Data:', error.response.data);
-      }
       throw error;
     }
   }
 
   /**
-   * COMPRAR DOMÍNIO NA NAMECHEAP
+   * COMPRAR DOMÍNIO NA NAMECHEAP - VERSÃO CORRIGIDA
+   * Correção: Parsing correto do domínio e validação antes de enviar
    */
   async purchaseDomainNamecheap(domain) {
     try {
       console.log(`💳 [NAMECHEAP] Comprando: ${domain}`);
       
+      // Validar formato do domínio
+      if (!domain || typeof domain !== 'string' || !domain.includes('.')) {
+        console.error(`❌ [NAMECHEAP] Formato de domínio inválido: ${domain}`);
+        return { success: false, error: 'Formato de domínio inválido' };
+      }
+      
+      // CORREÇÃO: Parsing correto do domínio
+      // Exemplo: "healthylifeboost.online" -> name: "healthylifeboost", tld: "online"
       const domainParts = domain.split('.');
-      const domainName = domainParts[0];
-      const tld = domainParts.slice(1).join('.');
+      
+      if (domainParts.length < 2) {
+        console.error(`❌ [NAMECHEAP] Domínio sem TLD: ${domain}`);
+        return { success: false, error: 'Domínio sem TLD' };
+      }
+      
+      // Pegar o nome (tudo antes do último ponto)
+      const tld = domainParts.pop(); // Remove e retorna o último elemento (TLD)
+      const domainName = domainParts.join('.'); // Junta o resto (pode ter múltiplos níveis)
+      
+      console.log(`📝 [NAMECHEAP] Parsing do domínio:`);
+      console.log(`   Domínio completo: ${domain}`);
+      console.log(`   Nome (SLD): ${domainName}`);
+      console.log(`   TLD: ${tld}`);
+      
+      // Validar que temos nome e TLD
+      if (!domainName || !tld) {
+        console.error(`❌ [NAMECHEAP] Erro no parsing: nome="${domainName}" tld="${tld}"`);
+        return { success: false, error: 'Erro ao parsear domínio' };
+      }
+      
+      // Validar que o nome não tem caracteres inválidos
+      if (!/^[a-z0-9]+$/i.test(domainName)) {
+        console.error(`❌ [NAMECHEAP] Nome com caracteres inválidos: ${domainName}`);
+        return { success: false, error: 'Nome de domínio com caracteres inválidos' };
+      }
       
       const clientIP = config.NAMECHEAP_CLIENT_IP;
       
@@ -431,32 +427,57 @@ class WordPressDomainPurchase {
         IsPremiumDomain: 'False'
       };
       
+      console.log(`📤 [NAMECHEAP] Enviando requisição...`);
+      
       const response = await axios.get(this.namecheapAPI, { params, timeout: 30000 });
       const xmlData = response.data;
       
-      if (xmlData.includes('Status="ERROR"') || xmlData.includes('<Error')) {
+      // Logging detalhado do XML para debug
+      console.log(`📥 [NAMECHEAP] Resposta XML recebida (primeiros 500 chars):`);
+      console.log(xmlData.substring(0, 500));
+      
+      // Verificar erros
+      if (xmlData.includes('Status="ERROR"')) {
+        console.error(`❌ [NAMECHEAP] Status ERROR detectado`);
+        
+        // Tentar extrair mensagem de erro
         const errorMatch = xmlData.match(/<Error[^>]*>(.*?)<\/Error>/);
-        const errorMessage = errorMatch ? errorMatch[1] : 'Erro desconhecido';
-        console.error(`❌ [NAMECHEAP] Erro: ${errorMessage}`);
-        return { success: false, error: errorMessage };
+        if (errorMatch) {
+          const errorMessage = errorMatch[1];
+          console.error(`❌ [NAMECHEAP] Mensagem de erro: ${errorMessage}`);
+          return { success: false, error: errorMessage };
+        }
+        
+        // Se não encontrou o padrão, mostrar XML completo
+        console.error(`❌ [NAMECHEAP] XML completo da resposta de erro:`);
+        console.error(xmlData);
+        return { success: false, error: 'Erro na compra - verifique logs' };
       }
       
+      // Verificar sucesso
       if (xmlData.includes('Status="OK"') && xmlData.includes('DomainCreate')) {
-        console.log(`✅ [NAMECHEAP] Domínio ${domain} comprado!`);
+        console.log(`✅ [NAMECHEAP] Domínio ${domain} comprado com sucesso!`);
         return { success: true, domain: domain };
       }
       
-      console.error(`❌ [NAMECHEAP] Resposta inesperada`);
+      // Resposta inesperada
+      console.error(`❌ [NAMECHEAP] Resposta inesperada (não é ERROR nem OK com DomainCreate)`);
+      console.error(`📄 [NAMECHEAP] XML completo:`);
+      console.error(xmlData);
       return { success: false, error: 'Resposta inesperada da Namecheap' };
       
     } catch (error) {
       console.error(`❌ [NAMECHEAP] Erro na compra:`, error.message);
+      if (error.response) {
+        console.error(`   Status HTTP: ${error.response.status}`);
+        console.error(`   Data:`, error.response.data);
+      }
       return { success: false, error: error.message };
     }
   }
 
   /**
-   * PROCESSAR PÓS-COMPRA (Cloudflare + cPanel + WordPress + Supabase)
+   * PROCESSAR PÓS-COMPRA
    */
   async processPostPurchase(domain, userId, sessionId) {
     try {
@@ -465,48 +486,35 @@ class WordPressDomainPurchase {
       let cloudflareSetup = null;
       
       // 1. Configurar Cloudflare
-      console.log(`☁️ [CLOUDFLARE] Configurando...`);
       await this.updateProgress(sessionId, 'cloudflare', 'in_progress', 
         `Configurando Cloudflare para ${domain}...`);
-      
       cloudflareSetup = await this.setupCloudflare(domain);
       
       if (cloudflareSetup) {
-        console.log(`✅ [CLOUDFLARE] Configurado`);
-        
-        // 2. Alterar nameservers na Namecheap
-        console.log(`🌐 [NAMESERVERS] Atualizando...`);
+        // 2. Alterar nameservers
         await this.updateProgress(sessionId, 'nameservers', 'in_progress', 
           `Alterando nameservers de ${domain}...`);
-        
         await this.setNameservers(domain, cloudflareSetup.nameservers);
-        console.log(`✅ [NAMESERVERS] Atualizados`);
       }
       
       // 3. Adicionar ao cPanel
-      console.log(`📦 [CPANEL] Adicionando domínio...`);
       await this.addDomainToCPanel(domain);
-      console.log(`✅ [CPANEL] Domínio adicionado`);
       
       // 4. Instalar WordPress
-      console.log(`🌐 [WORDPRESS] Instalando...`);
       await this.installWordPress(domain);
-      console.log(`✅ [WORDPRESS] Instalado`);
       
-      // 5. CRÍTICO: Salvar no banco Supabase
-      console.log(`💾 [SUPABASE] Salvando domínio na tabela domains...`);
+      // 5. Salvar no Supabase
       const savedDomain = await this.saveDomainToSupabase(domain, userId, cloudflareSetup);
       
-      // 6. Registrar no log de atividades
+      // 6. Registrar log
       if (savedDomain?.domain_id) {
-        console.log(`📝 [LOG] Registrando atividade...`);
         await this.saveActivityLog(savedDomain.domain_id, userId);
       }
       
       // 7. Notificar WhatsApp
       await this.sendWhatsAppNotification(domain, 'success');
       
-      console.log(`✅ [POST-PURCHASE] Todas as configurações concluídas para ${domain}`);
+      console.log(`✅ [POST-PURCHASE] Configurações concluídas para ${domain}`);
       
     } catch (error) {
       console.error(`❌ [POST-PURCHASE] Erro:`, error.message);
@@ -519,13 +527,11 @@ class WordPressDomainPurchase {
    */
   async setupCloudflare(domain) {
     if (!config.CLOUDFLARE_EMAIL || !config.CLOUDFLARE_API_KEY) {
-      console.log('⚠️ Cloudflare não configurado, pulando...');
+      console.log('⚠️ Cloudflare não configurado');
       return null;
     }
 
     try {
-      console.log(`☁️ [CLOUDFLARE] Adicionando zona: ${domain}`);
-      
       const response = await axios.post(
         `${this.cloudflareAPI}/zones`,
         {
@@ -547,14 +553,11 @@ class WordPressDomainPurchase {
       const zone = response.data.result;
       const nameservers = zone.name_servers || ['ganz.ns.cloudflare.com', 'norah.ns.cloudflare.com'];
       
-      console.log(`✅ [CLOUDFLARE] Zona criada`);
-      console.log(`   Zone ID: ${zone.id}`);
-      console.log(`   Nameservers: ${nameservers.join(', ')}`);
+      console.log(`✅ [CLOUDFLARE] Zona criada - ID: ${zone.id}`);
       
-      // Aguardar propagação
       await this.delay(5000);
       
-      // Adicionar registro A apontando para o servidor de hospedagem
+      // Adicionar registro A
       if (config.HOSTING_SERVER_IP) {
         try {
           await axios.post(
@@ -574,38 +577,28 @@ class WordPressDomainPurchase {
               }
             }
           );
-          
-          console.log(`✅ [CLOUDFLARE] Registro A criado apontando para ${config.HOSTING_SERVER_IP}`);
+          console.log(`✅ [CLOUDFLARE] Registro A criado`);
         } catch (dnsError) {
           console.error('⚠️ [CLOUDFLARE] Erro ao criar registro A:', dnsError.message);
         }
       }
       
-      return {
-        zoneId: zone.id,
-        nameservers: nameservers
-      };
+      return { zoneId: zone.id, nameservers: nameservers };
       
     } catch (error) {
       console.error('❌ [CLOUDFLARE] Erro:', error.message);
-      if (error.response) {
-        console.error('   Status:', error.response.status);
-        console.error('   Data:', error.response.data);
-      }
       return null;
     }
   }
 
   /**
-   * ALTERAR NAMESERVERS NA NAMECHEAP
+   * ALTERAR NAMESERVERS
    */
   async setNameservers(domain, nameservers) {
     try {
-      console.log(`🌐 [NAMESERVERS] Alterando para ${domain}...`);
-      
       const domainParts = domain.split('.');
-      const sld = domainParts[0];
-      const tld = domainParts.slice(1).join('.');
+      const tld = domainParts.pop();
+      const sld = domainParts.join('.');
       
       const params = {
         ApiUser: config.NAMECHEAP_API_USER,
@@ -619,14 +612,12 @@ class WordPressDomainPurchase {
       };
       
       const response = await axios.get(this.namecheapAPI, { params, timeout: 30000 });
-      const xmlData = response.data;
       
-      if (xmlData.includes('Status="OK"')) {
+      if (response.data.includes('Status="OK"')) {
         console.log(`✅ [NAMESERVERS] Alterados com sucesso`);
         return true;
       }
       
-      console.error('❌ [NAMESERVERS] Falha na alteração');
       return false;
       
     } catch (error) {
@@ -636,7 +627,7 @@ class WordPressDomainPurchase {
   }
 
   /**
-   * ADICIONAR DOMÍNIO AO CPANEL
+   * ADICIONAR AO CPANEL
    */
   async addDomainToCPanel(domain) {
     if (!config.CPANEL_API_TOKEN) {
@@ -645,23 +636,15 @@ class WordPressDomainPurchase {
     }
 
     try {
-      console.log(`📦 [CPANEL] Adicionando domínio: ${domain}`);
-      
       const response = await axios.get(
         `${config.CPANEL_URL}:2083/execute/DomainInfo/domains_data`,
         {
-          params: {
-            domain: domain,
-            format: 'json'
-          },
-          headers: {
-            'Authorization': `cpanel ${config.CPANEL_USERNAME}:${config.CPANEL_API_TOKEN}`
-          },
+          params: { domain: domain, format: 'json' },
+          headers: { 'Authorization': `cpanel ${config.CPANEL_USERNAME}:${config.CPANEL_API_TOKEN}` },
           timeout: 30000
         }
       );
       
-      // Verificar se já existe
       const existingDomains = response.data.data || [];
       const domainExists = existingDomains.some(d => d.domain === domain);
       
@@ -670,7 +653,6 @@ class WordPressDomainPurchase {
         return true;
       }
       
-      // Adicionar como addon domain
       const addResponse = await axios.post(
         `${config.CPANEL_URL}:2083/execute/AddonDomain/addaddondomain`,
         {
@@ -688,11 +670,10 @@ class WordPressDomainPurchase {
       );
       
       if (addResponse.data.status === 1) {
-        console.log(`✅ [CPANEL] Domínio ${domain} adicionado`);
+        console.log(`✅ [CPANEL] Domínio adicionado`);
         return true;
       }
       
-      console.error('❌ [CPANEL] Falha ao adicionar domínio');
       return false;
       
     } catch (error) {
@@ -702,7 +683,7 @@ class WordPressDomainPurchase {
   }
 
   /**
-   * INSTALAR WORDPRESS VIA SOFTACULOUS
+   * INSTALAR WORDPRESS
    */
   async installWordPress(domain) {
     if (!config.CPANEL_API_TOKEN || !config.WORDPRESS_DEFAULT_USER) {
@@ -711,9 +692,6 @@ class WordPressDomainPurchase {
     }
 
     try {
-      console.log(`🌐 [WORDPRESS] Instalando em ${domain}...`);
-      
-      // Nome do site: capitalizar primeira letra
       const siteName = domain.split('.')[0]
         .split('')
         .map((char, i) => i === 0 ? char.toUpperCase() : char)
@@ -736,10 +714,8 @@ class WordPressDomainPurchase {
         auto_upgrade_themes: '1'
       };
       
-      const softaculousUrl = `${config.CPANEL_URL}:2087/frontend/x3/softaculous/index.live.php`;
-      
       await axios.post(
-        softaculousUrl,
+        `${config.CPANEL_URL}:2087/frontend/x3/softaculous/index.live.php`,
         new URLSearchParams(params).toString(),
         {
           headers: {
@@ -751,25 +727,19 @@ class WordPressDomainPurchase {
       );
       
       console.log(`✅ [WORDPRESS] Instalado em ${domain}`);
-      console.log(`   URL: https://${domain}`);
-      console.log(`   Admin: https://${domain}/wp-admin`);
-      
       return true;
       
     } catch (error) {
-      console.error('❌ [WORDPRESS] Erro instalação:', error.message);
+      console.error('❌ [WORDPRESS] Erro:', error.message);
       return false;
     }
   }
 
   /**
-   * SALVAR DOMÍNIO NO SUPABASE - TABELA DOMAINS
-   * CRÍTICO: Esta função salva o domínio no banco de dados
+   * SALVAR NO SUPABASE
    */
   async saveDomainToSupabase(domain, userId, cloudflareSetup) {
     try {
-      console.log(`💾 [SUPABASE] Salvando ${domain} na tabela domains...`);
-      
       const currentDate = new Date().toISOString();
       const expirationDate = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString();
       
@@ -787,31 +757,21 @@ class WordPressDomainPurchase {
         p_auto_renew: false
       };
       
-      console.log(`   Payload:`, JSON.stringify(payload, null, 2));
-      
       const { data, error } = await supabase.rpc('upsert_domain_stats', payload);
       
       if (error) {
-        console.error('❌ [SUPABASE] Erro ao salvar:', error);
+        console.error('❌ [SUPABASE] Erro:', error);
         return null;
       }
       
-      console.log('✅ [SUPABASE] Domínio salvo com sucesso');
+      console.log('✅ [SUPABASE] Domínio salvo');
       
-      // Buscar o domain_id para o log
-      const { data: domainData, error: fetchError } = await supabase
+      const { data: domainData } = await supabase
         .from('domains')
         .select('domain_id')
         .eq('domain_name', domain)
         .eq('user_id', userId || config.SUPABASE_USER_ID)
         .single();
-      
-      if (fetchError) {
-        console.error('⚠️ [SUPABASE] Erro ao buscar domain_id:', fetchError);
-        return null;
-      }
-      
-      console.log(`✅ [SUPABASE] Domain ID encontrado: ${domainData.domain_id}`);
       
       return domainData;
       
@@ -822,13 +782,11 @@ class WordPressDomainPurchase {
   }
 
   /**
-   * REGISTRAR NO LOG DE ATIVIDADES
+   * REGISTRAR LOG
    */
   async saveActivityLog(domainId, userId) {
     try {
-      console.log(`📝 [LOG] Registrando atividade para domain_id: ${domainId}`);
-      
-      const { error } = await supabase
+      await supabase
         .from('domain_activity_logs')
         .insert({
           domain_id: domainId,
@@ -838,11 +796,7 @@ class WordPressDomainPurchase {
           new_value: 'Domínio comprado com IA - WordPress'
         });
       
-      if (error) {
-        console.error('❌ [LOG] Erro:', error);
-      } else {
-        console.log('✅ [LOG] Atividade registrada');
-      }
+      console.log('✅ [LOG] Atividade registrada');
       
     } catch (error) {
       console.error('❌ [LOG] Erro:', error.message);
@@ -850,17 +804,15 @@ class WordPressDomainPurchase {
   }
 
   /**
-   * ENVIAR NOTIFICAÇÃO WHATSAPP
+   * NOTIFICAR WHATSAPP
    */
   async sendWhatsAppNotification(domain, status, errorMsg = '') {
     if (!config.ZAPI_INSTANCE || !config.ZAPI_CLIENT_TOKEN) {
-      console.log('⚠️ WhatsApp não configurado');
       return;
     }
     
     try {
       const phoneNumber = config.WHATSAPP_PHONE_NUMBER || '5531999999999';
-      
       const dataFormatada = new Intl.DateTimeFormat('pt-BR', {
         timeZone: 'America/Sao_Paulo',
         hour: '2-digit',
@@ -873,19 +825,16 @@ class WordPressDomainPurchase {
       
       let message;
       if (status === 'success') {
-        message = `🎉 *NOVO DOMÍNIO WORDPRESS COMPRADO!*\n\n` +
+        message = `🎉 *NOVO DOMÍNIO WORDPRESS!*\n\n` +
           `📌 *Domínio:* ${domain}\n` +
           `🌐 *URL:* https://${domain}\n` +
           `👤 *Admin:* https://${domain}/wp-admin\n` +
           `🔑 *Usuário:* ${config.WORDPRESS_DEFAULT_USER}\n` +
           `📅 *Data:* ${dataFormatada}\n` +
-          `✅ *Status:* Compra e configuração completas\n\n` +
-          `☁️ Cloudflare configurado\n` +
-          `🌐 WordPress instalado\n` +
-          `📦 Plugins padrão instalados\n\n` +
+          `✅ *Status:* Completo\n\n` +
           `_Sistema DomainHub_`;
       } else {
-        message = `❌ *ERRO NA COMPRA DE DOMÍNIO*\n\n` +
+        message = `❌ *ERRO NA COMPRA*\n\n` +
           `📌 *Domínio:* ${domain}\n` +
           `⚠️ *Erro:* ${errorMsg}\n` +
           `📅 *Data:* ${dataFormatada}\n\n` +
@@ -894,10 +843,7 @@ class WordPressDomainPurchase {
       
       await axios.post(
         `https://api.z-api.io/instances/${config.ZAPI_INSTANCE}/token/${config.ZAPI_CLIENT_TOKEN}/send-text`,
-        {
-          phone: phoneNumber.replace(/\D/g, ''),
-          message: message
-        },
+        { phone: phoneNumber.replace(/\D/g, ''), message: message },
         { timeout: 10000 }
       );
       
@@ -913,7 +859,7 @@ class WordPressDomainPurchase {
    */
   async updateProgress(sessionId, step, status, message, domainName = null) {
     try {
-      const { error } = await supabase
+      await supabase
         .from('domain_purchase_progress')
         .upsert({
           session_id: sessionId,
@@ -923,11 +869,6 @@ class WordPressDomainPurchase {
           domain_name: domainName,
           updated_at: new Date().toISOString()
         }, { onConflict: 'session_id' });
-      
-      if (error) {
-        console.error('❌ [PROGRESS] Erro:', error);
-      }
-      
     } catch (error) {
       console.error('❌ [PROGRESS] Erro:', error.message);
     }

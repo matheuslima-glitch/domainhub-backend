@@ -1,11 +1,5 @@
-/**
- * COMPRA DE DOMÍNIOS ATOMICAT - VERSÃO FINAL CORRIGIDA
- * Correções aplicadas:
- * - Preço GoDaddy corrigido (divisão por 1.000.000 - microdollars)
- * - Salvamento correto no Supabase após compra
- * - Sintaxe validada linha por linha
- * IMPORTANTE: AtomiCat APENAS compra o domínio (sem Cloudflare e WordPress)
- */
+//COMPRA DE DOMÍNIOS ATOMICAT
+
 
 const axios = require('axios');
 const config = require('../../config/env');
@@ -26,7 +20,7 @@ class AtomiCatDomainPurchase {
     
     // Configurações de compra
     this.maxRetries = 10;
-    this.priceLimit = 1.00; // Máximo $1.00
+    this.priceLimit = 1.00;
     
     // Dados de contato para registro
     this.registrantInfo = {
@@ -44,8 +38,7 @@ class AtomiCatDomainPurchase {
   }
 
   /**
-   * FUNÇÃO PRINCIPAL - ORQUESTRA TODO O PROCESSO ATOMICAT
-   * ATENÇÃO: Apenas compra o domínio, sem configurações adicionais
+   * FUNÇÃO PRINCIPAL - APENAS COMPRA (SEM CLOUDFLARE/WORDPRESS)
    */
   async purchaseDomain(params) {
     const { quantidade, idioma, nicho, sessionId, domainManual, userId } = params;
@@ -53,18 +46,17 @@ class AtomiCatDomainPurchase {
     console.log(`🚀 [ATOMICAT] Iniciando compra`);
     console.log(`   Usuário: ${userId}`);
     console.log(`   Manual: ${domainManual ? 'SIM' : 'NÃO'}`);
-    console.log(`   ⚠️ MODO ATOMICAT: Apenas compra de domínio, SEM Cloudflare e SEM WordPress`);
+    console.log(`   ⚠️ MODO ATOMICAT: Apenas compra (sem Cloudflare/WordPress)`);
     
     await this.updateProgress(sessionId, 'generating', 'in_progress', 'Iniciando processo AtomiCat...');
     
     const domainsToRegister = [];
     let successCount = 0;
     
-    // Se for compra manual, processar diretamente
+    // Se for compra manual
     if (domainManual) {
-      console.log(`🔍 [MANUAL-ATOMICAT] Processando domínio manual: ${domainManual}`);
+      console.log(`🔍 [MANUAL-ATOMICAT] Processando: ${domainManual}`);
       
-      // Verificar disponibilidade com GoDaddy
       const availabilityCheck = await this.checkDomainAvailability(domainManual);
       
       if (!availabilityCheck.available) {
@@ -73,21 +65,18 @@ class AtomiCatDomainPurchase {
         return { success: false, error: 'Domínio não disponível' };
       }
       
-      // Verificar preço
       if (availabilityCheck.price > this.priceLimit) {
         await this.updateProgress(sessionId, 'error', 'error', 
           `Domínio ${domainManual} muito caro: $${availabilityCheck.price}`);
         return { success: false, error: 'Domínio muito caro' };
       }
       
-      // Comprar domínio
       const purchaseResult = await this.purchaseDomainNamecheap(domainManual);
       
       if (purchaseResult.success) {
         domainsToRegister.push(domainManual);
         successCount = 1;
         
-        // ATOMICAT: Apenas salvar no banco e notificar
         const savedDomain = await this.saveDomainToSupabase(domainManual, userId);
         if (savedDomain?.domain_id) {
           await this.saveActivityLog(savedDomain.domain_id, userId);
@@ -107,7 +96,6 @@ class AtomiCatDomainPurchase {
         
         while (!domain && retries < this.maxRetries) {
           try {
-            // GERAR DOMÍNIO GENÉRICO
             console.log(`🤖 [AI-ATOMICAT] Gerando domínio genérico ${i + 1}/${quantidade}`);
             await this.updateProgress(sessionId, 'generating', 'in_progress', 
               `Gerando domínio genérico ${i + 1}/${quantidade}`);
@@ -115,13 +103,12 @@ class AtomiCatDomainPurchase {
             const generatedDomain = await this.generateGenericDomainWithAI(nicho, idioma, retries > 0);
             
             if (!generatedDomain) {
-              console.error('❌ Falha ao gerar domínio com IA');
+              console.error('❌ Falha ao gerar domínio');
               retries++;
               await this.delay(2000);
               continue;
             }
             
-            // VERIFICAR DISPONIBILIDADE COM GODADDY
             console.log(`🔍 [GODADDY] Verificando: ${generatedDomain}`);
             await this.updateProgress(sessionId, 'checking', 'in_progress', 
               `Verificando disponibilidade de ${generatedDomain}...`);
@@ -137,15 +124,13 @@ class AtomiCatDomainPurchase {
             
             console.log(`✅ Domínio disponível: ${generatedDomain} por $${availabilityCheck.price}`);
             
-            // VERIFICAR PREÇO
             if (availabilityCheck.price > this.priceLimit) {
-              console.log(`💸 Domínio muito caro: $${availabilityCheck.price} (máximo: $${this.priceLimit})`);
+              console.log(`💸 Domínio muito caro: $${availabilityCheck.price}`);
               retries++;
               await this.delay(2000);
               continue;
             }
             
-            // COMPRAR DOMÍNIO
             console.log(`💳 Comprando: ${generatedDomain} por $${availabilityCheck.price}`);
             await this.updateProgress(sessionId, 'purchasing', 'in_progress', 
               `Comprando ${generatedDomain}...`);
@@ -158,9 +143,8 @@ class AtomiCatDomainPurchase {
               successCount++;
               
               console.log(`✅ [ATOMICAT] Domínio comprado: ${domain}`);
-              console.log(`   ⚠️ Configurações Cloudflare e WordPress NÃO serão executadas (modo AtomiCat)`);
+              console.log(`   ⚠️ Cloudflare e WordPress NÃO configurados (modo AtomiCat)`);
               
-              // ATOMICAT: Apenas salvar no banco e notificar
               const savedDomain = await this.saveDomainToSupabase(domain, userId);
               if (savedDomain?.domain_id) {
                 await this.saveActivityLog(savedDomain.domain_id, userId);
@@ -188,7 +172,7 @@ class AtomiCatDomainPurchase {
         }
         
         if (!domain) {
-          console.error(`❌ Não foi possível comprar o domínio ${i + 1} após ${this.maxRetries} tentativas`);
+          console.error(`❌ Não foi possível comprar o domínio ${i + 1}`);
         }
       }
     }
@@ -196,7 +180,7 @@ class AtomiCatDomainPurchase {
     // Callback final
     if (successCount > 0) {
       await this.updateProgress(sessionId, 'completed', 'completed', 
-        `${successCount} domínio(s) AtomiCat comprado(s) com sucesso!`, 
+        `${successCount} domínio(s) AtomiCat comprado(s)!`, 
         domainsToRegister[domainsToRegister.length - 1]);
     } else {
       await this.updateProgress(sessionId, 'error', 'error', 
@@ -213,17 +197,15 @@ class AtomiCatDomainPurchase {
 
   /**
    * VERIFICAR DISPONIBILIDADE - GODADDY
-   * CORREÇÃO CRÍTICA: Preço em microdollars (÷ 1.000.000)
    */
   async checkDomainAvailability(domain) {
     if (!config.GODADDY_API_KEY || !config.GODADDY_API_SECRET) {
       console.error('❌ [GODADDY] API não configurada!');
-      console.error('   Configure GODADDY_API_KEY e GODADDY_API_SECRET no Render');
       return { available: false, error: 'GoDaddy API não configurada' };
     }
 
     try {
-      console.log(`🔍 [GODADDY-ATOMICAT] Verificando disponibilidade de ${domain}...`);
+      console.log(`🔍 [GODADDY-ATOMICAT] Verificando: ${domain}...`);
       
       const response = await axios.get(
         `${this.godaddyAPI}/domains/available`,
@@ -238,33 +220,22 @@ class AtomiCatDomainPurchase {
             'Accept': 'application/json',
             'Content-Type': 'application/json'
           },
-          timeout: 15000,
-          validateStatus: function (status) {
-            return status >= 200 && status < 300;
-          }
+          timeout: 15000
         }
       );
 
       const data = response.data;
       const isAvailable = data.available === true;
       
-      // CORREÇÃO CRÍTICA: GoDaddy retorna preço em MICRODOLLARS
-      // 1 dólar = 1.000.000 microdollars
-      // Então $0.99 = 990.000 microdollars
-      let price = 0.99; // Valor padrão
-      
+      // Converter microdollars para dólares
+      let price = 0.99;
       if (data.price && typeof data.price === 'number') {
-        // Dividir por 1.000.000 para converter microdollars em dólares
         price = data.price / 1000000;
-        console.log(`   Preço bruto da API: ${data.price} microdollars`);
-        console.log(`   Preço convertido: $${price.toFixed(2)}`);
       }
 
       console.log(`📊 [GODADDY-ATOMICAT] ${domain}`);
       console.log(`   Disponível: ${isAvailable ? '✅ SIM' : '❌ NÃO'}`);
-      console.log(`   Definitivo: ${data.definitive ? 'SIM' : 'NÃO'}`);
       console.log(`   Preço: $${price.toFixed(2)}`);
-      console.log(`   Moeda: ${data.currency || 'USD'}`);
       
       return {
         available: isAvailable,
@@ -273,38 +244,26 @@ class AtomiCatDomainPurchase {
       };
 
     } catch (error) {
-      console.error('❌ [GODADDY-ATOMICAT] Erro na verificação:', error.message);
+      console.error('❌ [GODADDY-ATOMICAT] Erro:', error.message);
       
       if (error.response) {
-        console.error(`   Status: ${error.response.status}`);
-        console.error(`   Data:`, error.response.data);
-        
         if (error.response.status === 401) {
-          console.error('❌ [GODADDY] Erro 401: Credenciais inválidas');
           return { available: false, error: 'Autenticação GoDaddy falhou' };
         }
-        
         if (error.response.status === 403) {
-          console.error('❌ [GODADDY] Erro 403: Sem permissão');
           return { available: false, error: 'Sem permissão GoDaddy' };
         }
-        
         if (error.response.status === 404) {
-          console.error('❌ [GODADDY] Erro 404: Domínio inválido');
           return { available: false, error: 'Domínio inválido' };
         }
       }
       
-      return { 
-        available: false, 
-        error: error.message || 'Erro na verificação de disponibilidade' 
-      };
+      return { available: false, error: error.message };
     }
   }
 
   /**
    * GERAR DOMÍNIO GENÉRICO COM IA
-   * AtomiCat gera domínios mais genéricos e versáteis
    */
   async generateGenericDomainWithAI(nicho, idioma, isRetry) {
     if (!config.OPENAI_API_KEY) {
@@ -313,8 +272,6 @@ class AtomiCatDomainPurchase {
     }
 
     try {
-      console.log(`🤖 [AI-ATOMICAT] Gerando domínio genérico para nicho: ${nicho}`);
-      
       const prompt = this.buildGenericPrompt(nicho, idioma, isRetry);
       
       const response = await axios.post(
@@ -322,7 +279,7 @@ class AtomiCatDomainPurchase {
         {
           model: 'gpt-3.5-turbo',
           messages: [
-            { role: 'system', content: 'Você é um especialista em criar nomes de domínios genéricos, versáteis e memoráveis para múltiplos usos.' },
+            { role: 'system', content: 'Você é um especialista em criar nomes de domínios genéricos e versáteis.' },
             { role: 'user', content: prompt }
           ],
           temperature: isRetry ? 1.0 : 0.7,
@@ -338,20 +295,14 @@ class AtomiCatDomainPurchase {
       );
 
       const content = response.data.choices[0].message.content.trim();
-      console.log(`🤖 [AI-ATOMICAT] Resposta bruta:`, content);
       
-      // Tentar extrair JSON
       let domains = [];
-      
-      // Remover markdown se houver
       const cleanContent = content.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
       
       try {
         const parsed = JSON.parse(cleanContent);
         domains = parsed.domains || [];
       } catch (parseError) {
-        console.error('❌ Erro ao parsear JSON:', parseError.message);
-        // Tentar extrair domínio manualmente
         const match = content.match(/([a-z0-9]+)\.online/i);
         if (match) {
           domains = [match[0].toLowerCase()];
@@ -359,14 +310,12 @@ class AtomiCatDomainPurchase {
       }
       
       if (domains.length === 0) {
-        console.error('❌ Nenhum domínio gerado pela IA');
+        console.error('❌ Nenhum domínio gerado');
         return null;
       }
       
       const domain = domains[0].toLowerCase().trim();
-      console.log(`✅ [AI-ATOMICAT] Domínio genérico gerado: ${domain}`);
       
-      // Validar formato
       if (!domain.endsWith('.online')) {
         console.error(`❌ Domínio inválido (sem .online): ${domain}`);
         return null;
@@ -377,37 +326,60 @@ class AtomiCatDomainPurchase {
         return null;
       }
       
+      console.log(`✅ [AI-ATOMICAT] Domínio gerado: ${domain}`);
       return domain;
       
     } catch (error) {
       console.error('❌ [AI-ATOMICAT] Erro:', error.message);
-      if (error.response) {
-        console.error('   Status:', error.response.status);
-        console.error('   Data:', error.response.data);
-      }
       throw error;
     }
   }
 
   /**
-   * COMPRAR DOMÍNIO NA NAMECHEAP
+   * COMPRAR DOMÍNIO NA NAMECHEAP - VERSÃO CORRIGIDA
    */
   async purchaseDomainNamecheap(domain) {
     try {
       console.log(`💳 [NAMECHEAP-ATOMICAT] Comprando: ${domain}`);
       
-      const domainParts = domain.split('.');
-      const domainName = domainParts[0];
-      const tld = domainParts.slice(1).join('.');
+      // Validar formato
+      if (!domain || typeof domain !== 'string' || !domain.includes('.')) {
+        console.error(`❌ [NAMECHEAP] Formato inválido: ${domain}`);
+        return { success: false, error: 'Formato de domínio inválido' };
+      }
       
-      const clientIP = config.NAMECHEAP_CLIENT_IP;
+      // CORREÇÃO: Parsing correto
+      const domainParts = domain.split('.');
+      
+      if (domainParts.length < 2) {
+        console.error(`❌ [NAMECHEAP] Domínio sem TLD: ${domain}`);
+        return { success: false, error: 'Domínio sem TLD' };
+      }
+      
+      const tld = domainParts.pop();
+      const domainName = domainParts.join('.');
+      
+      console.log(`📝 [NAMECHEAP-ATOMICAT] Parsing:`);
+      console.log(`   Completo: ${domain}`);
+      console.log(`   Nome: ${domainName}`);
+      console.log(`   TLD: ${tld}`);
+      
+      if (!domainName || !tld) {
+        console.error(`❌ [NAMECHEAP] Erro no parsing`);
+        return { success: false, error: 'Erro ao parsear domínio' };
+      }
+      
+      if (!/^[a-z0-9]+$/i.test(domainName)) {
+        console.error(`❌ [NAMECHEAP] Nome com caracteres inválidos: ${domainName}`);
+        return { success: false, error: 'Nome com caracteres inválidos' };
+      }
       
       const params = {
         ApiUser: config.NAMECHEAP_API_USER,
         ApiKey: config.NAMECHEAP_API_KEY,
         UserName: config.NAMECHEAP_API_USER,
         Command: 'namecheap.domains.create',
-        ClientIp: clientIP,
+        ClientIp: config.NAMECHEAP_CLIENT_IP,
         DomainName: domainName,
         TLD: tld,
         Years: '1',
@@ -454,14 +426,27 @@ class AtomiCatDomainPurchase {
         IsPremiumDomain: 'False'
       };
       
+      console.log(`📤 [NAMECHEAP-ATOMICAT] Enviando requisição...`);
+      
       const response = await axios.get(this.namecheapAPI, { params, timeout: 30000 });
       const xmlData = response.data;
       
-      if (xmlData.includes('Status="ERROR"') || xmlData.includes('<Error')) {
+      console.log(`📥 [NAMECHEAP-ATOMICAT] Resposta (primeiros 500 chars):`);
+      console.log(xmlData.substring(0, 500));
+      
+      if (xmlData.includes('Status="ERROR"')) {
+        console.error(`❌ [NAMECHEAP-ATOMICAT] Status ERROR detectado`);
+        
         const errorMatch = xmlData.match(/<Error[^>]*>(.*?)<\/Error>/);
-        const errorMessage = errorMatch ? errorMatch[1] : 'Erro desconhecido';
-        console.error(`❌ [NAMECHEAP-ATOMICAT] Erro: ${errorMessage}`);
-        return { success: false, error: errorMessage };
+        if (errorMatch) {
+          const errorMessage = errorMatch[1];
+          console.error(`❌ [NAMECHEAP-ATOMICAT] Erro: ${errorMessage}`);
+          return { success: false, error: errorMessage };
+        }
+        
+        console.error(`❌ [NAMECHEAP-ATOMICAT] XML completo:`);
+        console.error(xmlData);
+        return { success: false, error: 'Erro na compra - verifique logs' };
       }
       
       if (xmlData.includes('Status="OK"') && xmlData.includes('DomainCreate')) {
@@ -470,23 +455,24 @@ class AtomiCatDomainPurchase {
       }
       
       console.error(`❌ [NAMECHEAP-ATOMICAT] Resposta inesperada`);
-      return { success: false, error: 'Resposta inesperada da Namecheap' };
+      console.error(`📄 [NAMECHEAP-ATOMICAT] XML completo:`);
+      console.error(xmlData);
+      return { success: false, error: 'Resposta inesperada' };
       
     } catch (error) {
-      console.error(`❌ [NAMECHEAP-ATOMICAT] Erro na compra:`, error.message);
+      console.error(`❌ [NAMECHEAP-ATOMICAT] Erro:`, error.message);
+      if (error.response) {
+        console.error(`   Status: ${error.response.status}`);
+      }
       return { success: false, error: error.message };
     }
   }
 
   /**
-   * SALVAR DOMÍNIO NO SUPABASE - TABELA DOMAINS
-   * CRÍTICO: Esta função salva o domínio no banco de dados
-   * AtomiCat salva sem nameservers e sem dns_configured
+   * SALVAR NO SUPABASE (SEM NAMESERVERS)
    */
   async saveDomainToSupabase(domain, userId) {
     try {
-      console.log(`💾 [SUPABASE-ATOMICAT] Salvando ${domain} na tabela domains...`);
-      
       const currentDate = new Date().toISOString();
       const expirationDate = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString();
       
@@ -499,36 +485,26 @@ class AtomiCatDomainPurchase {
         p_registrar: 'Namecheap',
         p_integration_source: 'ai_purchase_atomicat',
         p_last_stats_update: currentDate,
-        p_nameservers: null, // AtomiCat não configura nameservers
-        p_dns_configured: false, // AtomiCat não configura DNS
+        p_nameservers: null,
+        p_dns_configured: false,
         p_auto_renew: false
       };
-      
-      console.log(`   Payload:`, JSON.stringify(payload, null, 2));
       
       const { data, error } = await supabase.rpc('upsert_domain_stats', payload);
       
       if (error) {
-        console.error('❌ [SUPABASE-ATOMICAT] Erro ao salvar:', error);
+        console.error('❌ [SUPABASE-ATOMICAT] Erro:', error);
         return null;
       }
       
-      console.log('✅ [SUPABASE-ATOMICAT] Domínio salvo com sucesso');
+      console.log('✅ [SUPABASE-ATOMICAT] Domínio salvo');
       
-      // Buscar o domain_id para o log
-      const { data: domainData, error: fetchError } = await supabase
+      const { data: domainData } = await supabase
         .from('domains')
         .select('domain_id')
         .eq('domain_name', domain)
         .eq('user_id', userId || config.SUPABASE_USER_ID)
         .single();
-      
-      if (fetchError) {
-        console.error('⚠️ [SUPABASE-ATOMICAT] Erro ao buscar domain_id:', fetchError);
-        return null;
-      }
-      
-      console.log(`✅ [SUPABASE-ATOMICAT] Domain ID encontrado: ${domainData.domain_id}`);
       
       return domainData;
       
@@ -539,13 +515,11 @@ class AtomiCatDomainPurchase {
   }
 
   /**
-   * REGISTRAR NO LOG DE ATIVIDADES
+   * REGISTRAR LOG
    */
   async saveActivityLog(domainId, userId) {
     try {
-      console.log(`📝 [LOG-ATOMICAT] Registrando atividade para domain_id: ${domainId}`);
-      
-      const { error } = await supabase
+      await supabase
         .from('domain_activity_logs')
         .insert({
           domain_id: domainId,
@@ -555,11 +529,7 @@ class AtomiCatDomainPurchase {
           new_value: 'Domínio comprado com IA - AtomiCat (sem WordPress)'
         });
       
-      if (error) {
-        console.error('❌ [LOG-ATOMICAT] Erro:', error);
-      } else {
-        console.log('✅ [LOG-ATOMICAT] Atividade registrada');
-      }
+      console.log('✅ [LOG-ATOMICAT] Atividade registrada');
       
     } catch (error) {
       console.error('❌ [LOG-ATOMICAT] Erro:', error.message);
@@ -567,17 +537,15 @@ class AtomiCatDomainPurchase {
   }
 
   /**
-   * ENVIAR NOTIFICAÇÃO WHATSAPP
+   * NOTIFICAR WHATSAPP
    */
   async sendWhatsAppNotification(domain, status) {
     if (!config.ZAPI_INSTANCE || !config.ZAPI_CLIENT_TOKEN) {
-      console.log('⚠️ WhatsApp não configurado');
       return;
     }
     
     try {
       const phoneNumber = config.WHATSAPP_PHONE_NUMBER || '5531999999999';
-      
       const dataFormatada = new Intl.DateTimeFormat('pt-BR', {
         timeZone: 'America/Sao_Paulo',
         hour: '2-digit',
@@ -590,31 +558,24 @@ class AtomiCatDomainPurchase {
       
       let message;
       if (status === 'success') {
-        message = `🚀 *NOVO DOMÍNIO ATOMICAT COMPRADO!*\n\n` +
+        message = `🚀 *DOMÍNIO ATOMICAT COMPRADO!*\n\n` +
           `📌 *Domínio:* ${domain}\n` +
           `🎯 *Tipo:* AtomiCat (Genérico)\n` +
           `🌐 *URL:* https://${domain}\n` +
           `📅 *Data:* ${dataFormatada}\n` +
-          `✅ *Status:* Compra realizada com sucesso\n\n` +
-          `🎨 Domínio genérico pronto para múltiplos usos!\n` +
-          `Ideal para campanhas e produtos variados.\n\n` +
-          `⚠️ Cloudflare e WordPress NÃO foram configurados (modo AtomiCat)\n\n` +
+          `✅ *Status:* Compra realizada\n\n` +
+          `⚠️ Cloudflare e WordPress NÃO configurados\n\n` +
           `_Sistema DomainHub - AtomiCat_`;
       } else {
-        message = `❌ *ERRO NA COMPRA ATOMICAT*\n\n` +
+        message = `❌ *ERRO ATOMICAT*\n\n` +
           `📌 *Domínio:* ${domain}\n` +
-          `🎯 *Tipo:* AtomiCat\n` +
-          `📅 *Data:* ${dataFormatada}\n` +
-          `⚠️ *Status:* ${status}\n\n` +
+          `📅 *Data:* ${dataFormatada}\n\n` +
           `_Sistema DomainHub - AtomiCat_`;
       }
       
       await axios.post(
         `https://api.z-api.io/instances/${config.ZAPI_INSTANCE}/token/${config.ZAPI_CLIENT_TOKEN}/send-text`,
-        {
-          phone: phoneNumber.replace(/\D/g, ''),
-          message: message
-        },
+        { phone: phoneNumber.replace(/\D/g, ''), message: message },
         { timeout: 10000 }
       );
       
@@ -630,7 +591,7 @@ class AtomiCatDomainPurchase {
    */
   async updateProgress(sessionId, step, status, message, domainName = null) {
     try {
-      const { error } = await supabase
+      await supabase
         .from('domain_purchase_progress')
         .upsert({
           session_id: sessionId,
@@ -641,11 +602,6 @@ class AtomiCatDomainPurchase {
           platform: 'atomicat',
           updated_at: new Date().toISOString()
         }, { onConflict: 'session_id' });
-      
-      if (error) {
-        console.error('❌ [PROGRESS-ATOMICAT] Erro:', error);
-      }
-      
     } catch (error) {
       console.error('❌ [PROGRESS-ATOMICAT] Erro:', error.message);
     }
@@ -656,14 +612,12 @@ class AtomiCatDomainPurchase {
    */
   async checkBalance() {
     try {
-      const clientIP = config.NAMECHEAP_CLIENT_IP;
-      
       const params = {
         ApiUser: config.NAMECHEAP_API_USER,
         ApiKey: config.NAMECHEAP_API_KEY,
         UserName: config.NAMECHEAP_API_USER,
         Command: 'namecheap.users.getBalances',
-        ClientIp: clientIP
+        ClientIp: config.NAMECHEAP_CLIENT_IP
       };
       
       const response = await axios.get(this.namecheapAPI, { params, timeout: 15000 });
@@ -696,26 +650,20 @@ class AtomiCatDomainPurchase {
     const lang = idiomaMap[idioma] || 'português';
     
     let prompt = `
-    Gere um nome de domínio GENÉRICO e VERSÁTIL seguindo estas regras:
+    Gere um nome de domínio GENÉRICO e VERSÁTIL:
     1. Use SEMPRE a extensão .online
-    2. Use 2 ou 3 palavras juntas que sejam genéricas e amplas
-    3. NUNCA use acentos, cedilha, traços ou caracteres especiais
-    4. O domínio deve ser em ${lang}
-    5. Inspirado no nicho: ${nicho} (mas não específico demais)
-    6. Deve ser adaptável para múltiplos produtos e campanhas
-    7. Evite termos muito específicos ou técnicos
+    2. Use 2 ou 3 palavras juntas genéricas
+    3. NUNCA use acentos, cedilha, traços
+    4. Em ${lang}
+    5. Inspirado em: ${nicho}
+    6. Adaptável para múltiplos produtos
     
-    Exemplos de domínios genéricos bons:
-    - vidasaudavel.online (genérico para saúde)
-    - sucessototal.online (genérico para negócios)
-    - belezaperfeita.online (genérico para beleza)
-    
-    Retorne APENAS um JSON no formato:
+    Retorne APENAS JSON:
     {"domains": ["dominio.online"]}
     `;
     
     if (isRetry) {
-      prompt += '\n\nSeja MUITO criativo e use combinações incomuns mas ainda genéricas.';
+      prompt += '\n\nSeja MUITO criativo.';
     }
     
     return prompt;
