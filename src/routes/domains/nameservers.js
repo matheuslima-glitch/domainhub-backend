@@ -71,7 +71,7 @@ router.post('/update', async (req, res, next) => {
 
 /**
  * POST /api/domains/nameservers/set-default
- * Configura DNS predefinido da Namecheap (BasicDNS ou WebHostingDNS)
+ * Configura DNS predefinido da Namecheap (BasicDNS)
  */
 router.post('/set-default', async (req, res, next) => {
   try {
@@ -91,10 +91,10 @@ router.post('/set-default', async (req, res, next) => {
       });
     }
     
-    if (!dnsType || !['BasicDNS', 'WebHostingDNS'].includes(dnsType)) {
+    if (!dnsType || dnsType !== 'BasicDNS') {
       return res.status(400).json({
         success: false,
-        error: 'Tipo de DNS inválido. Use "BasicDNS" ou "WebHostingDNS"'
+        error: 'Tipo de DNS inválido. Use "BasicDNS"'
       });
     }
     

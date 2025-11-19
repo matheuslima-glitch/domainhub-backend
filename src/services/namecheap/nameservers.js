@@ -282,9 +282,9 @@ class NamecheapNameserversService {
   }
 
   /**
-   * Configura DNS predefinido da Namecheap (BasicDNS ou WebHostingDNS)
+   * Configura DNS predefinido da Namecheap (BasicDNS)
    * @param {string} domainName - Nome do domínio
-   * @param {string} dnsType - Tipo de DNS: 'BasicDNS' ou 'WebHostingDNS'
+   * @param {string} dnsType - Tipo de DNS: 'BasicDNS'
    * @returns {Promise<Object>} - Resultado da operação
    */
   async setDefaultDNS(domainName, dnsType) {
@@ -295,8 +295,8 @@ class NamecheapNameserversService {
       // VALIDAÇÕES
       // ═══════════════════════════════════════════════════════════════
       
-      if (!dnsType || !['BasicDNS', 'WebHostingDNS'].includes(dnsType)) {
-        throw new Error('Tipo de DNS inválido. Use "BasicDNS" ou "WebHostingDNS"');
+      if (!dnsType || dnsType !== 'BasicDNS') {
+        throw new Error('Tipo de DNS inválido. Use "BasicDNS"');
       }
       
       // ═══════════════════════════════════════════════════════════════
