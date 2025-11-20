@@ -19,8 +19,8 @@ app.use(express.urlencoded({ extended: true }));
 
 app.get('/', (req, res) => {
   res.json({
-    service: 'DomainHub Backend',
-    version: '1.0.0',
+    service: 'DomainHub',
+    version: '3.0.0',
     status: 'online'
   });
 });
