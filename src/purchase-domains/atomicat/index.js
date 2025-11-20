@@ -634,7 +634,7 @@ class AtomiCatDomainPurchase {
         return null;
       }
       
-      console.log('✅ [SUPABASE-ATOMICAT] Domínio salvo com dados reais');
+      console.log('✅ [SUPABASE-ATOMICAT] Domínio salvo');
       
       // Buscar domain_id
       const { data: domainData } = await supabase

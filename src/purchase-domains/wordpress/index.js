@@ -1154,8 +1154,6 @@ class WordPressDomainPurchase {
         expirationDate = new Date(namecheapInfo.expiration_date).toISOString();
       }
       
-      // CORREÇÃO CRÍTICA: Usar valor válido do enum integration_type
-      // Valores possíveis: 'manual', 'namecheap', 'godaddy', 'hostinger', 'ai_purchase'
       const payload = {
         p_user_id: userId || config.SUPABASE_USER_ID,
         p_domain_name: domain,
@@ -1163,12 +1161,11 @@ class WordPressDomainPurchase {
         p_purchase_date: namecheapInfo?.created_date || currentDate,
         p_status: 'active',
         p_registrar: 'Namecheap',
-        p_integration_source: 'ai_purchase', // CORRIGIDO: valor válido do enum
+        p_integration_source: 'namecheap',
         p_last_stats_update: currentDate,
         p_nameservers: cloudflareSetup?.nameservers || null,
         p_dns_configured: !!cloudflareSetup,
         p_auto_renew: namecheapInfo?.auto_renew || false
-        // REMOVIDO: p_zone_id e p_platform (não existem na função RPC do Supabase)
       };
       
       console.log(`💾 [SUPABASE] Salvando domínio...`);
