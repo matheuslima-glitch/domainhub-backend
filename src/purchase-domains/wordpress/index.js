@@ -379,6 +379,18 @@ class WordPressDomainPurchase {
         RegistrantEmailAddress: this.registrantInfo.EmailAddress,
         RegistrantOrganizationName: this.registrantInfo.OrganizationName,
         
+        // AuxBilling Contact (Billing/Payment Contact) - OBRIGATÓRIO
+        AuxBillingFirstName: this.registrantInfo.FirstName,
+        AuxBillingLastName: this.registrantInfo.LastName,
+        AuxBillingAddress1: this.registrantInfo.Address1,
+        AuxBillingCity: this.registrantInfo.City,
+        AuxBillingStateProvince: this.registrantInfo.StateProvince,
+        AuxBillingPostalCode: this.registrantInfo.PostalCode,
+        AuxBillingCountry: this.registrantInfo.Country,
+        AuxBillingPhone: this.registrantInfo.Phone,
+        AuxBillingEmailAddress: this.registrantInfo.EmailAddress,
+        AuxBillingOrganizationName: this.registrantInfo.OrganizationName,
+        
         AddFreeWhoisguard: 'no',
         WGEnabled: 'no',
         GenerateAdminOrderRefId: 'False',
@@ -870,7 +882,7 @@ class WordPressDomainPurchase {
         return true;
       }
       
-      // Adicionar domínio CPANEL
+      // Adicionar domínio
       console.log(`📝 [CPANEL] Adicionando novo domínio...`);
       const addResponse = await axios.post(
         `${config.CPANEL_URL}/execute/AddonDomain/addaddondomain`,
@@ -1074,7 +1086,7 @@ class WordPressDomainPurchase {
         expirationDate = new Date(namecheapInfo.expiration_date).toISOString();
       }
       
-      // CORREÇÃO CRÍTICA: Usar valor válido do enum integration_type
+      // CORREÇÃO: Usar valor válido do enum integration_type
       const payload = {
         p_user_id: userId || config.SUPABASE_USER_ID,
         p_domain_name: domain,
@@ -1082,7 +1094,7 @@ class WordPressDomainPurchase {
         p_purchase_date: namecheapInfo?.created_date || currentDate,
         p_status: 'active',
         p_registrar: 'Namecheap',
-        p_integration_source: 'namecheap', // CORRIGIDO: valor válido do enum
+        p_integration_source: 'namecheap',
         p_last_stats_update: currentDate,
         p_nameservers: cloudflareSetup?.nameservers || null,
         p_dns_configured: !!cloudflareSetup,
@@ -1174,7 +1186,7 @@ class WordPressDomainPurchase {
     }
     
     try {
-      const phoneNumber = config.WHATSAPP_PHONE_NUMBER;
+      const phoneNumber = config.WHATSAPP_PHONE_NUMBER || '5519989320129';
       
       // Data formatada igual ao N8N
       const dataFormatada = new Intl.DateTimeFormat('pt-BR', {
