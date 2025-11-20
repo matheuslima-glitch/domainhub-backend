@@ -486,9 +486,9 @@ class WordPressDomainPurchase {
       const savedDomain = await this.saveDomainToSupabase(domain, userId, cloudflareSetup);
       
       // 6. Registrar log
-      if (savedDomain?.domain_id) {
+      if (savedDomain?.id) {
         console.log(`📝 [LOG] Registrando atividade...`);
-        await this.saveActivityLog(savedDomain.domain_id, userId);
+        await this.saveActivityLog(savedDomain.id, userId);
       }
       
       // 7. Notificar WhatsApp
@@ -888,16 +888,22 @@ class WordPressDomainPurchase {
         return true;
       }
       
-      // Adicionar domínio
+      // Adicionar domínio usando JSON API (não Perl API)
       console.log(`📝 [CPANEL] Adicionando novo domínio...`);
+      
+      // CORREÇÃO CRÍTICA: Usar JSON API em vez de execute/AddonDomain
       const addResponse = await axios.post(
-        `${config.CPANEL_URL}/execute/AddonDomain/addaddondomain`,
+        `${config.CPANEL_URL}/json-api/cpanel`,
+        null,
         {
-          newdomain: domain,
-          subdomain: domain.split('.')[0],
-          dir: `/public_html/${domain}`
-        },
-        {
+          params: {
+            cpanel_jsonapi_module: 'AddonDomain',
+            cpanel_jsonapi_func: 'addaddondomain',
+            newdomain: domain,
+            subdomain: domain.split('.')[0],
+            dir: `/public_html/${domain}`,
+            disallowdot: 1
+          },
           headers: {
             'Authorization': `cpanel ${config.CPANEL_USERNAME}:${config.CPANEL_API_TOKEN}`,
             'Content-Type': 'application/x-www-form-urlencoded'
@@ -908,13 +914,15 @@ class WordPressDomainPurchase {
       
       console.log(`📥 [CPANEL] Resposta:`, JSON.stringify(addResponse.data, null, 2));
       
-      if (addResponse.data.status === 1 || addResponse.data.errors === null) {
+      // Verificar sucesso da JSON API
+      if (addResponse.data.cpanelresult?.data?.result === 1) {
         console.log(`✅ [CPANEL] Domínio ${domain} adicionado com sucesso`);
         return true;
       }
       
-      if (addResponse.data.errors) {
-        console.error(`❌ [CPANEL] Erro ao adicionar:`, addResponse.data.errors);
+      if (addResponse.data.cpanelresult?.error) {
+        console.error(`❌ [CPANEL] Erro:`, addResponse.data.cpanelresult.error);
+        return false;
       }
       
       return false;
@@ -946,27 +954,31 @@ class WordPressDomainPurchase {
         .map((char, i) => i === 0 ? char.toUpperCase() : char)
         .join('');
       
-      // MÉTODO 1: Tentar via Softaculous API
+      // MÉTODO 1: Tentar via Softaculous JSON API
       console.log(`🔧 [WORDPRESS] Tentando instalação via Softaculous...`);
       try {
+        // CORREÇÃO CRÍTICA: Usar JSON API em vez de execute/Softaculous
         const response = await axios.post(
-          `${config.CPANEL_URL}/execute/Softaculous/install`,
+          `${config.CPANEL_URL}/json-api/cpanel`,
+          null,
           {
-            softsubmit: '1',
-            softdomain: domain,
-            softdirectory: '',
-            softdb: 'wp_db',
-            dbusername: 'wp_user',
-            dbuserpass: config.WORDPRESS_DEFAULT_PASSWORD,
-            admin_username: config.WORDPRESS_DEFAULT_USER,
-            admin_pass: config.WORDPRESS_DEFAULT_PASSWORD,
-            admin_email: config.WORDPRESS_ADMIN_EMAIL,
-            site_name: siteName,
-            site_desc: siteName,
-            language: 'pt_BR',
-            auto_upgrade: '1'
-          },
-          {
+            params: {
+              cpanel_jsonapi_module: 'Softaculous',
+              cpanel_jsonapi_func: 'install',
+              softsubmit: '1',
+              softdomain: domain,
+              softdirectory: '',
+              softdb: 'wp_db',
+              dbusername: 'wp_user',
+              dbuserpass: config.WORDPRESS_DEFAULT_PASSWORD,
+              admin_username: config.WORDPRESS_DEFAULT_USER,
+              admin_pass: config.WORDPRESS_DEFAULT_PASSWORD,
+              admin_email: config.WORDPRESS_ADMIN_EMAIL,
+              site_name: siteName,
+              site_desc: siteName,
+              language: 'pt_BR',
+              auto_upgrade: '1'
+            },
             headers: {
               'Authorization': `cpanel ${config.CPANEL_USERNAME}:${config.CPANEL_API_TOKEN}`,
               'Content-Type': 'application/x-www-form-urlencoded'
@@ -977,10 +989,13 @@ class WordPressDomainPurchase {
         
         console.log(`📥 [WORDPRESS] Resposta Softaculous:`, JSON.stringify(response.data, null, 2));
         
-        if (response.data.status === 1 || response.data.errors === null) {
-          console.log(`✅ [WORDPRESS] Instalado via Softaculous em ${domain}`);
+        // Verificar sucesso da JSON API
+        if (response.data.cpanelresult?.data?.result === 1 || 
+            response.data.status === 1 || 
+            response.data.errors === null) {
+          console.log(`✅ [WORDPRESS] Instalado via Softaculous`);
           console.log(`   URL: https://${domain}`);
-          console.log(`   Usuário: ${config.WORDPRESS_DEFAULT_USER}`);
+          // SEGURANÇA: NÃO LOGAR CREDENCIAIS
           return true;
         }
         
@@ -1023,16 +1038,13 @@ class WordPressDomainPurchase {
           console.log(`⚠️ [WORDPRESS] WP-CLI não disponível:`, wpcliError.message);
         }
         
-        // MÉTODO 3: Criar instruções para instalação manual
+        // MÉTODO 3: Instalação manual necessária
         console.log(`⚠️ [WORDPRESS] Instalação automática não disponível`);
-        console.log(`📝 [WORDPRESS] Instruções para instalação manual:`);
-        console.log(`   1. Acesse: https://${domain}/cpanel`);
+        console.log(`📝 [WORDPRESS] WordPress precisa ser instalado manualmente`);
+        console.log(`   1. Acesse o cPanel: https://${domain}/cpanel`);
         console.log(`   2. Procure por "WordPress" ou "Softaculous"`);
         console.log(`   3. Instale manualmente no domínio ${domain}`);
-        console.log(`   4. Use as credenciais:`);
-        console.log(`      - Usuário: ${config.WORDPRESS_DEFAULT_USER}`);
-        console.log(`      - Senha: ${config.WORDPRESS_DEFAULT_PASSWORD}`);
-        console.log(`      - Email: ${config.WORDPRESS_ADMIN_EMAIL}`);
+        // SEGURANÇA: NÃO EXPOR CREDENCIAIS NOS LOGS
         
         // Retornar false mas não bloquear o processo
         return false;
@@ -1143,7 +1155,7 @@ class WordPressDomainPurchase {
       }
       
       // CORREÇÃO CRÍTICA: Usar valor válido do enum integration_type
-
+      // Valores possíveis: 'manual', 'namecheap', 'godaddy', 'hostinger', 'ai_purchase'
       const payload = {
         p_user_id: userId || config.SUPABASE_USER_ID,
         p_domain_name: domain,
@@ -1151,11 +1163,12 @@ class WordPressDomainPurchase {
         p_purchase_date: namecheapInfo?.created_date || currentDate,
         p_status: 'active',
         p_registrar: 'Namecheap',
-        p_integration_source: 'namecheap', 
+        p_integration_source: 'ai_purchase', // CORRIGIDO: valor válido do enum
         p_last_stats_update: currentDate,
         p_nameservers: cloudflareSetup?.nameservers || null,
         p_dns_configured: !!cloudflareSetup,
         p_auto_renew: namecheapInfo?.auto_renew || false
+        // REMOVIDO: p_zone_id e p_platform (não existem na função RPC do Supabase)
       };
       
       console.log(`💾 [SUPABASE] Salvando domínio...`);
@@ -1174,10 +1187,10 @@ class WordPressDomainPurchase {
       
       console.log('✅ [SUPABASE] Domínio salvo com sucesso');
       
-      // Buscar domain_id
+      // CORREÇÃO: Buscar 'id' (não 'domain_id')
       const { data: domainData, error: fetchError } = await supabase
         .from('domains')
-        .select('domain_id')
+        .select('id')
         .eq('domain_name', domain)
         .eq('user_id', userId || config.SUPABASE_USER_ID)
         .single();
@@ -1187,7 +1200,7 @@ class WordPressDomainPurchase {
         return null;
       }
       
-      console.log(`✅ [SUPABASE] Domain ID: ${domainData.domain_id}`);
+      console.log(`✅ [SUPABASE] Domain ID: ${domainData.id}`);
       
       return domainData;
       
@@ -1232,7 +1245,7 @@ class WordPressDomainPurchase {
   }
 
   /**
-   * NOTIFICAR WHATSAPP 
+   * NOTIFICAR WHATSAPP - VERSÃO CORRIGIDA
    */
   async sendWhatsAppNotification(domain, status, errorMsg = '') {
     if (!config.ZAPI_INSTANCE || !config.ZAPI_CLIENT_TOKEN) {
@@ -1241,35 +1254,45 @@ class WordPressDomainPurchase {
     }
     
     try {
-      const phoneNumber = config.WHATSAPP_PHONE_NUMBER || '5519989320129';
+      const phoneNumber = config.WHATSAPP_PHONE_NUMBER;
       
-      // Data formatada igual ao N8N
+      // Data formatada - apenas hora
+      const agora = new Date();
       const dataFormatada = new Intl.DateTimeFormat('pt-BR', {
         timeZone: 'America/Sao_Paulo',
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit',
         day: '2-digit',
         month: '2-digit',
         year: 'numeric'
-      }).format(new Date()).replace(', ', ' ');
+      }).format(agora);
       
-      // Mensagem IGUAL ao N8N
+      const horaFormatada = new Intl.DateTimeFormat('pt-BR', {
+        timeZone: 'America/Sao_Paulo',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit'
+      }).format(agora);
+      
+      // NOVA FORMATAÇÃO conforme solicitado
       let message;
       if (status === 'success') {
-        message = `Lerricke, um novo domínio foi criado utilizando a Domain Hub 🌐.\n\n` +
-          `Aqui está o nome dele: ${domain}\n\n` +
-          `Aqui está a data: ${dataFormatada}`;
+        message = `🤖 Domain Hub\n\n` +
+          `Lerricke, um novo domínio foi criado ✅:\n\n` +
+          `🌐Domínio: ${domain}\n` +
+          `🛜 Plataforma : Wordpress\n` +
+          `📆Data: ${dataFormatada} ás ${horaFormatada}`;
       } else {
-        message = `Lerricke, houve um erro ao criar o domínio 🌐.\n\n` +
-          `Domínio tentado: ${domain}\n\n` +
-          `Erro: ${errorMsg}\n\n` +
-          `Data: ${dataFormatada}`;
+        message = `🤖 Domain Hub\n\n` +
+          `Lerricke, houve um erro ao criar o domínio ❌:\n\n` +
+          `🌐Domínio tentado: ${domain}\n` +
+          `❌Erro: ${errorMsg}\n` +
+          `📆Data: ${dataFormatada} ás ${horaFormatada}`;
       }
       
       console.log(`📱 [WHATSAPP] Enviando para: ${phoneNumber}`);
       console.log(`   Mensagem: ${message.substring(0, 50)}...`);
-
+      
+      // CORREÇÃO CRÍTICA: Z-API já vem com /send-text na URL (igual N8N)
+      // No .env: ZAPI_INSTANCE=https://api.z-api.io/instances/XXX/token/YYY/send-text
       const zapiUrl = config.ZAPI_INSTANCE;
       
       console.log(`🌐 [WHATSAPP] URL: ${zapiUrl}`);
