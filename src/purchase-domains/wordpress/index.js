@@ -1,10 +1,5 @@
 /**
- * COMPRA DE DOMÍNIOS WORDPRESS - VERSÃO DEFINITIVA
- * Correções finais:
- * - Parsing correto do domínio para Namecheap
- * - Validação antes de enviar para API
- * - Logging detalhado de XML para debug
- * - Removido log de "Preço bruto da API"
+ * COMPRA DE DOMÍNIOS WORDPRESS
  */
 
 const axios = require('axios');
@@ -515,13 +510,13 @@ class WordPressDomainPurchase {
       }
       
       // 7. Notificar WhatsApp
-      await this.sendWhatsAppNotification(domain, 'success');
+      await this.sendWhatsAppNotification(domain, 'success', userId);
       
       console.log(`✅ [POST-PURCHASE] Configurações concluídas para ${domain}`);
       
     } catch (error) {
       console.error(`❌ [POST-PURCHASE] Erro:`, error.message);
-      await this.sendWhatsAppNotification(domain, 'error', error.message);
+      await this.sendWhatsAppNotification(domain, 'error', userId, error.message);
     }
   }
 
@@ -530,12 +525,16 @@ class WordPressDomainPurchase {
    */
   async setupCloudflare(domain) {
     if (!config.CLOUDFLARE_EMAIL || !config.CLOUDFLARE_API_KEY) {
-      console.log('⚠️ Cloudflare não configurado');
+      console.log('⚠️ [CLOUDFLARE] Não configurado - pulando');
       return null;
     }
 
     try {
-      const response = await axios.post(
+      console.log(`🌐 [CLOUDFLARE] Iniciando configuração completa para ${domain}`);
+      
+      // ETAPA 1: Criar zona na Cloudflare
+      console.log(`📝 [CLOUDFLARE] Criando zona...`);
+      const zoneResponse = await axios.post(
         `${this.cloudflareAPI}/zones`,
         {
           name: domain,
@@ -553,25 +552,200 @@ class WordPressDomainPurchase {
         }
       );
 
-      const zone = response.data.result;
+      const zone = zoneResponse.data.result;
+      const zoneId = zone.id;
       const nameservers = zone.name_servers || ['ganz.ns.cloudflare.com', 'norah.ns.cloudflare.com'];
       
-      console.log(`✅ [CLOUDFLARE] Zona criada - ID: ${zone.id}`);
+      console.log(`✅ [CLOUDFLARE] Zona criada - ID: ${zoneId}`);
+      console.log(`   Nameservers: ${nameservers.join(', ')}`);
       
-      await this.delay(5000);
+      await this.delay(3000);
       
-      // Adicionar registro A
-      if (config.HOSTING_SERVER_IP) {
+      // ETAPA 2: Criar registro CNAME para www
+      console.log(`📝 [CLOUDFLARE] Criando CNAME www...`);
+      try {
+        await axios.post(
+          `${this.cloudflareAPI}/zones/${zoneId}/dns_records`,
+          {
+            type: 'CNAME',
+            name: 'www',
+            content: domain,
+            ttl: 1,
+            proxied: true
+          },
+          {
+            headers: {
+              'X-Auth-Email': config.CLOUDFLARE_EMAIL,
+              'X-Auth-Key': config.CLOUDFLARE_API_KEY,
+              'Content-Type': 'application/json'
+            }
+          }
+        );
+        console.log(`✅ [CLOUDFLARE] CNAME www criado`);
+      } catch (error) {
+        console.error(`⚠️ [CLOUDFLARE] Erro CNAME www:`, error.message);
+      }
+      
+      await this.delay(2000);
+      
+      // ETAPA 3: Criar registro CNAME para track (Redtrack)
+      console.log(`📝 [CLOUDFLARE] Criando CNAME track (Redtrack)...`);
+      try {
+        await axios.post(
+          `${this.cloudflareAPI}/zones/${zoneId}/dns_records`,
+          {
+            type: 'CNAME',
+            name: 'track',
+            content: 'khrv4.ttrk.io',
+            ttl: 1,
+            proxied: false
+          },
+          {
+            headers: {
+              'X-Auth-Email': config.CLOUDFLARE_EMAIL,
+              'X-Auth-Key': config.CLOUDFLARE_API_KEY,
+              'Content-Type': 'application/json'
+            }
+          }
+        );
+        console.log(`✅ [CLOUDFLARE] CNAME track criado (Redtrack)`);
+      } catch (error) {
+        console.error(`⚠️ [CLOUDFLARE] Erro CNAME track:`, error.message);
+      }
+      
+      await this.delay(2000);
+      
+      // ETAPA 4: Criar registro A
+      console.log(`📝 [CLOUDFLARE] Criando registro A...`);
+      const serverIP = config.HOSTING_SERVER_IP || '69.46.11.10';
+      try {
+        await axios.post(
+          `${this.cloudflareAPI}/zones/${zoneId}/dns_records`,
+          {
+            type: 'A',
+            name: domain,
+            content: serverIP,
+            ttl: 1,
+            proxied: true
+          },
+          {
+            headers: {
+              'X-Auth-Email': config.CLOUDFLARE_EMAIL,
+              'X-Auth-Key': config.CLOUDFLARE_API_KEY,
+              'Content-Type': 'application/json'
+            }
+          }
+        );
+        console.log(`✅ [CLOUDFLARE] Registro A criado (IP: ${serverIP})`);
+      } catch (error) {
+        console.error(`⚠️ [CLOUDFLARE] Erro registro A:`, error.message);
+      }
+      
+      await this.delay(3000);
+      
+      // ETAPA 5: Buscar domínio específico (verificar se foi criado)
+      console.log(`🔍 [CLOUDFLARE] Buscando domínio específico...`);
+      try {
+        const searchResponse = await axios.get(
+          `${this.cloudflareAPI}/zones`,
+          {
+            params: { name: domain },
+            headers: {
+              'X-Auth-Email': config.CLOUDFLARE_EMAIL,
+              'X-Auth-Key': config.CLOUDFLARE_API_KEY
+            }
+          }
+        );
+        console.log(`✅ [CLOUDFLARE] Domínio encontrado na busca`);
+      } catch (error) {
+        console.error(`⚠️ [CLOUDFLARE] Erro ao buscar:`, error.message);
+      }
+      
+      await this.delay(2000);
+      
+      // ETAPA 6: Buscar registros DNS (verificação)
+      console.log(`🔍 [CLOUDFLARE] Buscando registros DNS...`);
+      try {
+        const dnsResponse = await axios.get(
+          `${this.cloudflareAPI}/zones/${zoneId}/dns_records`,
+          {
+            headers: {
+              'X-Auth-Email': config.CLOUDFLARE_EMAIL,
+              'X-Auth-Key': config.CLOUDFLARE_API_KEY
+            }
+          }
+        );
+        const records = dnsResponse.data.result || [];
+        console.log(`✅ [CLOUDFLARE] ${records.length} registros DNS encontrados`);
+      } catch (error) {
+        console.error(`⚠️ [CLOUDFLARE] Erro ao buscar DNS:`, error.message);
+      }
+      
+      await this.delay(2000);
+      
+      // ETAPA 7: Alterar SSL para "full"
+      console.log(`🔒 [CLOUDFLARE] Alterando SSL para Full...`);
+      try {
+        await axios.patch(
+          `${this.cloudflareAPI}/zones/${zoneId}/settings/ssl`,
+          { value: 'full' },
+          {
+            headers: {
+              'X-Auth-Email': config.CLOUDFLARE_EMAIL,
+              'X-Auth-Key': config.CLOUDFLARE_API_KEY,
+              'Content-Type': 'application/json'
+            }
+          }
+        );
+        console.log(`✅ [CLOUDFLARE] SSL alterado para Full`);
+      } catch (error) {
+        console.error(`⚠️ [CLOUDFLARE] Erro SSL:`, error.message);
+      }
+      
+      await this.delay(2000);
+      
+      // ETAPA 8: Criar Filtro WAF - Sitemap
+      console.log(`🛡️ [CLOUDFLARE] Criando filtro WAF - Sitemap...`);
+      let sitemapFilterId = null;
+      try {
+        const sitemapFilterResponse = await axios.post(
+          `${this.cloudflareAPI}/zones/${zoneId}/filters`,
+          [
+            {
+              expression: '(http.request.uri contains "sitemap" or http.request.full_uri contains "sitemap")',
+              paused: false,
+              description: 'Bloqueio (Sitemap)'
+            }
+          ],
+          {
+            headers: {
+              'X-Auth-Email': config.CLOUDFLARE_EMAIL,
+              'X-Auth-Key': config.CLOUDFLARE_API_KEY,
+              'Content-Type': 'application/json'
+            }
+          }
+        );
+        sitemapFilterId = sitemapFilterResponse.data.result[0].id;
+        console.log(`✅ [CLOUDFLARE] Filtro WAF Sitemap criado - ID: ${sitemapFilterId}`);
+      } catch (error) {
+        console.error(`⚠️ [CLOUDFLARE] Erro filtro Sitemap:`, error.message);
+      }
+      
+      await this.delay(2000);
+      
+      // ETAPA 9: Criar Regra de Bloqueio - Sitemap
+      if (sitemapFilterId) {
+        console.log(`🛡️ [CLOUDFLARE] Criando regra bloqueio - Sitemap...`);
         try {
           await axios.post(
-            `${this.cloudflareAPI}/zones/${zone.id}/dns_records`,
-            {
-              type: 'A',
-              name: domain,
-              content: config.HOSTING_SERVER_IP,
-              ttl: 1,
-              proxied: true
-            },
+            `${this.cloudflareAPI}/zones/${zoneId}/firewall/rules`,
+            [
+              {
+                action: 'block',
+                filter: { id: sitemapFilterId },
+                description: 'Bloqueio-Sitemap'
+              }
+            ],
             {
               headers: {
                 'X-Auth-Email': config.CLOUDFLARE_EMAIL,
@@ -580,16 +754,80 @@ class WordPressDomainPurchase {
               }
             }
           );
-          console.log(`✅ [CLOUDFLARE] Registro A criado`);
-        } catch (dnsError) {
-          console.error('⚠️ [CLOUDFLARE] Erro ao criar registro A:', dnsError.message);
+          console.log(`✅ [CLOUDFLARE] Regra bloqueio Sitemap criada`);
+        } catch (error) {
+          console.error(`⚠️ [CLOUDFLARE] Erro regra Sitemap:`, error.message);
         }
       }
       
-      return { zoneId: zone.id, nameservers: nameservers };
+      await this.delay(2000);
+      
+      // ETAPA 10: Criar Filtro WAF - ?s=
+      console.log(`🛡️ [CLOUDFLARE] Criando filtro WAF - ?s=...`);
+      let queryFilterId = null;
+      try {
+        const queryFilterResponse = await axios.post(
+          `${this.cloudflareAPI}/zones/${zoneId}/filters`,
+          [
+            {
+              expression: '(http.request.uri contains "?s=" or http.request.full_uri contains "?s=")',
+              paused: false,
+              description: 'Bloqueio (?s=)'
+            }
+          ],
+          {
+            headers: {
+              'X-Auth-Email': config.CLOUDFLARE_EMAIL,
+              'X-Auth-Key': config.CLOUDFLARE_API_KEY,
+              'Content-Type': 'application/json'
+            }
+          }
+        );
+        queryFilterId = queryFilterResponse.data.result[0].id;
+        console.log(`✅ [CLOUDFLARE] Filtro WAF ?s= criado - ID: ${queryFilterId}`);
+      } catch (error) {
+        console.error(`⚠️ [CLOUDFLARE] Erro filtro ?s=:`, error.message);
+      }
+      
+      await this.delay(2000);
+      
+      // ETAPA 11: Criar Regra de Bloqueio - ?s=
+      if (queryFilterId) {
+        console.log(`🛡️ [CLOUDFLARE] Criando regra bloqueio - ?s=...`);
+        try {
+          await axios.post(
+            `${this.cloudflareAPI}/zones/${zoneId}/firewall/rules`,
+            [
+              {
+                action: 'block',
+                filter: { id: queryFilterId },
+                description: 'Bloqueio-?s='
+              }
+            ],
+            {
+              headers: {
+                'X-Auth-Email': config.CLOUDFLARE_EMAIL,
+                'X-Auth-Key': config.CLOUDFLARE_API_KEY,
+                'Content-Type': 'application/json'
+              }
+            }
+          );
+          console.log(`✅ [CLOUDFLARE] Regra bloqueio ?s= criada`);
+        } catch (error) {
+          console.error(`⚠️ [CLOUDFLARE] Erro regra ?s=:`, error.message);
+        }
+      }
+      
+      console.log(`🎉 [CLOUDFLARE] Configuração completa finalizada!`);
+      console.log(`   Zone ID: ${zoneId}`);
+      console.log(`   DNS: A, CNAME www, CNAME track`);
+      console.log(`   SSL: Full`);
+      console.log(`   WAF: 2 filtros + 2 regras de bloqueio`);
+      
+      return { zoneId: zoneId, nameservers: nameservers };
       
     } catch (error) {
-      console.error('❌ [CLOUDFLARE] Erro:', error.message);
+      console.error('❌ [CLOUDFLARE] Erro geral:', error.message);
       return null;
     }
   }
@@ -711,7 +949,7 @@ class WordPressDomainPurchase {
         site_desc: siteName,
         dbprefix: 'wp_',
         language: 'pt_BR',
-        wpsets: 'Plugins',
+        plugin_set: 'Plugins',
         auto_upgrade: '1',
         auto_upgrade_plugins: '1',
         auto_upgrade_themes: '1'
@@ -739,27 +977,107 @@ class WordPressDomainPurchase {
   }
 
   /**
-   * SALVAR NO SUPABASE
+   * BUSCAR INFORMAÇÕES DO DOMÍNIO NA NAMECHEAP
+   */
+  async getDomainInfoFromNamecheap(domain) {
+    try {
+      console.log(`🔍 [NAMECHEAP] Buscando informações de ${domain}...`);
+      
+      const domainParts = domain.split('.');
+      const tld = domainParts.pop();
+      const sld = domainParts.join('.');
+      
+      const params = {
+        ApiUser: config.NAMECHEAP_API_USER,
+        ApiKey: config.NAMECHEAP_API_KEY,
+        UserName: config.NAMECHEAP_API_USER,
+        Command: 'namecheap.domains.getInfo',
+        ClientIp: config.NAMECHEAP_CLIENT_IP,
+        DomainName: domain
+      };
+      
+      const response = await axios.get(this.namecheapAPI, { params, timeout: 30000 });
+      const xmlData = response.data;
+      
+      // Extrair informações do XML
+      const info = {};
+      
+      // Data de criação
+      const createdDateMatch = xmlData.match(/CreatedDate="([^"]+)"/);
+      if (createdDateMatch) {
+        info.created_date = createdDateMatch[1];
+      }
+      
+      // Data de expiração
+      const expiresMatch = xmlData.match(/Expires="([^"]+)"/);
+      if (expiresMatch) {
+        info.expiration_date = expiresMatch[1];
+      }
+      
+      // Status
+      const statusMatch = xmlData.match(/Status="([^"]+)"/);
+      if (statusMatch) {
+        info.status = statusMatch[1];
+      }
+      
+      // WhoisGuard
+      const whoisGuardMatch = xmlData.match(/WhoisGuard="([^"]+)"/);
+      if (whoisGuardMatch) {
+        info.whois_guard = whoisGuardMatch[1] === 'ENABLED';
+      }
+      
+      // AutoRenew
+      const autoRenewMatch = xmlData.match(/AutoRenew="([^"]+)"/);
+      if (autoRenewMatch) {
+        info.auto_renew = autoRenewMatch[1] === 'true';
+      }
+      
+      console.log(`✅ [NAMECHEAP] Informações obtidas:`);
+      console.log(`   Criado: ${info.created_date || 'N/A'}`);
+      console.log(`   Expira: ${info.expiration_date || 'N/A'}`);
+      console.log(`   Status: ${info.status || 'N/A'}`);
+      
+      return info;
+      
+    } catch (error) {
+      console.error(`⚠️ [NAMECHEAP] Erro ao buscar info:`, error.message);
+      return null;
+    }
+  }
+
+  /**
+   * SALVAR NO SUPABASE - VERSÃO MELHORADA
    */
   async saveDomainToSupabase(domain, userId, cloudflareSetup) {
     try {
+      console.log(`💾 [SUPABASE] Buscando informações completas antes de salvar...`);
+      
+      // Buscar informações do domínio na Namecheap
+      const namecheapInfo = await this.getDomainInfoFromNamecheap(domain);
+      
       const currentDate = new Date().toISOString();
-      const expirationDate = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString();
+      
+      // Usar data de expiração da Namecheap ou calcular 1 ano
+      let expirationDate = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString();
+      if (namecheapInfo?.expiration_date) {
+        expirationDate = new Date(namecheapInfo.expiration_date).toISOString();
+      }
       
       const payload = {
         p_user_id: userId || config.SUPABASE_USER_ID,
         p_domain_name: domain,
         p_expiration_date: expirationDate,
-        p_purchase_date: currentDate,
+        p_purchase_date: namecheapInfo?.created_date || currentDate,
         p_status: 'active',
         p_registrar: 'Namecheap',
-        p_integration_source: 'ai_purchase',
+        p_integration_source: 'ai_purchase_wordpress',
         p_last_stats_update: currentDate,
         p_nameservers: cloudflareSetup?.nameservers || null,
         p_dns_configured: !!cloudflareSetup,
-        p_auto_renew: false
+        p_auto_renew: namecheapInfo?.auto_renew || false
       };
       
+      console.log(`💾 [SUPABASE] Salvando domínio...`);
       const { data, error } = await supabase.rpc('upsert_domain_stats', payload);
       
       if (error) {
@@ -767,8 +1085,9 @@ class WordPressDomainPurchase {
         return null;
       }
       
-      console.log('✅ [SUPABASE] Domínio salvo');
+      console.log('✅ [SUPABASE] Domínio salvo com sucesso');
       
+      // Buscar domain_id
       const { data: domainData } = await supabase
         .from('domains')
         .select('domain_id')
@@ -807,15 +1126,18 @@ class WordPressDomainPurchase {
   }
 
   /**
-   * NOTIFICAR WHATSAPP
+   * NOTIFICAR WHATSAPP - IGUAL AO N8N
    */
   async sendWhatsAppNotification(domain, status, errorMsg = '') {
     if (!config.ZAPI_INSTANCE || !config.ZAPI_CLIENT_TOKEN) {
+      console.log('⚠️ [WHATSAPP] ZAPI não configurado');
       return;
     }
     
     try {
-      const phoneNumber = config.WHATSAPP_PHONE_NUMBER || '5531999999999';
+      const phoneNumber = config.WHATSAPP_PHONE_NUMBER || '5594991400163';
+      
+      // Data formatada igual ao N8N
       const dataFormatada = new Intl.DateTimeFormat('pt-BR', {
         timeZone: 'America/Sao_Paulo',
         hour: '2-digit',
@@ -826,34 +1148,44 @@ class WordPressDomainPurchase {
         year: 'numeric'
       }).format(new Date()).replace(', ', ' ');
       
+      // Mensagem IGUAL ao N8N
       let message;
       if (status === 'success') {
-        message = `🎉 *NOVO DOMÍNIO WORDPRESS!*\n\n` +
-          `📌 *Domínio:* ${domain}\n` +
-          `🌐 *URL:* https://${domain}\n` +
-          `👤 *Admin:* https://${domain}/wp-admin\n` +
-          `🔑 *Usuário:* ${config.WORDPRESS_DEFAULT_USER}\n` +
-          `📅 *Data:* ${dataFormatada}\n` +
-          `✅ *Status:* Completo\n\n` +
-          `_Sistema DomainHub_`;
+        message = `Lerricke, um novo domínio foi criado utilizando a Domain Hub 🌐.\n\n` +
+          `Aqui está o nome dele: ${domain}\n\n` +
+          `Aqui está a data: ${dataFormatada}`;
       } else {
-        message = `❌ *ERRO NA COMPRA*\n\n` +
-          `📌 *Domínio:* ${domain}\n` +
-          `⚠️ *Erro:* ${errorMsg}\n` +
-          `📅 *Data:* ${dataFormatada}\n\n` +
-          `_Sistema DomainHub_`;
+        message = `Lerricke, houve um erro ao criar o domínio 🌐.\n\n` +
+          `Domínio tentado: ${domain}\n\n` +
+          `Erro: ${errorMsg}\n\n` +
+          `Data: ${dataFormatada}`;
       }
+      
+      console.log(`📱 [WHATSAPP] Enviando para: ${phoneNumber}`);
+      console.log(`   Mensagem: ${message.substring(0, 50)}...`);
       
       await axios.post(
         `https://api.z-api.io/instances/${config.ZAPI_INSTANCE}/token/${config.ZAPI_CLIENT_TOKEN}/send-text`,
-        { phone: phoneNumber.replace(/\D/g, ''), message: message },
-        { timeout: 10000 }
+        { 
+          phone: phoneNumber.replace(/\D/g, ''), 
+          message: message 
+        },
+        { 
+          timeout: 10000,
+          headers: {
+            'Client-Token': config.ZAPI_CLIENT_TOKEN
+          }
+        }
       );
       
-      console.log('✅ [WHATSAPP] Notificação enviada');
+      console.log('✅ [WHATSAPP] Notificação enviada com sucesso');
       
     } catch (error) {
-      console.error('❌ [WHATSAPP] Erro:', error.message);
+      console.error('❌ [WHATSAPP] Erro ao enviar:', error.message);
+      if (error.response) {
+        console.error('   Status:', error.response.status);
+        console.error('   Data:', error.response.data);
+      }
     }
   }
 
