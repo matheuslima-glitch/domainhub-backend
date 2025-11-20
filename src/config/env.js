@@ -1,5 +1,5 @@
 // Arquivo: src/config/env.js
-// Configuração COMPLETA com GoDaddy API
+
 
 const requiredEnvVars = [
   'SUPABASE_URL',
@@ -8,8 +8,8 @@ const requiredEnvVars = [
   'NAMECHEAP_API_USER',
   'NAMECHEAP_API_KEY',
   'NAMECHEAP_CLIENT_IP',
-  'GODADDY_API_KEY', // NOVA - Obrigatória
-  'GODADDY_API_SECRET' // NOVA - Obrigatória
+  'GODADDY_API_KEY', 
+  'GODADDY_API_SECRET' 
 ];
 
 const missingVars = requiredEnvVars.filter(varName => !process.env[varName]);
@@ -88,7 +88,7 @@ module.exports = {
   // Namecheap (Compra de Domínios)
   NAMECHEAP_API_USER: process.env.NAMECHEAP_API_USER,
   NAMECHEAP_API_KEY: process.env.NAMECHEAP_API_KEY,
-  NAMECHEAP_CLIENT_IP: process.env.NAMECHEAP_CLIENT_IP || '18.216.155.225',
+  NAMECHEAP_CLIENT_IP: process.env.NAMECHEAP_CLIENT_IP,
 
   // GoDaddy (Verificação de Disponibilidade) - NOVAS
   GODADDY_API_KEY: process.env.GODADDY_API_KEY,
@@ -118,7 +118,6 @@ module.exports = {
 
   // WhatsApp Z-API
   ZAPI_INSTANCE: process.env.ZAPI_INSTANCE,
-  ZAPI_TOKEN: process.env.ZAPI_TOKEN,
   ZAPI_CLIENT_TOKEN: process.env.ZAPI_CLIENT_TOKEN,
   WHATSAPP_PHONE_NUMBER: process.env.WHATSAPP_PHONE_NUMBER
 };

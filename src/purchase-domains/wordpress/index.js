@@ -874,7 +874,13 @@ class WordPressDomainPurchase {
         }
       );
       
-      const existingDomains = response.data.data || [];
+      // Garantir que existingDomains é sempre um array
+      let existingDomains = response.data.data || [];
+      if (!Array.isArray(existingDomains)) {
+        console.log('⚠️ [CPANEL] Resposta não é array, convertendo...');
+        existingDomains = [];
+      }
+      
       const domainExists = existingDomains.some(d => d.domain === domain);
       
       if (domainExists) {
@@ -924,7 +930,7 @@ class WordPressDomainPurchase {
   }
 
   /**
-   * INSTALAR WORDPRESS - VERSÃO CORRIGIDA
+   * INSTALAR WORDPRESS - VERSÃO CORRIGIDA COM FALLBACKS
    */
   async installWordPress(domain) {
     if (!config.CPANEL_API_TOKEN || !config.WORDPRESS_DEFAULT_USER) {
@@ -940,50 +946,100 @@ class WordPressDomainPurchase {
         .map((char, i) => i === 0 ? char.toUpperCase() : char)
         .join('');
       
-      // Instalar usando API do Softaculous
-      const response = await axios.post(
-        `${config.CPANEL_URL}/execute/Softaculous/install`,
-        {
-          softsubmit: '1',
-          softdomain: domain,
-          softdirectory: '',
-          softdb: 'wp_db',
-          dbusername: 'wp_user',
-          dbuserpass: config.WORDPRESS_DEFAULT_PASSWORD,
-          admin_username: config.WORDPRESS_DEFAULT_USER,
-          admin_pass: config.WORDPRESS_DEFAULT_PASSWORD,
-          admin_email: config.WORDPRESS_ADMIN_EMAIL,
-          site_name: siteName,
-          site_desc: siteName,
-          language: 'pt_BR',
-          auto_upgrade: '1'
-        },
-        {
-          headers: {
-            'Authorization': `cpanel ${config.CPANEL_USERNAME}:${config.CPANEL_API_TOKEN}`,
-            'Content-Type': 'application/x-www-form-urlencoded'
+      // MÉTODO 1: Tentar via Softaculous API
+      console.log(`🔧 [WORDPRESS] Tentando instalação via Softaculous...`);
+      try {
+        const response = await axios.post(
+          `${config.CPANEL_URL}/execute/Softaculous/install`,
+          {
+            softsubmit: '1',
+            softdomain: domain,
+            softdirectory: '',
+            softdb: 'wp_db',
+            dbusername: 'wp_user',
+            dbuserpass: config.WORDPRESS_DEFAULT_PASSWORD,
+            admin_username: config.WORDPRESS_DEFAULT_USER,
+            admin_pass: config.WORDPRESS_DEFAULT_PASSWORD,
+            admin_email: config.WORDPRESS_ADMIN_EMAIL,
+            site_name: siteName,
+            site_desc: siteName,
+            language: 'pt_BR',
+            auto_upgrade: '1'
           },
-          timeout: 60000
+          {
+            headers: {
+              'Authorization': `cpanel ${config.CPANEL_USERNAME}:${config.CPANEL_API_TOKEN}`,
+              'Content-Type': 'application/x-www-form-urlencoded'
+            },
+            timeout: 60000
+          }
+        );
+        
+        console.log(`📥 [WORDPRESS] Resposta Softaculous:`, JSON.stringify(response.data, null, 2));
+        
+        if (response.data.status === 1 || response.data.errors === null) {
+          console.log(`✅ [WORDPRESS] Instalado via Softaculous em ${domain}`);
+          console.log(`   URL: https://${domain}`);
+          console.log(`   Usuário: ${config.WORDPRESS_DEFAULT_USER}`);
+          return true;
         }
-      );
-      
-      console.log(`📥 [WORDPRESS] Resposta:`, JSON.stringify(response.data, null, 2));
-      
-      if (response.data.status === 1 || response.data.errors === null) {
-        console.log(`✅ [WORDPRESS] Instalado com sucesso em ${domain}`);
-        console.log(`   URL: https://${domain}`);
-        console.log(`   Usuário: ${config.WORDPRESS_DEFAULT_USER}`);
-        return true;
+        
+        // Se Softaculous falhou, tentar método alternativo
+        if (response.data.errors && response.data.errors.length > 0) {
+          const errorMsg = response.data.errors[0];
+          if (errorMsg.includes('Softaculous') || errorMsg.includes('module')) {
+            console.log(`⚠️ [WORDPRESS] Softaculous não disponível, tentando método alternativo...`);
+            throw new Error('Softaculous não disponível');
+          }
+        }
+        
+        return false;
+        
+      } catch (softaculousError) {
+        console.log(`⚠️ [WORDPRESS] Softaculous falhou:`, softaculousError.message);
+        
+        // MÉTODO 2: Instalação manual via WordPress CLI (se disponível)
+        console.log(`🔧 [WORDPRESS] Tentando instalação via WP-CLI...`);
+        try {
+          const wpcliResponse = await axios.post(
+            `${config.CPANEL_URL}/execute/Terminal/run_command`,
+            {
+              command: `cd /home/${config.CPANEL_USERNAME}/public_html/${domain} && wp core download --locale=pt_BR && wp config create --dbname=wp_${domain.replace(/\./g, '_')} --dbuser=${config.CPANEL_USERNAME} --dbpass=${config.WORDPRESS_DEFAULT_PASSWORD} && wp core install --url=https://${domain} --title="${siteName}" --admin_user=${config.WORDPRESS_DEFAULT_USER} --admin_password=${config.WORDPRESS_DEFAULT_PASSWORD} --admin_email=${config.WORDPRESS_ADMIN_EMAIL}`
+            },
+            {
+              headers: {
+                'Authorization': `cpanel ${config.CPANEL_USERNAME}:${config.CPANEL_API_TOKEN}`,
+                'Content-Type': 'application/json'
+              },
+              timeout: 120000
+            }
+          );
+          
+          if (wpcliResponse.data.status === 1) {
+            console.log(`✅ [WORDPRESS] Instalado via WP-CLI em ${domain}`);
+            return true;
+          }
+        } catch (wpcliError) {
+          console.log(`⚠️ [WORDPRESS] WP-CLI não disponível:`, wpcliError.message);
+        }
+        
+        // MÉTODO 3: Criar instruções para instalação manual
+        console.log(`⚠️ [WORDPRESS] Instalação automática não disponível`);
+        console.log(`📝 [WORDPRESS] Instruções para instalação manual:`);
+        console.log(`   1. Acesse: https://${domain}/cpanel`);
+        console.log(`   2. Procure por "WordPress" ou "Softaculous"`);
+        console.log(`   3. Instale manualmente no domínio ${domain}`);
+        console.log(`   4. Use as credenciais:`);
+        console.log(`      - Usuário: ${config.WORDPRESS_DEFAULT_USER}`);
+        console.log(`      - Senha: ${config.WORDPRESS_DEFAULT_PASSWORD}`);
+        console.log(`      - Email: ${config.WORDPRESS_ADMIN_EMAIL}`);
+        
+        // Retornar false mas não bloquear o processo
+        return false;
       }
-      
-      if (response.data.errors) {
-        console.error(`❌ [WORDPRESS] Erro na instalação:`, response.data.errors);
-      }
-      
-      return false;
       
     } catch (error) {
-      console.error('❌ [WORDPRESS] Erro:', error.message);
+      console.error('❌ [WORDPRESS] Erro geral:', error.message);
       if (error.response) {
         console.error(`   Status: ${error.response.status}`);
         console.error(`   Data:`, JSON.stringify(error.response.data, null, 2));
@@ -1086,7 +1142,8 @@ class WordPressDomainPurchase {
         expirationDate = new Date(namecheapInfo.expiration_date).toISOString();
       }
       
-      // CORREÇÃO: Usar valor válido do enum integration_type
+      // CORREÇÃO CRÍTICA: Usar valor válido do enum integration_type
+
       const payload = {
         p_user_id: userId || config.SUPABASE_USER_ID,
         p_domain_name: domain,
@@ -1094,13 +1151,11 @@ class WordPressDomainPurchase {
         p_purchase_date: namecheapInfo?.created_date || currentDate,
         p_status: 'active',
         p_registrar: 'Namecheap',
-        p_integration_source: 'namecheap',
+        p_integration_source: 'namecheap', 
         p_last_stats_update: currentDate,
         p_nameservers: cloudflareSetup?.nameservers || null,
         p_dns_configured: !!cloudflareSetup,
-        p_auto_renew: namecheapInfo?.auto_renew || false,
-        p_zone_id: cloudflareSetup?.zoneId || null,
-        p_platform: 'wordpress'
+        p_auto_renew: namecheapInfo?.auto_renew || false
       };
       
       console.log(`💾 [SUPABASE] Salvando domínio...`);
@@ -1177,7 +1232,7 @@ class WordPressDomainPurchase {
   }
 
   /**
-   * NOTIFICAR WHATSAPP - VERSÃO CORRIGIDA
+   * NOTIFICAR WHATSAPP 
    */
   async sendWhatsAppNotification(domain, status, errorMsg = '') {
     if (!config.ZAPI_INSTANCE || !config.ZAPI_CLIENT_TOKEN) {
@@ -1214,9 +1269,10 @@ class WordPressDomainPurchase {
       
       console.log(`📱 [WHATSAPP] Enviando para: ${phoneNumber}`);
       console.log(`   Mensagem: ${message.substring(0, 50)}...`);
+
+      const zapiUrl = config.ZAPI_INSTANCE;
       
-      // CORREÇÃO: URL completa da instância Z-API
-      const zapiUrl = `${config.ZAPI_INSTANCE}/send-text`;
+      console.log(`🌐 [WHATSAPP] URL: ${zapiUrl}`);
       
       const response = await axios.post(
         zapiUrl,
