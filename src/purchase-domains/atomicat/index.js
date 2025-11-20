@@ -620,7 +620,7 @@ class AtomiCatDomainPurchase {
         p_purchase_date: purchaseDate,
         p_status: 'active',
         p_registrar: 'Namecheap',
-        p_integration_source: 'ai_purchase_atomicat',
+        p_integration_source: 'namecheap',
         p_last_stats_update: currentDate,
         p_nameservers: null,
         p_dns_configured: false,
