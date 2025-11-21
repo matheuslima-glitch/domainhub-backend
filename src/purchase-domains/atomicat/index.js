@@ -81,8 +81,8 @@ class AtomiCatDomainPurchase {
         domainsToRegister.push(domainManual);
         successCount = 1;
         
-        // Processar pós-compra com fonte de tráfego e sessionId
-        await this.processPostPurchase(domainManual, userId, sessionId, trafficSource);
+        // Processar pós-compra com fonte de tráfego
+        await this.processPostPurchase(domainManual, userId, trafficSource);
       } else {
         await this.updateProgress(sessionId, 'error', 'error', 
           `Erro na compra: ${purchaseResult.error}`);
@@ -146,8 +146,8 @@ class AtomiCatDomainPurchase {
               console.log(`✅ [ATOMICAT] Domínio comprado: ${domain}`);
               console.log(`   ⚠️ Cloudflare e WordPress NÃO configurados (modo AtomiCat)`);
               
-              // Processar pós-compra com sessionId
-              await this.processPostPurchase(domain, userId, sessionId);
+              // Processar pós-compra
+              await this.processPostPurchase(domain, userId);
               
             } else {
               console.error(`❌ Erro na compra: ${purchaseResult.error}`);
@@ -216,7 +216,7 @@ class AtomiCatDomainPurchase {
    * - Salvar log de atividade
    * - Enviar notificação WhatsApp
    */
-  async processPostPurchase(domain, userId, sessionId = null, trafficSource = null) {
+  async processPostPurchase(domain, userId, trafficSource = null) {
     try {
       console.log(`🔧 [POST-PURCHASE-ATOMICAT] Iniciando para ${domain}`);
       if (trafficSource) {
@@ -703,7 +703,7 @@ class AtomiCatDomainPurchase {
     }
     
     try {
-      const phoneNumber = config.WHATSAPP_PHONE_NUMBER;
+      const phoneNumber = config.WHATSAPP_PHONE_NUMBER || '5531999999999';
       
       // Data e hora formatadas separadamente (igual WordPress)
       const agora = new Date();
@@ -737,36 +737,16 @@ class AtomiCatDomainPurchase {
           `🗓️Data: ${dataFormatada} ás ${horaFormatada}`;
       }
       
-      console.log(`📱 [WHATSAPP-ATOMICAT] Enviando para: ${phoneNumber}`);
-      console.log(`   Mensagem: ${message.substring(0, 50)}...`);
-      const zapiUrl = config.ZAPI_INSTANCE;
-      
-      console.log(`🌐 [WHATSAPP-ATOMICAT] URL: ${zapiUrl}`);
-      
-      const response = await axios.post(
-        zapiUrl,
-        { 
-          phone: phoneNumber.replace(/\D/g, ''), 
-          message: message 
-        },
-        { 
-          timeout: 10000,
-          headers: {
-            'Client-Token': config.ZAPI_CLIENT_TOKEN,
-            'Content-Type': 'application/json'
-          }
-        }
+      await axios.post(
+        `https://api.z-api.io/instances/${config.ZAPI_INSTANCE}/token/${config.ZAPI_CLIENT_TOKEN}/send-text`,
+        { phone: phoneNumber.replace(/\D/g, ''), message: message },
+        { timeout: 10000 }
       );
       
-      console.log('✅ [WHATSAPP-ATOMICAT] Notificação enviada com sucesso');
-      console.log(`   Response:`, JSON.stringify(response.data, null, 2));
+      console.log('✅ [WHATSAPP-ATOMICAT] Notificação enviada');
       
     } catch (error) {
-      console.error('❌ [WHATSAPP-ATOMICAT] Erro ao enviar:', error.message);
-      if (error.response) {
-        console.error('   Status:', error.response.status);
-        console.error('   Data:', JSON.stringify(error.response.data, null, 2));
-      }
+      console.error('❌ [WHATSAPP-ATOMICAT] Erro:', error.message);
     }
   }
 
