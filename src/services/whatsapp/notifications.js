@@ -25,6 +25,51 @@ class NotificationService {
   }
 
   /**
+   * Formata dias da semana para exibição
+   * @param {array} days - Array de dias (ex: ['segunda', 'terca', 'quarta'])
+   * @returns {string} - Dias formatados (ex: "Segunda, Terça e Quarta")
+   */
+  formatDays(days) {
+    if (!days || days.length === 0) return 'Não configurado';
+    
+    const dayNames = {
+      'segunda': 'Segunda',
+      'terca': 'Terça',
+      'quarta': 'Quarta',
+      'quinta': 'Quinta',
+      'sexta': 'Sexta',
+      'sabado': 'Sábado',
+      'domingo': 'Domingo'
+    };
+    
+    if (days.length === 1) {
+      return `Toda ${dayNames[days[0]]}`;
+    }
+    
+    if (days.length === 5 && 
+        days.includes('segunda') && 
+        days.includes('terca') && 
+        days.includes('quarta') && 
+        days.includes('quinta') && 
+        days.includes('sexta')) {
+      return 'Dias úteis (Segunda a Sexta)';
+    }
+    
+    if (days.length === 7) {
+      return 'Todos os dias';
+    }
+    
+    const formatted = days.map(d => dayNames[d]);
+    
+    if (formatted.length === 2) {
+      return `Toda ${formatted[0]} e ${formatted[1]}`;
+    }
+    
+    const last = formatted.pop();
+    return `Toda ${formatted.join(', ')} e ${last}`;
+  }
+
+  /**
    * Busca configurações de notificação de um usuário
    * @param {string} userId - ID do usuário
    * @returns {Promise<object>}
@@ -64,18 +109,18 @@ class NotificationService {
   async getCriticalDomainsStats(userId) {
     try {
       // Buscar domínios suspensos
-      const { data: suspended, error: suspendedError } = await this.client
+      const { count: suspended, error: suspendedError } = await this.client
         .from('domains')
-        .select('id', { count: 'exact', head: true })
+        .select('*', { count: 'exact', head: true })
         .eq('user_id', userId)
         .eq('status', 'suspended');
 
       if (suspendedError) throw suspendedError;
 
       // Buscar domínios expirados
-      const { data: expired, error: expiredError } = await this.client
+      const { count: expired, error: expiredError } = await this.client
         .from('domains')
-        .select('id', { count: 'exact', head: true })
+        .select('*', { count: 'exact', head: true })
         .eq('user_id', userId)
         .eq('status', 'expired');
 
@@ -85,9 +130,9 @@ class NotificationService {
       const fifteenDaysFromNow = new Date();
       fifteenDaysFromNow.setDate(fifteenDaysFromNow.getDate() + 15);
 
-      const { data: expiringSoon, error: expiringSoonError } = await this.client
+      const { count: expiringSoon, error: expiringSoonError } = await this.client
         .from('domains')
-        .select('id', { count: 'exact', head: true })
+        .select('*', { count: 'exact', head: true })
         .eq('user_id', userId)
         .eq('status', 'active')
         .lte('expiration_date', fifteenDaysFromNow.toISOString())
@@ -351,8 +396,9 @@ class NotificationService {
    */
   async sendTestAlert(userId) {
     try {
-      console.log('🧪 [TEST] Iniciando alerta de teste');
+      console.log('🧪 [TEST] Iniciando mensagem de verificação');
 
+      // Buscar perfil do usuário
       const { data: profile, error: profileError } = await this.client
         .from('profiles')
         .select('full_name, whatsapp_number')
@@ -364,7 +410,6 @@ class NotificationService {
         throw profileError;
       }
 
-      // Extrair primeiro nome para logs
       const firstName = whatsappService.getFirstName(profile.full_name);
       console.log('✅ [TEST] Perfil encontrado:', firstName);
 
@@ -372,40 +417,48 @@ class NotificationService {
         throw new Error('Usuário não tem número de WhatsApp cadastrado');
       }
 
-      // Buscar domínios críticos
-      const { data: domains, error: domainsError } = await this.client
-        .from('domains')
-        .select('*')
+      // Buscar configurações de notificação (para recorrência)
+      const { data: settings, error: settingsError } = await this.client
+        .from('notification_settings')
+        .select('notification_days, notification_interval_hours')
         .eq('user_id', userId)
-        .in('status', ['suspended', 'expired'])
-        .order('expiration_date', { ascending: true });
+        .maybeSingle();
 
-      if (domainsError) {
-        console.error('❌ [TEST] Erro ao buscar domínios:', domainsError.message);
-        throw domainsError;
+      if (settingsError && settingsError.code !== 'PGRST116') {
+        console.error('❌ [TEST] Erro ao buscar configurações:', settingsError.message);
       }
 
-      console.log(`📊 [TEST] Domínios críticos: ${domains?.length || 0}`);
+      // Buscar estatísticas de domínios
+      const stats = await this.getCriticalDomainsStats(userId);
+
+      console.log(`📊 [TEST] Domínios: ${stats.suspended} suspensos, ${stats.expired} expirados, ${stats.expiringSoon} expirando`);
 
       // Se não tem domínios críticos
-      if (!domains || domains.length === 0) {
-        const testMessage = `🤖 *DOMAIN HUB - Teste de Notificação*
+      if (stats.suspended === 0 && stats.expired === 0 && stats.expiringSoon === 0) {
+        const testMessage = `🤖 *DOMAIN HUB*
 
-Olá ${firstName}! 👋
+⚠️ *MENSAGEM DE VERIFICAÇÃO*
 
-✅ *Número WhatsApp configurado com sucesso!*
+${firstName}! Esta é uma mensagem de verificação.
 
-Você receberá alertas automáticos quando:
-• 🔴 Domínios forem suspensos
-• 🟠 Domínios expirarem
-• 🟡 Domínios estiverem próximos do vencimento
+✅ *Configuração concluída com sucesso!*
 
 *Ótima notícia:* Você não tem domínios com problemas no momento! 🎉
 
 📊 Status atual: Todos os domínios OK
 
-_Sistema ativo e monitorando 24/7_
-🕒 ${new Date().toLocaleString('pt-BR')}`;
+━━━━━━━━━━━━━━━━━━━━━
+
+📋 *Configuração da recorrência:*
+
+${settings && settings.notification_days && settings.notification_days.length > 0 
+  ? this.formatDays(settings.notification_days) 
+  : 'Não configurado'}
+A cada ${settings?.notification_interval_hours || 6} hora${(settings?.notification_interval_hours || 6) > 1 ? 's' : ''}
+
+━━━━━━━━━━━━━━━━━━━━━
+
+_Sistema ativo e monitorando 24/7_`;
 
         console.log('📤 [TEST] Enviando mensagem (sem domínios críticos)');
         const result = await whatsappService.sendMessage(profile.whatsapp_number, testMessage);
@@ -422,49 +475,61 @@ _Sistema ativo e monitorando 24/7_
           alertsSent: 0,
           suspended: 0,
           expired: 0,
-          message: 'Teste enviado - Nenhum domínio crítico'
+          expiringSoon: 0,
+          message: 'Verificação enviada - Nenhum domínio crítico'
         };
       }
 
-      // Separar por status
-      const suspended = domains.filter(d => d.status === 'suspended');
-      const expired = domains.filter(d => d.status === 'expired');
+      // Gerar mensagem formatada com domínios críticos
+      let message = `🤖 *DOMAIN HUB*
 
-      console.log(`📊 [TEST] Suspensos: ${suspended.length}, Expirados: ${expired.length}`);
+⚠️ *MENSAGEM DE VERIFICAÇÃO*
 
-      // Gerar mensagem formatada
-      let message = `🤖 *DOMAIN HUB*\n\n⚠️ *ALERTA DE TESTE*\n\n${firstName}! Esta é uma mensagem de teste.\n\nVocê tem domínios que precisam de atenção:\n\n`;
+${firstName}! Esta é uma mensagem de verificação.
 
-      if (suspended.length > 0) {
-        message += `🔴 *${suspended.length} Domínio${suspended.length > 1 ? 's' : ''} Suspenso${suspended.length > 1 ? 's' : ''}:*\n`;
-        suspended.slice(0, 5).forEach(d => {
-          message += `• ${d.domain_name}\n`;
-        });
-        if (suspended.length > 5) {
-          message += `  ... e mais ${suspended.length - 5}\n`;
-        }
-        message += `\n`;
+Você tem domínios que precisam de atenção:
+
+`;
+
+      // Adicionar contadores sem listar domínios
+      if (stats.suspended > 0) {
+        message += `🔴 *${stats.suspended} Domínio${stats.suspended > 1 ? 's' : ''} Suspenso${stats.suspended > 1 ? 's' : ''}*\n`;
       }
 
-      if (expired.length > 0) {
-        message += `🟠 *${expired.length} Domínio${expired.length > 1 ? 's' : ''} Expirado${expired.length > 1 ? 's' : ''}:*\n`;
-        expired.slice(0, 5).forEach(d => {
-          message += `• ${d.domain_name}\n`;
-        });
-        if (expired.length > 5) {
-          message += `  ... e mais ${expired.length - 5}\n`;
-        }
-        message += `\n`;
+      if (stats.expired > 0) {
+        message += `🟠 *${stats.expired} Domínio${stats.expired > 1 ? 's' : ''} Expirado${stats.expired > 1 ? 's' : ''}*\n`;
       }
 
-      message += `⚠️ *Possíveis Consequências:*\n`;
-      message += `• Sites offline\n`;
-      message += `• E-mails bloqueados\n`;
-      message += `• Perda de acesso ao painel\n\n`;
-      message += `👉 *Ação Necessária:*\n`;
-      message += `Acesse o painel Domain Hub para resolver!\n\n`;
-      message += `_Notificação de teste enviada com sucesso ✅_\n`;
-      message += `🕒 ${new Date().toLocaleString('pt-BR')}`;
+      if (stats.expiringSoon > 0) {
+        message += `🟡 *${stats.expiringSoon} Domínio${stats.expiringSoon > 1 ? 's' : ''} Expira${stats.expiringSoon > 1 ? 'ndo' : ''} em 15 dias*\n`;
+      }
+
+      message += `
+━━━━━━━━━━━━━━━━━━━━━
+
+⚠️ *Possíveis Consequências:*
+
+• Sites offline
+• E-mails bloqueados
+• Perda de acesso ao painel
+
+━━━━━━━━━━━━━━━━━━━━━
+
+👉 *Ação Necessária:*
+Acesse o painel Domain Hub para resolver!
+
+━━━━━━━━━━━━━━━━━━━━━
+
+📋 *Configuração da recorrência:*
+
+${settings && settings.notification_days && settings.notification_days.length > 0 
+  ? this.formatDays(settings.notification_days) 
+  : 'Não configurado'}
+A cada ${settings?.notification_interval_hours || 6} hora${(settings?.notification_interval_hours || 6) > 1 ? 's' : ''}
+
+━━━━━━━━━━━━━━━━━━━━━
+
+_Sistema ativo e monitorando 24/7_`;
 
       console.log('📤 [TEST] Enviando mensagem com alertas');
       const result = await whatsappService.sendMessage(profile.whatsapp_number, message);
@@ -474,13 +539,14 @@ _Sistema ativo e monitorando 24/7_
         throw new Error(result.error || 'Erro desconhecido ao enviar mensagem');
       }
 
-      console.log(`✅ [TEST] Alerta enviado: ${domains.length} domínios`);
+      console.log(`✅ [TEST] Alerta enviado: ${stats.suspended + stats.expired + stats.expiringSoon} domínios`);
 
       return {
         phoneNumber: whatsappService.maskPhone(profile.whatsapp_number),
-        alertsSent: domains.length,
-        suspended: suspended.length,
-        expired: expired.length
+        alertsSent: stats.suspended + stats.expired + stats.expiringSoon,
+        suspended: stats.suspended,
+        expired: stats.expired,
+        expiringSoon: stats.expiringSoon
       };
 
     } catch (error) {
