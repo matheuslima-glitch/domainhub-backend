@@ -3,7 +3,27 @@ const config = require('../../config/env');
 
 class WhatsAppService {
   constructor() {
-    this.baseURL = `https://api.z-api.io/instances/${config.ZAPI_INSTANCE}/token/${config.ZAPI_CLIENT_TOKEN}`;
+    // Detectar formato das variáveis ZAPI
+    if (config.ZAPI_INSTANCE && config.ZAPI_INSTANCE.includes('http')) {
+      // Formato customizado: ZAPI_INSTANCE é uma URL completa
+      // Exemplo: https://api.z-api.io/instances/XXX/token/YYY/send-text
+      
+      // Extrair a base URL até /token/XXX (remover tudo depois do primeiro /token/...)
+      const parts = config.ZAPI_INSTANCE.split('/token/');
+      const baseWithInstance = parts[0]; // https://api.z-api.io/instances/XXX
+      
+      // Reconstruir URL com o token correto
+      this.baseURL = `${baseWithInstance}/token/${config.ZAPI_CLIENT_TOKEN}`;
+      
+      console.log('🔧 [ZAPI] Modo: URL Customizada');
+      console.log('🔗 [ZAPI] Base URL configurada:', this.baseURL.replace(/token\/[^/]+/, 'token/***'));
+    } else {
+      // Formato padrão: ZAPI_INSTANCE é apenas o ID
+      this.baseURL = `https://api.z-api.io/instances/${config.ZAPI_INSTANCE}/token/${config.ZAPI_CLIENT_TOKEN}`;
+      
+      console.log('🔧 [ZAPI] Modo: ID Padrão');
+      console.log('🔗 [ZAPI] Base URL configurada:', this.baseURL.replace(/token\/[^/]+/, 'token/***'));
+    }
   }
 
   /**
@@ -16,10 +36,12 @@ class WhatsAppService {
       // Remove caracteres especiais
       const cleanNumber = phoneNumber.replace(/\D/g, '');
       
-      console.log('🔍 [ZAPI] Verificando número:', cleanNumber);
-      console.log('🔗 [ZAPI] URL:', `${this.baseURL}/phone-exists`);
+      const url = `${this.baseURL}/phone-exists`;
       
-      const response = await axios.get(`${this.baseURL}/phone-exists`, {
+      console.log('🔍 [ZAPI] Verificando número:', cleanNumber);
+      console.log('🔗 [ZAPI] Endpoint:', url.replace(/token\/[^/]+/, 'token/***'));
+      
+      const response = await axios.get(url, {
         params: {
           phone: cleanNumber
         }
