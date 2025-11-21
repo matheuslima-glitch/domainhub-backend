@@ -17,6 +17,14 @@ class NotificationService {
   }
 
   /**
+   * Mascara dados sensíveis para logs
+   */
+  maskSensitiveData(data) {
+    if (!data) return '***';
+    return data.substring(0, 3) + '***' + data.substring(data.length - 3);
+  }
+
+  /**
    * Busca configurações de notificação de um usuário
    * @param {string} userId - ID do usuário
    * @returns {Promise<object>}
@@ -93,7 +101,7 @@ class NotificationService {
         expiringSoon: expiringSoon || 0
       };
     } catch (error) {
-      console.error('Erro ao buscar estatísticas de domínios críticos:', error.message);
+      console.error('❌ [NOTIF] Erro ao buscar estatísticas:', error.message);
       return {
         suspended: 0,
         expired: 0,
@@ -128,8 +136,8 @@ class NotificationService {
 
       return hoursDiff >= intervalHours;
     } catch (error) {
-      console.error('Erro ao verificar última notificação:', error.message);
-      return true; // Em caso de erro, permite envio
+      console.error('❌ [NOTIF] Erro ao verificar intervalo:', error.message);
+      return true;
     }
   }
 
@@ -145,7 +153,7 @@ class NotificationService {
       .eq('user_id', userId);
 
     if (error) {
-      console.error('Erro ao atualizar última notificação:', error.message);
+      console.error('❌ [NOTIF] Erro ao atualizar timestamp:', error.message);
     }
   }
 
@@ -168,10 +176,10 @@ class NotificationService {
         });
 
       if (error) {
-        console.error('Erro ao registrar log de notificação:', error.message);
+        console.error('❌ [NOTIF] Erro ao registrar log:', error.message);
       }
     } catch (error) {
-      console.error('Erro ao registrar log:', error.message);
+      console.error('❌ [NOTIF] Erro ao registrar log:', error.message);
     }
   }
 
@@ -183,10 +191,8 @@ class NotificationService {
    */
   async sendSuspendedDomainAlert(userId, domainName) {
     try {
-      // Buscar configurações de notificação
       const settings = await this.getNotificationSettings(userId);
       
-      // Verificar se notificações de suspensos estão ativas
       if (!settings || !settings.alert_suspended) {
         return {
           success: false,
@@ -194,7 +200,6 @@ class NotificationService {
         };
       }
 
-      // Buscar perfil do usuário - CORRIGIDO: era getUserProfile sem this
       const profile = await this.getUserProfile(userId);
       
       if (!profile.whatsapp_number) {
@@ -204,14 +209,12 @@ class NotificationService {
         };
       }
 
-      // Enviar alerta
       const result = await whatsappService.sendSuspendedDomainAlert(
         profile.whatsapp_number,
         domainName,
         profile.full_name || 'Cliente'
       );
 
-      // Registrar log
       if (result.success) {
         await this.logNotification(userId, 'suspended_domain_alert', {
           domain_name: domainName
@@ -220,7 +223,7 @@ class NotificationService {
 
       return result;
     } catch (error) {
-      console.error('Erro ao enviar alerta de domínio suspenso:', error.message);
+      console.error('❌ [NOTIF] Erro ao enviar alerta de suspenso:', error.message);
       return {
         success: false,
         error: error.message
@@ -236,10 +239,8 @@ class NotificationService {
    */
   async sendExpiredDomainAlert(userId, domainName) {
     try {
-      // Buscar configurações de notificação
       const settings = await this.getNotificationSettings(userId);
       
-      // Verificar se notificações de expirados estão ativas
       if (!settings || !settings.alert_expired) {
         return {
           success: false,
@@ -247,7 +248,6 @@ class NotificationService {
         };
       }
 
-      // Buscar perfil do usuário
       const profile = await this.getUserProfile(userId);
       
       if (!profile.whatsapp_number) {
@@ -257,14 +257,12 @@ class NotificationService {
         };
       }
 
-      // Enviar alerta
       const result = await whatsappService.sendExpiredDomainAlert(
         profile.whatsapp_number,
         domainName,
         profile.full_name || 'Cliente'
       );
 
-      // Registrar log
       if (result.success) {
         await this.logNotification(userId, 'expired_domain_alert', {
           domain_name: domainName
@@ -273,7 +271,7 @@ class NotificationService {
 
       return result;
     } catch (error) {
-      console.error('Erro ao enviar alerta de domínio expirado:', error.message);
+      console.error('❌ [NOTIF] Erro ao enviar alerta de expirado:', error.message);
       return {
         success: false,
         error: error.message
@@ -288,7 +286,6 @@ class NotificationService {
    */
   async sendCriticalDomainsReport(userId) {
     try {
-      // Buscar configurações de notificação
       const settings = await this.getNotificationSettings(userId);
       
       if (!settings) {
@@ -298,7 +295,6 @@ class NotificationService {
         };
       }
 
-      // Buscar perfil do usuário
       const profile = await this.getUserProfile(userId);
       
       if (!profile.whatsapp_number) {
@@ -308,7 +304,6 @@ class NotificationService {
         };
       }
 
-      // Verificar intervalo de notificações
       const intervalHours = settings.notification_interval_hours || 6;
       const shouldSend = await this.shouldSendNotification(userId, intervalHours);
 
@@ -319,10 +314,8 @@ class NotificationService {
         };
       }
 
-      // Buscar estatísticas
       const stats = await this.getCriticalDomainsStats(userId);
 
-      // Verificar se há domínios críticos para reportar
       if (stats.suspended === 0 && stats.expired === 0 && stats.expiringSoon === 0) {
         return {
           success: false,
@@ -330,14 +323,12 @@ class NotificationService {
         };
       }
 
-      // Enviar relatório
       const result = await whatsappService.sendCriticalDomainsReport(
         profile.whatsapp_number,
         profile.full_name || 'Cliente',
         stats
       );
 
-      // Atualizar timestamp da última notificação
       if (result.success) {
         await this.updateLastNotificationSent(userId);
         await this.logNotification(userId, 'critical_domains_report', stats);
@@ -345,7 +336,7 @@ class NotificationService {
 
       return result;
     } catch (error) {
-      console.error('Erro ao enviar relatório de domínios críticos:', error.message);
+      console.error('❌ [NOTIF] Erro ao enviar relatório:', error.message);
       return {
         success: false,
         error: error.message
@@ -360,9 +351,8 @@ class NotificationService {
    */
   async sendTestAlert(userId) {
     try {
-      console.log('🧪 [TEST] Enviando alerta de teste para:', userId);
+      console.log('🧪 [TEST] Iniciando alerta de teste');
 
-      // Buscar dados do usuário
       const { data: profile, error: profileError } = await this.client
         .from('profiles')
         .select('full_name, whatsapp_number')
@@ -374,8 +364,9 @@ class NotificationService {
         throw profileError;
       }
 
-      console.log('✅ [TEST] Perfil encontrado:', profile.full_name);
-      console.log('✅ [TEST] WhatsApp:', profile.whatsapp_number);
+      // Extrair primeiro nome para logs
+      const firstName = whatsappService.getFirstName(profile.full_name);
+      console.log('✅ [TEST] Perfil encontrado:', firstName);
 
       if (!profile.whatsapp_number) {
         throw new Error('Usuário não tem número de WhatsApp cadastrado');
@@ -394,13 +385,13 @@ class NotificationService {
         throw domainsError;
       }
 
-      console.log(`📊 [TEST] Domínios críticos encontrados: ${domains?.length || 0}`);
+      console.log(`📊 [TEST] Domínios críticos: ${domains?.length || 0}`);
 
-      // Se não tem domínios críticos, enviar mensagem de sucesso
+      // Se não tem domínios críticos
       if (!domains || domains.length === 0) {
         const testMessage = `🤖 *DOMAIN HUB - Teste de Notificação*
 
-Olá ${profile.full_name || ''}! 👋
+Olá ${firstName}! 👋
 
 ✅ *Número WhatsApp configurado com sucesso!*
 
@@ -416,18 +407,18 @@ Você receberá alertas automáticos quando:
 _Sistema ativo e monitorando 24/7_
 🕒 ${new Date().toLocaleString('pt-BR')}`;
 
-        console.log('📤 [TEST] Enviando mensagem de teste (sem domínios críticos)...');
+        console.log('📤 [TEST] Enviando mensagem (sem domínios críticos)');
         const result = await whatsappService.sendMessage(profile.whatsapp_number, testMessage);
         
         if (!result.success) {
-          console.error('❌ [TEST] Falha ao enviar mensagem:', result.error);
+          console.error('❌ [TEST] Falha ao enviar:', result.error);
           throw new Error(result.error);
         }
 
-        console.log('✅ [TEST] Mensagem de teste enviada com sucesso');
+        console.log('✅ [TEST] Mensagem enviada com sucesso');
 
         return {
-          phoneNumber: profile.whatsapp_number,
+          phoneNumber: whatsappService.maskPhone(profile.whatsapp_number),
           alertsSent: 0,
           suspended: 0,
           expired: 0,
@@ -442,7 +433,7 @@ _Sistema ativo e monitorando 24/7_
       console.log(`📊 [TEST] Suspensos: ${suspended.length}, Expirados: ${expired.length}`);
 
       // Gerar mensagem formatada
-      let message = `🤖 *DOMAIN HUB*\n\n⚠️ *ALERTA DE TESTE*\n\n${profile.full_name || 'Olá'}! Esta é uma mensagem de teste.\n\nVocê tem domínios que precisam de atenção:\n\n`;
+      let message = `🤖 *DOMAIN HUB*\n\n⚠️ *ALERTA DE TESTE*\n\n${firstName}! Esta é uma mensagem de teste.\n\nVocê tem domínios que precisam de atenção:\n\n`;
 
       if (suspended.length > 0) {
         message += `🔴 *${suspended.length} Domínio${suspended.length > 1 ? 's' : ''} Suspenso${suspended.length > 1 ? 's' : ''}:*\n`;
@@ -475,26 +466,25 @@ _Sistema ativo e monitorando 24/7_
       message += `_Notificação de teste enviada com sucesso ✅_\n`;
       message += `🕒 ${new Date().toLocaleString('pt-BR')}`;
 
-      console.log('📤 [TEST] Enviando mensagem com alertas...');
+      console.log('📤 [TEST] Enviando mensagem com alertas');
       const result = await whatsappService.sendMessage(profile.whatsapp_number, message);
       
       if (!result.success) {
-        console.error('❌ [TEST] Falha ao enviar mensagem:', result.error);
+        console.error('❌ [TEST] Falha ao enviar:', result.error);
         throw new Error(result.error || 'Erro desconhecido ao enviar mensagem');
       }
 
-      console.log(`✅ [TEST] Alerta de teste enviado com sucesso: ${domains.length} domínios`);
+      console.log(`✅ [TEST] Alerta enviado: ${domains.length} domínios`);
 
       return {
-        phoneNumber: profile.whatsapp_number,
+        phoneNumber: whatsappService.maskPhone(profile.whatsapp_number),
         alertsSent: domains.length,
         suspended: suspended.length,
         expired: expired.length
       };
 
     } catch (error) {
-      console.error('❌ [TEST] Erro ao enviar alerta de teste:', error.message);
-      console.error('❌ [TEST] Stack:', error.stack);
+      console.error('❌ [TEST] Erro:', error.message);
       throw error;
     }
   }
