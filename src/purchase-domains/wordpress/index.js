@@ -84,10 +84,6 @@ class WordPressDomainPurchase {
         domainsToRegister.push(domainManual);
         successCount = 1;
         
-        // ✅ ATUALIZAÇÃO CRÍTICA: Notificar frontend que o domínio foi comprado
-        await this.updateProgress(sessionId, 'purchasing', 'completed', 
-          `Domínio ${domainManual} comprado com sucesso!`, domainManual);
-        
         // Processar todas as configurações com fonte de tráfego
         await this.processPostPurchase(domainManual, userId, sessionId, trafficSource);
       } else {
@@ -153,10 +149,6 @@ class WordPressDomainPurchase {
               domain = generatedDomain;
               domainsToRegister.push(domain);
               successCount++;
-              
-              // ✅ ATUALIZAÇÃO CRÍTICA: Notificar frontend que este domínio foi comprado
-              await this.updateProgress(sessionId, 'purchasing', 'completed', 
-                `Domínio ${generatedDomain} comprado com sucesso!`, generatedDomain);
               
               // Processar todas as configurações
               await this.processPostPurchase(domain, userId, sessionId, trafficSource);
@@ -471,32 +463,32 @@ class WordPressDomainPurchase {
       
       // 1. Configurar Cloudflare
       await this.updateProgress(sessionId, 'cloudflare', 'in_progress', 
-        `Configurando Cloudflare para ${domain}...`);
+        `Configurando Cloudflare para ${domain}...`, domain);
       cloudflareSetup = await this.setupCloudflare(domain);
       
       if (cloudflareSetup) {
         // 2. Alterar nameservers
         await this.updateProgress(sessionId, 'nameservers', 'in_progress', 
-          `Alterando nameservers de ${domain}...`);
+          `Alterando nameservers de ${domain}...`, domain);
         await this.setNameservers(domain, cloudflareSetup.nameservers);
       }
       
       // 3. Adicionar ao cPanel
       console.log(`🖥️ [CPANEL] Adicionando domínio ao cPanel...`);
       await this.updateProgress(sessionId, 'cpanel', 'in_progress', 
-        `Adicionando ${domain} ao cPanel...`);
+        `Adicionando ${domain} ao cPanel...`, domain);
       await this.addDomainToCPanel(domain);
       
       // 4. Instalar WordPress
       console.log(`🌐 [WORDPRESS] Instalando WordPress...`);
       await this.updateProgress(sessionId, 'wordpress', 'in_progress', 
-        `Instalando WordPress em ${domain}...`);
+        `Instalando WordPress em ${domain}...`, domain);
       await this.installWordPress(domain);
       
       // 5. Salvar no Supabase com fonte de tráfego
       console.log(`💾 [SUPABASE] Salvando domínio no banco de dados...`);
       await this.updateProgress(sessionId, 'supabase', 'in_progress', 
-        `Salvando informações de ${domain}...`);
+        `Salvando informações de ${domain}...`, domain);
       const savedDomain = await this.saveDomainToSupabase(domain, userId, cloudflareSetup, trafficSource);
       
       // 6. Registrar log

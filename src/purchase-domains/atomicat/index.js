@@ -81,12 +81,8 @@ class AtomiCatDomainPurchase {
         domainsToRegister.push(domainManual);
         successCount = 1;
         
-        // ✅ ATUALIZAÇÃO CRÍTICA: Notificar frontend que o domínio foi comprado
-        await this.updateProgress(sessionId, 'purchasing', 'completed', 
-          `Domínio ${domainManual} comprado com sucesso!`, domainManual);
-        
-        // Processar pós-compra com fonte de tráfego
-        await this.processPostPurchase(domainManual, userId, trafficSource);
+        // Processar pós-compra com fonte de tráfego e sessionId
+        await this.processPostPurchase(domainManual, userId, sessionId, trafficSource);
       } else {
         await this.updateProgress(sessionId, 'error', 'error', 
           `Erro na compra: ${purchaseResult.error}`);
@@ -150,12 +146,8 @@ class AtomiCatDomainPurchase {
               console.log(`✅ [ATOMICAT] Domínio comprado: ${domain}`);
               console.log(`   ⚠️ Cloudflare e WordPress NÃO configurados (modo AtomiCat)`);
               
-              // ✅ ATUALIZAÇÃO CRÍTICA: Notificar frontend que este domínio foi comprado
-              await this.updateProgress(sessionId, 'purchasing', 'completed', 
-                `Domínio ${generatedDomain} comprado com sucesso!`, generatedDomain);
-              
-              // Processar pós-compra
-              await this.processPostPurchase(domain, userId);
+              // Processar pós-compra com sessionId
+              await this.processPostPurchase(domain, userId, sessionId);
               
             } else {
               console.error(`❌ Erro na compra: ${purchaseResult.error}`);
@@ -224,7 +216,7 @@ class AtomiCatDomainPurchase {
    * - Salvar log de atividade
    * - Enviar notificação WhatsApp
    */
-  async processPostPurchase(domain, userId, trafficSource = null) {
+  async processPostPurchase(domain, userId, sessionId = null, trafficSource = null) {
     try {
       console.log(`🔧 [POST-PURCHASE-ATOMICAT] Iniciando para ${domain}`);
       if (trafficSource) {
