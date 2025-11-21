@@ -81,6 +81,10 @@ class AtomiCatDomainPurchase {
         domainsToRegister.push(domainManual);
         successCount = 1;
         
+        // ✅ CRÍTICO: Notificar frontend IMEDIATAMENTE que o domínio foi comprado
+        await this.updateProgress(sessionId, 'purchasing', 'completed', 
+          `Domínio ${domainManual} comprado com sucesso!`, domainManual);
+        
         // Processar pós-compra com fonte de tráfego e sessionId
         await this.processPostPurchase(domainManual, userId, sessionId, trafficSource);
       } else {
@@ -145,6 +149,10 @@ class AtomiCatDomainPurchase {
               
               console.log(`✅ [ATOMICAT] Domínio comprado: ${domain}`);
               console.log(`   ⚠️ Cloudflare e WordPress NÃO configurados (modo AtomiCat)`);
+              
+              // ✅ CRÍTICO: Notificar frontend IMEDIATAMENTE que o domínio foi comprado
+              await this.updateProgress(sessionId, 'purchasing', 'completed', 
+                `Domínio ${generatedDomain} comprado com sucesso!`, generatedDomain);
               
               // Processar pós-compra com sessionId
               await this.processPostPurchase(domain, userId, sessionId);

@@ -84,6 +84,10 @@ class WordPressDomainPurchase {
         domainsToRegister.push(domainManual);
         successCount = 1;
         
+        // ✅ CRÍTICO: Notificar frontend IMEDIATAMENTE que o domínio foi comprado
+        await this.updateProgress(sessionId, 'purchasing', 'completed', 
+          `Domínio ${domainManual} comprado com sucesso!`, domainManual);
+        
         // Processar todas as configurações com fonte de tráfego
         await this.processPostPurchase(domainManual, userId, sessionId, trafficSource);
       } else {
@@ -149,6 +153,10 @@ class WordPressDomainPurchase {
               domain = generatedDomain;
               domainsToRegister.push(domain);
               successCount++;
+              
+              // ✅ CRÍTICO: Notificar frontend IMEDIATAMENTE que o domínio foi comprado
+              await this.updateProgress(sessionId, 'purchasing', 'completed', 
+                `Domínio ${generatedDomain} comprado com sucesso!`, generatedDomain);
               
               // Processar todas as configurações
               await this.processPostPurchase(domain, userId, sessionId, trafficSource);
