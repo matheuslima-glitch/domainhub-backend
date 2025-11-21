@@ -16,15 +16,27 @@ class WhatsAppService {
       // Remove caracteres especiais
       const cleanNumber = phoneNumber.replace(/\D/g, '');
       
+      console.log('🔍 [ZAPI] Verificando número:', cleanNumber);
+      console.log('🔗 [ZAPI] URL:', `${this.baseURL}/phone-exists`);
+      
       const response = await axios.get(`${this.baseURL}/phone-exists`, {
         params: {
           phone: cleanNumber
         }
       });
 
-      return response.data.exists === true;
+      console.log('📥 [ZAPI] Resposta:', JSON.stringify(response.data, null, 2));
+
+      const exists = response.data.exists === true;
+      console.log(`${exists ? '✅' : '❌'} [ZAPI] Número ${cleanNumber}: ${exists ? 'EXISTE' : 'NÃO EXISTE'}`);
+
+      return exists;
     } catch (error) {
-      console.error('Erro ao verificar número no WhatsApp:', error.message);
+      console.error('❌ [ZAPI] Erro ao verificar número:', error.message);
+      if (error.response) {
+        console.error('❌ [ZAPI] Status:', error.response.status);
+        console.error('❌ [ZAPI] Dados:', JSON.stringify(error.response.data, null, 2));
+      }
       throw error;
     }
   }

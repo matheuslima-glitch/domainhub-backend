@@ -11,13 +11,18 @@ router.post('/check-number', async (req, res, next) => {
   try {
     const { phoneNumber } = req.body;
 
+    console.log('📱 [WHATSAPP] Validando número:', phoneNumber);
+
     if (!phoneNumber) {
+      console.log('❌ [WHATSAPP] Número não fornecido');
       return res.status(400).json({
         error: 'Número de telefone é obrigatório'
       });
     }
 
     const exists = await whatsappService.checkPhoneNumber(phoneNumber);
+
+    console.log(`${exists ? '✅' : '❌'} [WHATSAPP] Número ${phoneNumber}: ${exists ? 'EXISTE' : 'NÃO EXISTE'}`);
 
     res.json({
       success: true,
@@ -28,6 +33,7 @@ router.post('/check-number', async (req, res, next) => {
         : 'Número não encontrado no WhatsApp'
     });
   } catch (error) {
+    console.error('❌ [WHATSAPP] Erro na validação:', error.message);
     next(error);
   }
 });
