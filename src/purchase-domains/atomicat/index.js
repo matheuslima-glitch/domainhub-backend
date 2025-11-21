@@ -228,8 +228,8 @@ class AtomiCatDomainPurchase {
       const savedDomain = await this.saveDomainToSupabase(domain, userId, namecheapInfo);
       
       // Salvar log de atividade
-      if (savedDomain?.domain_id) {
-        await this.saveActivityLog(savedDomain.domain_id, userId);
+      if (savedDomain?.id) {
+        await this.saveActivityLog(savedDomain.id, userId);
       }
       
       // Enviar notificação WhatsApp
@@ -634,12 +634,12 @@ class AtomiCatDomainPurchase {
         return null;
       }
       
-      console.log('✅ [SUPABASE-ATOMICAT] Domínio salvo');
+      console.log('✅ [SUPABASE-ATOMICAT] Domínio salvo com dados reais');
       
-      // Buscar domain_id
+      // Buscar id (não domain_id)
       const { data: domainData } = await supabase
         .from('domains')
-        .select('domain_id')
+        .select('id')
         .eq('domain_name', domain)
         .eq('user_id', userId || config.SUPABASE_USER_ID)
         .single();
@@ -685,32 +685,37 @@ class AtomiCatDomainPurchase {
     
     try {
       const phoneNumber = config.WHATSAPP_PHONE_NUMBER || '5531999999999';
+      
+      // Data e hora formatadas separadamente (igual WordPress)
+      const agora = new Date();
       const dataFormatada = new Intl.DateTimeFormat('pt-BR', {
         timeZone: 'America/Sao_Paulo',
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit',
         day: '2-digit',
         month: '2-digit',
         year: 'numeric'
-      }).format(new Date()).replace(', ', ' ');
+      }).format(agora);
       
+      const horaFormatada = new Intl.DateTimeFormat('pt-BR', {
+        timeZone: 'America/Sao_Paulo',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit'
+      }).format(agora);
+      
+      // NOVO FORMATO - IGUAL AO WORDPRESS
       let message;
       if (status === 'success') {
-        message = `🚀 *DOMÍNIO ATOMICAT COMPRADO!*\n\n` +
-          `📌 *Domínio:* ${domain}\n` +
-          `🎯 *Tipo:* AtomiCat (Genérico)\n` +
-          `🌐 *URL:* https://${domain}\n` +
-          `📅 *Data:* ${dataFormatada}\n` +
-          `✅ *Status:* Compra realizada\n\n` +
-          `⚠️ Cloudflare e WordPress NÃO configurados\n\n` +
-          `_Sistema DomainHub - AtomiCat_`;
+        message = `🤖 Domain Hub\n\n` +
+          `Lerricke, um novo domínio foi criado ✅:\n\n` +
+          `🌐Domínio: ${domain}\n` +
+          `🛜 Plataforma : AtomiCat\n` +
+          `📆Data: ${dataFormatada} ás ${horaFormatada}`;
       } else {
-        message = `❌ *ERRO ATOMICAT*\n\n` +
-          `📌 *Domínio:* ${domain}\n` +
-          `⚠️ *Erro:* ${errorMsg}\n` +
-          `📅 *Data:* ${dataFormatada}\n\n` +
-          `_Sistema DomainHub - AtomiCat_`;
+        message = `🤖 Domain Hub\n\n` +
+          `Lerricke, houve um erro ao criar o domínio ❌:\n\n` +
+          `🌐Domínio tentado: ${domain}\n` +
+          `❌Erro: ${errorMsg}\n` +
+          `📆Data: ${dataFormatada} ás ${horaFormatada}`;
       }
       
       await axios.post(
