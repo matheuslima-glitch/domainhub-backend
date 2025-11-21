@@ -780,7 +780,7 @@ class AtomiCatDomainPurchase {
   }
 
   /**
-   * CONSTRUIR PROMPT GENÉRICO PARA IA
+   * CONSTRUIR PROMPT PARA IA
    */
   buildGenericPrompt(nicho, idioma, isRetry) {
     const idiomaMap = {
