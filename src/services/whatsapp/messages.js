@@ -36,29 +36,81 @@ class WhatsAppService {
       // Remove caracteres especiais
       const cleanNumber = phoneNumber.replace(/\D/g, '');
       
-      const url = `${this.baseURL}/phone-exists`;
-      
       console.log('🔍 [ZAPI] Verificando número:', cleanNumber);
-      console.log('🔗 [ZAPI] Endpoint:', url.replace(/token\/[^/]+/, 'token/***'));
-      
-      const response = await axios.get(url, {
-        params: {
-          phone: cleanNumber
+
+      // Lista de endpoints possíveis da Z-API (tentar em ordem)
+      const endpoints = [
+        { method: 'GET', path: '/phone-exists', param: 'phone' },
+        { method: 'POST', path: '/check-phone-number', body: true },
+        { method: 'GET', path: '/check-number-status', param: 'phone' },
+        { method: 'POST', path: '/phone-exists', body: true },
+        { method: 'GET', path: '/phone', param: 'phone' }
+      ];
+
+      let lastError = null;
+
+      // Tentar cada endpoint até encontrar um que funcione
+      for (const endpoint of endpoints) {
+        try {
+          const url = `${this.baseURL}${endpoint.path}`;
+          console.log(`🔗 [ZAPI] Tentando: ${endpoint.method} ${url.replace(/token\/[^/]+/, 'token/***')}`);
+
+          let response;
+          
+          if (endpoint.method === 'GET') {
+            response = await axios.get(url, {
+              params: {
+                [endpoint.param]: cleanNumber
+              }
+            });
+          } else {
+            response = await axios.post(url, {
+              phone: cleanNumber
+            });
+          }
+
+          console.log('📥 [ZAPI] Resposta:', JSON.stringify(response.data, null, 2));
+
+          // Verificar diferentes formatos de resposta
+          let exists = false;
+          
+          if (response.data.exists !== undefined) {
+            exists = response.data.exists === true;
+          } else if (response.data.isRegistered !== undefined) {
+            exists = response.data.isRegistered === true;
+          } else if (response.data.registered !== undefined) {
+            exists = response.data.registered === true;
+          } else if (response.data.valid !== undefined) {
+            exists = response.data.valid === true;
+          } else if (response.data.status === 'valid' || response.data.status === 'registered') {
+            exists = true;
+          }
+
+          console.log(`✅ [ZAPI] Endpoint funcionou: ${endpoint.method} ${endpoint.path}`);
+          console.log(`${exists ? '✅' : '❌'} [ZAPI] Número ${cleanNumber}: ${exists ? 'EXISTE' : 'NÃO EXISTE'}`);
+
+          return exists;
+
+        } catch (error) {
+          console.log(`❌ [ZAPI] Falhou: ${endpoint.method} ${endpoint.path} - ${error.response?.status || error.message}`);
+          lastError = error;
+          // Continuar tentando próximo endpoint
+          continue;
         }
-      });
-
-      console.log('📥 [ZAPI] Resposta:', JSON.stringify(response.data, null, 2));
-
-      const exists = response.data.exists === true;
-      console.log(`${exists ? '✅' : '❌'} [ZAPI] Número ${cleanNumber}: ${exists ? 'EXISTE' : 'NÃO EXISTE'}`);
-
-      return exists;
-    } catch (error) {
-      console.error('❌ [ZAPI] Erro ao verificar número:', error.message);
-      if (error.response) {
-        console.error('❌ [ZAPI] Status:', error.response.status);
-        console.error('❌ [ZAPI] Dados:', JSON.stringify(error.response.data, null, 2));
       }
+
+      // Se chegou aqui, nenhum endpoint funcionou
+      console.error('❌ [ZAPI] Todos os endpoints falharam!');
+      console.error('❌ [ZAPI] Último erro:', lastError.message);
+      if (lastError.response) {
+        console.error('❌ [ZAPI] Status:', lastError.response.status);
+        console.error('❌ [ZAPI] Dados:', JSON.stringify(lastError.response.data, null, 2));
+      }
+      
+      throw new Error('Nenhum endpoint de validação da Z-API funcionou. Verifique suas credenciais.');
+
+    } catch (error) {
+      console.error('❌ [ZAPI] Erro fatal ao verificar número:', error.message);
       throw error;
     }
   }
