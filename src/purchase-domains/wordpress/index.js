@@ -1,5 +1,5 @@
 /**
- * COMPRA DE DOMÍNIOS WORDPRESS - VERSÃO CORRIGIDA
+ * COMPRA DE DOMÍNIOS WORDPRESS - MODULO PRINCIPAL
  */
 
 const axios = require('axios');
@@ -891,7 +891,7 @@ class WordPressDomainPurchase {
       // Adicionar domínio usando JSON API (não Perl API)
       console.log(`📝 [CPANEL] Adicionando novo domínio...`);
       
-      // CORREÇÃO CRÍTICA: Usar JSON API em vez de execute/AddonDomain
+
       const addResponse = await axios.post(
         `${config.CPANEL_URL}/json-api/cpanel`,
         null,
@@ -957,7 +957,7 @@ class WordPressDomainPurchase {
       // MÉTODO 1: Tentar via Softaculous JSON API
       console.log(`🔧 [WORDPRESS] Tentando instalação via Softaculous...`);
       try {
-        // CORREÇÃO CRÍTICA: Usar JSON API em vez de execute/Softaculous
+
         const response = await axios.post(
           `${config.CPANEL_URL}/json-api/cpanel`,
           null,
@@ -1184,7 +1184,6 @@ class WordPressDomainPurchase {
       
       console.log('✅ [SUPABASE] Domínio salvo com sucesso');
       
-      // CORREÇÃO: Buscar 'id' (não 'domain_id')
       const { data: domainData, error: fetchError } = await supabase
         .from('domains')
         .select('id')
@@ -1242,7 +1241,7 @@ class WordPressDomainPurchase {
   }
 
   /**
-   * NOTIFICAR WHATSAPP - VERSÃO CORRIGIDA
+   * NOTIFICAR WHATSAPP
    */
   async sendWhatsAppNotification(domain, status, errorMsg = '') {
     if (!config.ZAPI_INSTANCE || !config.ZAPI_CLIENT_TOKEN) {
@@ -1269,27 +1268,24 @@ class WordPressDomainPurchase {
         second: '2-digit'
       }).format(agora);
       
-      // NOVA FORMATAÇÃO conforme solicitado
+      // MENSAGEM
       let message;
       if (status === 'success') {
-        message = `🤖 Domain Hub\n\n` +
+        message = `🤖 *Domain Hub*\n\n` +
           `Lerricke, um novo domínio foi criado ✅:\n\n` +
           `🌐Domínio: ${domain}\n` +
           `🛜 Plataforma : Wordpress\n` +
-          `📆Data: ${dataFormatada} ás ${horaFormatada}`;
+          `🗓️Data: ${dataFormatada} ás ${horaFormatada}`;
       } else {
-        message = `🤖 Domain Hub\n\n` +
+        message = `🤖 *Domain Hub*\n\n` +
           `Lerricke, houve um erro ao criar o domínio ❌:\n\n` +
           `🌐Domínio tentado: ${domain}\n` +
           `❌Erro: ${errorMsg}\n` +
-          `📆Data: ${dataFormatada} ás ${horaFormatada}`;
+          `🗓️Data: ${dataFormatada} ás ${horaFormatada}`;
       }
       
       console.log(`📱 [WHATSAPP] Enviando para: ${phoneNumber}`);
       console.log(`   Mensagem: ${message.substring(0, 50)}...`);
-      
-      // CORREÇÃO CRÍTICA: Z-API já vem com /send-text na URL (igual N8N)
-      // No .env: ZAPI_INSTANCE=https://api.z-api.io/instances/XXX/token/YYY/send-text
       const zapiUrl = config.ZAPI_INSTANCE;
       
       console.log(`🌐 [WHATSAPP] URL: ${zapiUrl}`);

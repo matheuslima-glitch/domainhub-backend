@@ -411,7 +411,6 @@ class AtomiCatDomainPurchase {
       
       console.log(`📝 [NAMECHEAP-ATOMICAT] Enviando domínio completo: ${domain}`);
       
-      // CORREÇÃO CRÍTICA: Enviar domínio COMPLETO (como no N8N)
       const params = {
         ApiUser: config.NAMECHEAP_API_USER,
         ApiKey: config.NAMECHEAP_API_KEY,
@@ -702,20 +701,20 @@ class AtomiCatDomainPurchase {
         second: '2-digit'
       }).format(agora);
       
-      // NOVO FORMATO - IGUAL AO WORDPRESS
+      // MENSAGEM
       let message;
       if (status === 'success') {
-        message = `🤖 Domain Hub\n\n` +
+        message = `🤖 *Domain Hub*\n\n` +
           `Lerricke, um novo domínio foi criado ✅:\n\n` +
           `🌐Domínio: ${domain}\n` +
           `🛜 Plataforma : AtomiCat\n` +
-          `📆Data: ${dataFormatada} ás ${horaFormatada}`;
+          `🗓️Data: ${dataFormatada} ás ${horaFormatada}`;
       } else {
-        message = `🤖 Domain Hub\n\n` +
+        message = `🤖 *Domain Hub*\n\n` +
           `Lerricke, houve um erro ao criar o domínio ❌:\n\n` +
           `🌐Domínio tentado: ${domain}\n` +
           `❌Erro: ${errorMsg}\n` +
-          `📆Data: ${dataFormatada} ás ${horaFormatada}`;
+          `🗓️Data: ${dataFormatada} ás ${horaFormatada}`;
       }
       
       await axios.post(
