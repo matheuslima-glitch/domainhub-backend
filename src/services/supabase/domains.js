@@ -44,7 +44,7 @@ class SupabaseDomainsService {
 
     // Detectar mudança de status e enviar alertas imediatos
     if (previousDomain && previousDomain.status !== domainData.status) {
-      const notificationService = require('./whatsapp/notifications');
+      const notificationService = require('../whatsapp/notifications');
       
       // Alerta de domínio suspenso
       if (previousDomain.status === 'active' && domainData.status === 'suspended') {

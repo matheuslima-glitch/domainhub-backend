@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
-const whatsappService = require('../services/whatsapp/messages');
-const notificationService = require('../services/whatsapp/notifications');
+const whatsappService = require('../../services/whatsapp/messages');
+const notificationService = require('../../services/whatsapp/notifications');
 
 /**
  * POST /api/whatsapp/check-number
