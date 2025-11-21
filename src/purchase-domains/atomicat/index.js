@@ -42,11 +42,14 @@ class AtomiCatDomainPurchase {
    * FUNÇÃO PRINCIPAL - APENAS COMPRA (SEM CLOUDFLARE/WORDPRESS)
    */
   async purchaseDomain(params) {
-    const { quantidade, idioma, nicho, sessionId, domainManual, userId } = params;
+    const { quantidade, idioma, nicho, sessionId, domainManual, userId, trafficSource } = params;
     
     console.log(`🚀 [ATOMICAT] Iniciando compra`);
     console.log(`   Usuário: ${userId}`);
     console.log(`   Manual: ${domainManual ? 'SIM' : 'NÃO'}`);
+    if (trafficSource) {
+      console.log(`   Fonte de Tráfego: ${trafficSource}`);
+    }
     console.log(`   ⚠️ MODO ATOMICAT: Apenas compra (sem Cloudflare/WordPress)`);
     
     await this.updateProgress(sessionId, 'generating', 'in_progress', 'Iniciando processo AtomiCat...');
@@ -78,8 +81,8 @@ class AtomiCatDomainPurchase {
         domainsToRegister.push(domainManual);
         successCount = 1;
         
-        // Processar pós-compra
-        await this.processPostPurchase(domainManual, userId);
+        // Processar pós-compra com fonte de tráfego
+        await this.processPostPurchase(domainManual, userId, trafficSource);
       } else {
         await this.updateProgress(sessionId, 'error', 'error', 
           `Erro na compra: ${purchaseResult.error}`);
@@ -213,9 +216,12 @@ class AtomiCatDomainPurchase {
    * - Salvar log de atividade
    * - Enviar notificação WhatsApp
    */
-  async processPostPurchase(domain, userId) {
+  async processPostPurchase(domain, userId, trafficSource = null) {
     try {
       console.log(`🔧 [POST-PURCHASE-ATOMICAT] Iniciando para ${domain}`);
+      if (trafficSource) {
+        console.log(`   Fonte de Tráfego: ${trafficSource}`);
+      }
       
       // Aguardar 5 segundos para domínio ser processado na Namecheap
       console.log(`⏳ [POST-PURCHASE-ATOMICAT] Aguardando 5s para processar...`);
@@ -224,12 +230,12 @@ class AtomiCatDomainPurchase {
       // Buscar informações do domínio na Namecheap
       const namecheapInfo = await this.getDomainInfoFromNamecheap(domain);
       
-      // Salvar no Supabase com dados reais
-      const savedDomain = await this.saveDomainToSupabase(domain, userId, namecheapInfo);
+      // Salvar no Supabase com dados reais e fonte de tráfego
+      const savedDomain = await this.saveDomainToSupabase(domain, userId, namecheapInfo, trafficSource);
       
       // Salvar log de atividade
       if (savedDomain?.id) {
-        await this.saveActivityLog(savedDomain.id, userId);
+        await this.saveActivityLog(savedDomain.id, userId, trafficSource);
       }
       
       // Enviar notificação WhatsApp
@@ -594,7 +600,7 @@ class AtomiCatDomainPurchase {
    * SALVAR NO SUPABASE - VERSÃO MELHORADA
    * Usa informações REAIS da Namecheap
    */
-  async saveDomainToSupabase(domain, userId, namecheapInfo) {
+  async saveDomainToSupabase(domain, userId, namecheapInfo, trafficSource = null) {
     try {
       console.log(`💾 [SUPABASE-ATOMICAT] Salvando ${domain}...`);
       
@@ -626,6 +632,12 @@ class AtomiCatDomainPurchase {
         p_auto_renew: namecheapInfo?.auto_renew || false
       };
       
+      // Adicionar fonte de tráfego se fornecida
+      if (trafficSource) {
+        payload.p_traffic_source = trafficSource;
+        console.log(`   Fonte de Tráfego: ${trafficSource}`);
+      }
+      
       const { data, error } = await supabase.rpc('upsert_domain_stats', payload);
       
       if (error) {
@@ -654,8 +666,13 @@ class AtomiCatDomainPurchase {
   /**
    * REGISTRAR LOG DE ATIVIDADE
    */
-  async saveActivityLog(domainId, userId) {
+  async saveActivityLog(domainId, userId, trafficSource = null) {
     try {
+      let newValue = 'Domínio comprado com IA - AtomiCat (sem WordPress)';
+      if (trafficSource) {
+        newValue += ` | Fonte de Tráfego: ${trafficSource}`;
+      }
+      
       await supabase
         .from('domain_activity_logs')
         .insert({
@@ -663,10 +680,13 @@ class AtomiCatDomainPurchase {
           user_id: userId || config.SUPABASE_USER_ID,
           action_type: 'created',
           old_value: null,
-          new_value: 'Domínio comprado com IA - AtomiCat (sem WordPress)'
+          new_value: newValue
         });
       
       console.log('✅ [LOG-ATOMICAT] Atividade registrada');
+      if (trafficSource) {
+        console.log(`   Com fonte de tráfego: ${trafficSource}`);
+      }
       
     } catch (error) {
       console.error('❌ [LOG-ATOMICAT] Erro:', error.message);

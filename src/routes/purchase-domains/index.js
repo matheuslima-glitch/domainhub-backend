@@ -115,21 +115,29 @@ router.post('/', async (req, res) => {
 /**
  * POST /api/purchase-domains/manual
  * Compra manual de domínio (quando clicar na lupa)
- * SEMPRE usa WordPress para compra manual
+ * Suporta WordPress e AtomiCat
  */
 router.post('/manual', async (req, res) => {
   let sessionId = null;
   
   try {
-    const { domain, userId } = req.body;
+    const { domain, userId, platform = 'wordpress', trafficSource } = req.body;
     
     // Se não tiver userId no body, tentar pegar do header
     const finalUserId = userId || req.headers['x-user-id'] || config.SUPABASE_USER_ID;
     
+    // Validações
     if (!domain) {
       return res.status(400).json({
         success: false,
         error: 'Domínio é obrigatório'
+      });
+    }
+    
+    if (!trafficSource || !trafficSource.trim()) {
+      return res.status(400).json({
+        success: false,
+        error: 'Fonte de tráfego é obrigatória'
       });
     }
     
@@ -141,14 +149,26 @@ router.post('/manual', async (req, res) => {
       });
     }
     
+    // Validar plataforma
+    if (!['wordpress', 'atomicat'].includes(platform.toLowerCase())) {
+      return res.status(400).json({
+        success: false,
+        error: 'Plataforma deve ser "wordpress" ou "atomicat"'
+      });
+    }
+    
     sessionId = uuidv4();
     processingSessions.set(sessionId, {
       startTime: Date.now(),
-      userId: finalUserId
+      userId: finalUserId,
+      platform: platform.toLowerCase(),
+      trafficSource: trafficSource.trim()
     });
     
     console.log(`\n📝 [MANUAL] Compra manual iniciada`);
     console.log(`   Domínio: ${domain}`);
+    console.log(`   Plataforma: ${platform}`);
+    console.log(`   Fonte de Tráfego: ${trafficSource}`);
     console.log(`   Session: ${sessionId}`);
     console.log(`   User ID: ${finalUserId}\n`);
     
@@ -156,18 +176,21 @@ router.post('/manual', async (req, res) => {
       success: true,
       message: 'Compra manual iniciada',
       sessionId: sessionId,
-      domain: domain
+      domain: domain,
+      platform: platform.toLowerCase(),
+      trafficSource: trafficSource.trim()
     });
     
-    // Processar de forma assíncrona (sempre WordPress para manual)
+    // Processar de forma assíncrona com a plataforma selecionada
     processAsyncPurchase({
       sessionId,
       quantidade: 1,
       idioma: 'portuguese',
-      plataforma: 'wordpress',
+      plataforma: platform.toLowerCase(),
       nicho: null,
       domainManual: domain,
-      userId: finalUserId
+      userId: finalUserId,
+      trafficSource: trafficSource.trim()
     });
     
   } catch (error) {
@@ -187,24 +210,40 @@ router.post('/manual', async (req, res) => {
  * Executa a compra em background após responder ao cliente
  */
 async function processAsyncPurchase(params) {
-  const { sessionId, quantidade, idioma, plataforma, nicho, domainManual, userId } = params;
+  const { sessionId, quantidade, idioma, plataforma, nicho, domainManual, userId, trafficSource } = params;
   
   try {
     let result;
     
-    // Se tem domínio manual, processar com WordPress
+    // Se tem domínio manual, processar com a plataforma escolhida
     if (domainManual) {
       console.log(`📝 [MANUAL] Processando compra manual: ${domainManual}`);
+      console.log(`   Plataforma: ${plataforma}`);
+      console.log(`   Fonte de Tráfego: ${trafficSource || 'N/A'}`);
       
-      const wordpressPurchase = new WordPressDomainPurchase();
-      result = await wordpressPurchase.purchaseDomain({
-        quantidade: 1,
-        idioma,
-        nicho: null,
-        sessionId,
-        domainManual,
-        userId
-      });
+      if (plataforma === 'wordpress') {
+        const wordpressPurchase = new WordPressDomainPurchase();
+        result = await wordpressPurchase.purchaseDomain({
+          quantidade: 1,
+          idioma,
+          nicho: null,
+          sessionId,
+          domainManual,
+          userId,
+          trafficSource
+        });
+      } else if (plataforma === 'atomicat') {
+        const atomicatPurchase = new AtomiCatDomainPurchase();
+        result = await atomicatPurchase.purchaseDomain({
+          quantidade: 1,
+          idioma,
+          nicho: null,
+          sessionId,
+          domainManual,
+          userId,
+          trafficSource
+        });
+      }
       
     } else if (plataforma === 'wordpress') {
       // Compra com IA para WordPress
@@ -244,6 +283,9 @@ async function processAsyncPurchase(params) {
     console.log(`   - Domínios Registrados: ${result?.domainsRegistered?.join(', ') || 'Nenhum'}`);
     console.log(`   - Total Solicitado: ${result?.totalRequested || quantidade}`);
     console.log(`   - Total Registrado: ${result?.totalRegistered || 0}`);
+    if (trafficSource) {
+      console.log(`   - Fonte de Tráfego: ${trafficSource}`);
+    }
     console.log(`${'='.repeat(70)}\n`);
     
     // Remover sessão do cache após conclusão

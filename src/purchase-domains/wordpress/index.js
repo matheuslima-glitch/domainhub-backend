@@ -43,11 +43,14 @@ class WordPressDomainPurchase {
    * FUNÇÃO PRINCIPAL - ORQUESTRA TODO O PROCESSO
    */
   async purchaseDomain(params) {
-    const { quantidade, idioma, nicho, sessionId, domainManual, userId } = params;
+    const { quantidade, idioma, nicho, sessionId, domainManual, userId, trafficSource } = params;
     
     console.log(`🚀 [WORDPRESS] Iniciando compra`);
     console.log(`   Usuário: ${userId}`);
     console.log(`   Manual: ${domainManual ? 'SIM' : 'NÃO'}`);
+    if (trafficSource) {
+      console.log(`   Fonte de Tráfego: ${trafficSource}`);
+    }
     
     await this.updateProgress(sessionId, 'generating', 'in_progress', 'Iniciando processo...');
     
@@ -81,8 +84,8 @@ class WordPressDomainPurchase {
         domainsToRegister.push(domainManual);
         successCount = 1;
         
-        // Processar todas as configurações
-        await this.processPostPurchase(domainManual, userId, sessionId);
+        // Processar todas as configurações com fonte de tráfego
+        await this.processPostPurchase(domainManual, userId, sessionId, trafficSource);
       } else {
         await this.updateProgress(sessionId, 'error', 'error', 
           `Erro na compra: ${purchaseResult.error}`);
@@ -148,7 +151,7 @@ class WordPressDomainPurchase {
               successCount++;
               
               // Processar todas as configurações
-              await this.processPostPurchase(domain, userId, sessionId);
+              await this.processPostPurchase(domain, userId, sessionId, trafficSource);
             } else {
               console.error(`❌ Erro na compra: ${purchaseResult.error}`);
               retries++;
@@ -449,9 +452,12 @@ class WordPressDomainPurchase {
   /**
    * PROCESSAR PÓS-COMPRA
    */
-  async processPostPurchase(domain, userId, sessionId) {
+  async processPostPurchase(domain, userId, sessionId, trafficSource = null) {
     try {
       console.log(`🔧 [POST-PURCHASE] Iniciando configurações para ${domain}`);
+      if (trafficSource) {
+        console.log(`   Fonte de Tráfego: ${trafficSource}`);
+      }
       
       let cloudflareSetup = null;
       
@@ -479,16 +485,16 @@ class WordPressDomainPurchase {
         `Instalando WordPress em ${domain}...`);
       await this.installWordPress(domain);
       
-      // 5. Salvar no Supabase
+      // 5. Salvar no Supabase com fonte de tráfego
       console.log(`💾 [SUPABASE] Salvando domínio no banco de dados...`);
       await this.updateProgress(sessionId, 'supabase', 'in_progress', 
         `Salvando informações de ${domain}...`);
-      const savedDomain = await this.saveDomainToSupabase(domain, userId, cloudflareSetup);
+      const savedDomain = await this.saveDomainToSupabase(domain, userId, cloudflareSetup, trafficSource);
       
       // 6. Registrar log
       if (savedDomain?.id) {
         console.log(`📝 [LOG] Registrando atividade...`);
-        await this.saveActivityLog(savedDomain.id, userId);
+        await this.saveActivityLog(savedDomain.id, userId, trafficSource);
       }
       
       // 7. Notificar WhatsApp
@@ -954,64 +960,57 @@ class WordPressDomainPurchase {
         .map((char, i) => i === 0 ? char.toUpperCase() : char)
         .join('');
       
-      // MÉTODO 1: Tentar via Softaculous JSON API
-      console.log(`🔧 [WORDPRESS] Tentando instalação via Softaculous...`);
+      // MÉTODO 1: Tentar via Softaculous UAPI (API correta)
+      console.log(`🔧 [WORDPRESS] Tentando instalação via Softaculous UAPI...`);
       try {
+        // Preparar parâmetros para instalação
+        const installParams = {
+          softsubmit: '1',
+          softdomain: domain,
+          softdirectory: '',
+          admin_username: config.WORDPRESS_DEFAULT_USER,
+          admin_pass: config.WORDPRESS_DEFAULT_PASSWORD,
+          admin_email: config.WORDPRESS_ADMIN_EMAIL,
+          site_name: siteName,
+          site_desc: siteName,
+          language: 'pt_BR',
+          auto_upgrade: '1',
+          auto_upgrade_plugins: '1'
+        };
 
+        // Usar UAPI execute endpoint (API moderna do cPanel)
         const response = await axios.post(
-          `${config.CPANEL_URL}/json-api/cpanel`,
-          null,
+          `${config.CPANEL_URL}/execute/Softaculous/install`,
+          installParams,
           {
-            params: {
-              cpanel_jsonapi_module: 'Softaculous',
-              cpanel_jsonapi_func: 'install',
-              softsubmit: '1',
-              softdomain: domain,
-              softdirectory: '',
-              softdb: 'wp_db',
-              dbusername: 'wp_user',
-              dbuserpass: config.WORDPRESS_DEFAULT_PASSWORD,
-              admin_username: config.WORDPRESS_DEFAULT_USER,
-              admin_pass: config.WORDPRESS_DEFAULT_PASSWORD,
-              admin_email: config.WORDPRESS_ADMIN_EMAIL,
-              site_name: siteName,
-              site_desc: siteName,
-              language: 'pt_BR',
-              auto_upgrade: '1'
-            },
             headers: {
               'Authorization': `cpanel ${config.CPANEL_USERNAME}:${config.CPANEL_API_TOKEN}`,
-              'Content-Type': 'application/x-www-form-urlencoded'
+              'Content-Type': 'application/json'
             },
-            timeout: 60000
+            timeout: 90000
           }
         );
         
         console.log(`📥 [WORDPRESS] Resposta Softaculous:`, JSON.stringify(response.data, null, 2));
         
-        // Verificar sucesso da JSON API
-        if (response.data.cpanelresult?.data?.result === 1 || 
-            response.data.status === 1 || 
-            response.data.errors === null) {
-          console.log(`✅ [WORDPRESS] Instalado via Softaculous`);
+        // Verificar sucesso da UAPI
+        if (response.data.status === 1 && response.data.data) {
+          console.log(`✅ [WORDPRESS] Instalado via Softaculous UAPI`);
           console.log(`   URL: https://${domain}`);
-          // SEGURANÇA: NÃO LOGAR CREDENCIAIS
           return true;
         }
         
-        // Se Softaculous falhou, tentar método alternativo
-        if (response.data.errors && response.data.errors.length > 0) {
-          const errorMsg = response.data.errors[0];
-          if (errorMsg.includes('Softaculous') || errorMsg.includes('module')) {
-            console.log(`⚠️ [WORDPRESS] Softaculous não disponível, tentando método alternativo...`);
-            throw new Error('Softaculous não disponível');
-          }
+        // Se retornou erro específico do Softaculous
+        if (response.data.errors || response.data.error) {
+          const errorMsg = response.data.errors || response.data.error;
+          console.log(`⚠️ [WORDPRESS] Erro Softaculous: ${errorMsg}`);
+          throw new Error(`Softaculous error: ${errorMsg}`);
         }
         
         return false;
         
       } catch (softaculousError) {
-        console.log(`⚠️ [WORDPRESS] Softaculous falhou:`, softaculousError.message);
+        console.log(`⚠️ [WORDPRESS] Softaculous UAPI falhou:`, softaculousError.message);
         
         // MÉTODO 2: Instalação manual via WordPress CLI (se disponível)
         console.log(`🔧 [WORDPRESS] Tentando instalação via WP-CLI...`);
@@ -1137,9 +1136,9 @@ class WordPressDomainPurchase {
   }
 
   /**
-   * SALVAR NO SUPABASE - VERSÃO CORRIGIDA COM ENUM CORRETO
+   * SALVAR NO SUPABASE - VERSÃO CORRIGIDA COM ENUM CORRETO E TRAFFIC SOURCE
    */
-  async saveDomainToSupabase(domain, userId, cloudflareSetup) {
+  async saveDomainToSupabase(domain, userId, cloudflareSetup, trafficSource = null) {
     try {
       console.log(`💾 [SUPABASE] Buscando informações completas antes de salvar...`);
       
@@ -1167,6 +1166,12 @@ class WordPressDomainPurchase {
         p_dns_configured: !!cloudflareSetup,
         p_auto_renew: namecheapInfo?.auto_renew || false
       };
+      
+      // Adicionar fonte de tráfego se fornecida
+      if (trafficSource) {
+        payload.p_traffic_source = trafficSource;
+        console.log(`   Fonte de Tráfego: ${trafficSource}`);
+      }
       
       console.log(`💾 [SUPABASE] Salvando domínio...`);
       console.log(`   Payload:`, JSON.stringify(payload, null, 2));
@@ -1210,11 +1215,16 @@ class WordPressDomainPurchase {
   }
 
   /**
-   * REGISTRAR LOG - VERSÃO CORRIGIDA
+   * REGISTRAR LOG - VERSÃO CORRIGIDA COM TRAFFIC SOURCE
    */
-  async saveActivityLog(domainId, userId) {
+  async saveActivityLog(domainId, userId, trafficSource = null) {
     try {
       console.log(`📝 [LOG] Registrando atividade para domínio ${domainId}...`);
+      
+      let newValue = 'Domínio comprado com IA - WordPress';
+      if (trafficSource) {
+        newValue += ` | Fonte de Tráfego: ${trafficSource}`;
+      }
       
       const { data, error } = await supabase
         .from('domain_activity_logs')
@@ -1223,7 +1233,7 @@ class WordPressDomainPurchase {
           user_id: userId || config.SUPABASE_USER_ID,
           action_type: 'created',
           old_value: null,
-          new_value: 'Domínio comprado com IA - WordPress',
+          new_value: newValue,
           created_at: new Date().toISOString()
         });
       
@@ -1234,6 +1244,9 @@ class WordPressDomainPurchase {
       }
       
       console.log('✅ [LOG] Atividade registrada com sucesso');
+      if (trafficSource) {
+        console.log(`   Com fonte de tráfego: ${trafficSource}`);
+      }
       
     } catch (error) {
       console.error('❌ [LOG] Erro:', error.message);
