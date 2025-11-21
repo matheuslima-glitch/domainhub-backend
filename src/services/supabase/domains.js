@@ -30,9 +30,35 @@ class SupabaseDomainsService {
       p_auto_renew: domainData.auto_renew
     };
 
+    // Verificar status anterior do domínio antes de atualizar
+    const { data: previousDomain } = await this.client
+      .from('domains')
+      .select('status')
+      .eq('domain_name', domainData.domain_name)
+      .eq('user_id', config.SUPABASE_USER_ID)
+      .maybeSingle();
+
     const { data, error } = await this.client.rpc('upsert_domain_stats', payload);
 
     if (error) throw error;
+
+    // Detectar mudança de status e enviar alertas imediatos
+    if (previousDomain && previousDomain.status !== domainData.status) {
+      const notificationService = require('./whatsapp/notifications');
+      
+      // Alerta de domínio suspenso
+      if (previousDomain.status === 'active' && domainData.status === 'suspended') {
+        console.log(`🚨 [ALERT] Domínio mudou de ativo para suspenso: ${domainData.domain_name}`);
+        await notificationService.sendSuspendedDomainAlert(config.SUPABASE_USER_ID, domainData.domain_name);
+      }
+      
+      // Alerta de domínio expirado
+      if (previousDomain.status === 'active' && domainData.status === 'expired') {
+        console.log(`🚨 [ALERT] Domínio mudou de ativo para expirado: ${domainData.domain_name}`);
+        await notificationService.sendExpiredDomainAlert(config.SUPABASE_USER_ID, domainData.domain_name);
+      }
+    }
+
     return data;
   }
 

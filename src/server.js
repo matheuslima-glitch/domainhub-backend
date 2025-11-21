@@ -48,6 +48,7 @@ app.get('/api/ip', async (req, res) => {
 app.use('/api/balance', balanceRoutes);
 app.use('/api/domains', require('./routes/domains'));
 app.use('/api/purchase-domains', require('./routes/purchase-domains'));
+app.use('/api/whatsapp', require('./routes/whatsapp'));
 
 app.use((req, res) => {
   res.status(404).json({
@@ -56,6 +57,115 @@ app.use((req, res) => {
 });
 
 app.use(errorHandler);
+
+// ============================================
+// CRON: Notificações WhatsApp Recorrentes
+// ============================================
+cron.schedule('0 * * * *', async () => {
+  console.log('📱 [CRON] Verificando notificações WhatsApp programadas...');
+  
+  try {
+    const { createClient } = require('@supabase/supabase-js');
+    const notificationService = require('./services/whatsapp/notifications');
+    
+    // Criar cliente Supabase
+    const supabase = createClient(
+      config.SUPABASE_URL,
+      config.SUPABASE_SERVICE_KEY,
+      {
+        auth: {
+          autoRefreshToken: false,
+          persistSession: false
+        }
+      }
+    );
+
+    // Buscar todos os usuários com notificações ativas
+    const { data: users, error } = await supabase
+      .from('notification_settings')
+      .select('user_id, notification_days, notification_interval_hours, notification_frequency, alert_suspended, alert_expired, alert_expiring_soon')
+      .or('alert_suspended.eq.true,alert_expired.eq.true,alert_expiring_soon.eq.true');
+
+    if (error) {
+      console.error('❌ [CRON] Erro ao buscar usuários:', error.message);
+      return;
+    }
+
+    if (!users || users.length === 0) {
+      console.log('ℹ️ [CRON] Nenhum usuário com notificações ativas');
+      return;
+    }
+
+    console.log(`📊 [CRON] ${users.length} usuário(s) com notificações ativas`);
+
+    const now = new Date();
+    const currentDay = now.getDay(); // 0 = Domingo, 1 = Segunda, ..., 6 = Sábado
+    const currentHour = now.getHours();
+
+    // Mapear dias da semana
+    const dayNames = ['domingo', 'segunda', 'terca', 'quarta', 'quinta', 'sexta', 'sabado'];
+    const currentDayName = dayNames[currentDay];
+
+    for (const user of users) {
+      try {
+        // Verificar se hoje é um dia de notificação
+        const notificationDays = user.notification_days || [];
+        if (!notificationDays.includes(currentDayName)) {
+          console.log(`⏭️ [CRON] Usuário ${user.user_id}: Hoje não é dia de notificação`);
+          continue;
+        }
+
+        // Verificar intervalo de horas
+        const intervalHours = user.notification_interval_hours || 6;
+        
+        // Verificar se é hora de enviar (baseado no intervalo)
+        if (currentHour % intervalHours !== 0) {
+          console.log(`⏭️ [CRON] Usuário ${user.user_id}: Não está no intervalo de ${intervalHours}h`);
+          continue;
+        }
+
+        // Verificar frequência diária já atingida
+        const { data: todayLogs, error: logsError } = await supabase
+          .from('notification_logs')
+          .select('id')
+          .eq('user_id', user.user_id)
+          .eq('notification_type', 'critical_domains_report')
+          .gte('sent_at', new Date(now.setHours(0, 0, 0, 0)).toISOString());
+
+        if (logsError) {
+          console.error(`❌ [CRON] Erro ao verificar logs do usuário ${user.user_id}:`, logsError.message);
+          continue;
+        }
+
+        const maxFrequency = user.notification_frequency || 3;
+        const sentToday = todayLogs?.length || 0;
+
+        if (sentToday >= maxFrequency) {
+          console.log(`⏭️ [CRON] Usuário ${user.user_id}: Frequência diária atingida (${sentToday}/${maxFrequency})`);
+          continue;
+        }
+
+        // Enviar relatório
+        console.log(`📤 [CRON] Enviando relatório para usuário ${user.user_id}...`);
+        const result = await notificationService.sendCriticalDomainsReport(user.user_id);
+
+        if (result.success) {
+          console.log(`✅ [CRON] Relatório enviado com sucesso para ${user.user_id}`);
+        } else {
+          console.log(`⚠️ [CRON] Não foi possível enviar para ${user.user_id}: ${result.message}`);
+        }
+
+      } catch (userError) {
+        console.error(`❌ [CRON] Erro ao processar usuário ${user.user_id}:`, userError.message);
+      }
+    }
+
+    console.log('✅ [CRON] Verificação de notificações concluída\n');
+
+  } catch (error) {
+    console.error('❌ [CRON] Erro ao verificar notificações:', error.message);
+  }
+});
 
 cron.schedule('0 */4 * * *', async () => {
   console.log('🔄 [CRON] Iniciando sincronização automática de domínios...');
