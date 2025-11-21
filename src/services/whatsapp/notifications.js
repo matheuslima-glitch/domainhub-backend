@@ -520,7 +520,7 @@ Acesse o painel Domain Hub para resolver!
 
 ━━━━━━━━━━━━━━━━━━━━━
 
-📆 *Configuração da recorrência:*
+➡️ *Configuração da recorrência:*
 
 ${settings && settings.notification_days && settings.notification_days.length > 0 
   ? this.formatDays(settings.notification_days) 
@@ -529,7 +529,7 @@ A cada ${settings?.notification_interval_hours || 6} hora${(settings?.notificati
 
 ━━━━━━━━━━━━━━━━━━━━━
 
-✅_Sistema ativo e monitorando 24/7_`;
+✅ _Sistema ativo e monitorando 24/7_`;
 
       console.log('📤 [TEST] Enviando mensagem com alertas');
       const result = await whatsappService.sendMessage(profile.whatsapp_number, message);
