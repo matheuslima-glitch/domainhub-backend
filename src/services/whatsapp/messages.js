@@ -8,21 +8,43 @@ class WhatsAppService {
       // Formato customizado: ZAPI_INSTANCE é uma URL completa
       // Exemplo: https://api.z-api.io/instances/XXX/token/YYY/send-text
       
-      // Extrair a base URL até /token/XXX (remover tudo depois do primeiro /token/...)
-      const parts = config.ZAPI_INSTANCE.split('/token/');
-      const baseWithInstance = parts[0]; // https://api.z-api.io/instances/XXX
+      console.log('🔧 [ZAPI] Modo: URL Customizada detectada');
+      console.log('🔗 [ZAPI] URL original:', config.ZAPI_INSTANCE.replace(/token\/[^/]+/, 'token/***'));
       
-      // Reconstruir URL com o token correto
-      this.baseURL = `${baseWithInstance}/token/${config.ZAPI_CLIENT_TOKEN}`;
+      // Extrair instance ID e token da URL
+      const urlMatch = config.ZAPI_INSTANCE.match(/instances\/([^/]+)\/token\/([^/]+)/);
       
-      console.log('🔧 [ZAPI] Modo: URL Customizada');
-      console.log('🔗 [ZAPI] Base URL configurada:', this.baseURL.replace(/token\/[^/]+/, 'token/***'));
+      if (urlMatch && urlMatch[1] && urlMatch[2]) {
+        const instanceId = urlMatch[1];
+        const tokenFromUrl = urlMatch[2];
+        
+        // Usar o token da URL, não o ZAPI_CLIENT_TOKEN
+        this.baseURL = `https://api.z-api.io/instances/${instanceId}/token/${tokenFromUrl}`;
+        
+        console.log('✅ [ZAPI] Instance ID extraído:', instanceId);
+        console.log('✅ [ZAPI] Token extraído da URL (será usado):', tokenFromUrl.substring(0, 10) + '***');
+        console.log('🔗 [ZAPI] Base URL configurada:', this.baseURL.replace(/token\/[^/]+/, 'token/***'));
+      } else {
+        // Fallback: tentar usar o método antigo
+        console.warn('⚠️ [ZAPI] Não foi possível extrair credenciais da URL, usando método antigo');
+        const parts = config.ZAPI_INSTANCE.split('/token/');
+        const baseWithInstance = parts[0];
+        this.baseURL = `${baseWithInstance}/token/${config.ZAPI_CLIENT_TOKEN}`;
+        console.log('🔗 [ZAPI] Base URL configurada (fallback):', this.baseURL.replace(/token\/[^/]+/, 'token/***'));
+      }
     } else {
       // Formato padrão: ZAPI_INSTANCE é apenas o ID
       this.baseURL = `https://api.z-api.io/instances/${config.ZAPI_INSTANCE}/token/${config.ZAPI_CLIENT_TOKEN}`;
       
       console.log('🔧 [ZAPI] Modo: ID Padrão');
       console.log('🔗 [ZAPI] Base URL configurada:', this.baseURL.replace(/token\/[^/]+/, 'token/***'));
+    }
+    
+    // Validar que temos uma URL válida
+    if (!this.baseURL.includes('instances/') || !this.baseURL.includes('/token/')) {
+      console.error('❌ [ZAPI] ERRO CRÍTICO: URL base inválida!');
+      console.error('❌ [ZAPI] Verifique as variáveis ZAPI_INSTANCE e ZAPI_CLIENT_TOKEN no Render');
+      throw new Error('Configuração ZAPI inválida');
     }
   }
 
@@ -61,11 +83,14 @@ class WhatsAppService {
             response = await axios.get(url, {
               params: {
                 [endpoint.param]: cleanNumber
-              }
+              },
+              timeout: 10000
             });
           } else {
             response = await axios.post(url, {
               phone: cleanNumber
+            }, {
+              timeout: 10000
             });
           }
 
@@ -123,13 +148,29 @@ class WhatsAppService {
    */
   async sendMessage(phoneNumber, message) {
     try {
-      // Remove caracteres especiais
+      // Remove caracteres especiais do número
       const cleanNumber = phoneNumber.replace(/\D/g, '');
       
-      const response = await axios.post(`${this.baseURL}/send-text`, {
+      const url = `${this.baseURL}/send-text`;
+      
+      console.log('📤 [ZAPI] Enviando mensagem...');
+      console.log('📤 [ZAPI] URL:', url.replace(/token\/[^/]+/, 'token/***'));
+      console.log('📤 [ZAPI] Número:', cleanNumber);
+      console.log('📤 [ZAPI] Mensagem (preview):', message.substring(0, 100) + '...');
+      
+      const response = await axios.post(url, {
         phone: cleanNumber,
         message: message
+      }, {
+        timeout: 15000, // 15 segundos de timeout
+        headers: {
+          'Content-Type': 'application/json'
+        }
       });
+
+      console.log('✅ [ZAPI] Mensagem enviada com sucesso!');
+      console.log('✅ [ZAPI] Message ID:', response.data.messageId);
+      console.log('✅ [ZAPI] Resposta completa:', JSON.stringify(response.data, null, 2));
 
       return {
         success: true,
@@ -137,10 +178,28 @@ class WhatsAppService {
         data: response.data
       };
     } catch (error) {
-      console.error('Erro ao enviar mensagem via WhatsApp:', error.message);
+      console.error('❌ [ZAPI] ERRO ao enviar mensagem!');
+      console.error('❌ [ZAPI] URL tentada:', `${this.baseURL}/send-text`.replace(/token\/[^/]+/, 'token/***'));
+      console.error('❌ [ZAPI] Status:', error.response?.status);
+      console.error('❌ [ZAPI] Status Text:', error.response?.statusText);
+      console.error('❌ [ZAPI] Erro:', error.message);
+      
+      if (error.response?.data) {
+        console.error('❌ [ZAPI] Dados do erro:', JSON.stringify(error.response.data, null, 2));
+      }
+      
+      // Verificar se é erro 404 (endpoint não existe)
+      if (error.response?.status === 404) {
+        console.error('❌ [ZAPI] ERRO 404: Endpoint não encontrado!');
+        console.error('❌ [ZAPI] Verifique se as credenciais estão corretas no Render');
+        console.error('❌ [ZAPI] ZAPI_INSTANCE atual:', config.ZAPI_INSTANCE.substring(0, 50) + '...');
+      }
+      
       return {
         success: false,
-        error: error.message
+        error: error.message,
+        statusCode: error.response?.status,
+        details: error.response?.data
       };
     }
   }

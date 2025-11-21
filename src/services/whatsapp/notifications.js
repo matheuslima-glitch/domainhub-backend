@@ -194,8 +194,8 @@ class NotificationService {
         };
       }
 
-      // Buscar perfil do usuário
-      const profile = await getUserProfile(userId);
+      // Buscar perfil do usuário - CORRIGIDO: era getUserProfile sem this
+      const profile = await this.getUserProfile(userId);
       
       if (!profile.whatsapp_number) {
         return {
@@ -369,7 +369,13 @@ class NotificationService {
         .eq('id', userId)
         .single();
 
-      if (profileError) throw profileError;
+      if (profileError) {
+        console.error('❌ [TEST] Erro ao buscar perfil:', profileError.message);
+        throw profileError;
+      }
+
+      console.log('✅ [TEST] Perfil encontrado:', profile.full_name);
+      console.log('✅ [TEST] WhatsApp:', profile.whatsapp_number);
 
       if (!profile.whatsapp_number) {
         throw new Error('Usuário não tem número de WhatsApp cadastrado');
@@ -383,7 +389,12 @@ class NotificationService {
         .in('status', ['suspended', 'expired'])
         .order('expiration_date', { ascending: true });
 
-      if (domainsError) throw domainsError;
+      if (domainsError) {
+        console.error('❌ [TEST] Erro ao buscar domínios:', domainsError.message);
+        throw domainsError;
+      }
+
+      console.log(`📊 [TEST] Domínios críticos encontrados: ${domains?.length || 0}`);
 
       // Se não tem domínios críticos, enviar mensagem de sucesso
       if (!domains || domains.length === 0) {
@@ -405,10 +416,15 @@ Você receberá alertas automáticos quando:
 _Sistema ativo e monitorando 24/7_
 🕒 ${new Date().toLocaleString('pt-BR')}`;
 
-        const whatsappService = require('./messages');
-        await whatsappService.sendMessage(profile.whatsapp_number, testMessage);
+        console.log('📤 [TEST] Enviando mensagem de teste (sem domínios críticos)...');
+        const result = await whatsappService.sendMessage(profile.whatsapp_number, testMessage);
+        
+        if (!result.success) {
+          console.error('❌ [TEST] Falha ao enviar mensagem:', result.error);
+          throw new Error(result.error);
+        }
 
-        console.log('✅ [TEST] Mensagem de teste enviada (sem domínios críticos)');
+        console.log('✅ [TEST] Mensagem de teste enviada com sucesso');
 
         return {
           phoneNumber: profile.whatsapp_number,
@@ -422,6 +438,8 @@ _Sistema ativo e monitorando 24/7_
       // Separar por status
       const suspended = domains.filter(d => d.status === 'suspended');
       const expired = domains.filter(d => d.status === 'expired');
+
+      console.log(`📊 [TEST] Suspensos: ${suspended.length}, Expirados: ${expired.length}`);
 
       // Gerar mensagem formatada
       let message = `🤖 *DOMAIN HUB*\n\n⚠️ *ALERTA DE TESTE*\n\n${profile.full_name || 'Olá'}! Esta é uma mensagem de teste.\n\nVocê tem domínios que precisam de atenção:\n\n`;
@@ -457,10 +475,15 @@ _Sistema ativo e monitorando 24/7_
       message += `_Notificação de teste enviada com sucesso ✅_\n`;
       message += `🕒 ${new Date().toLocaleString('pt-BR')}`;
 
-      const whatsappService = require('./messages');
-      await whatsappService.sendMessage(profile.whatsapp_number, message);
+      console.log('📤 [TEST] Enviando mensagem com alertas...');
+      const result = await whatsappService.sendMessage(profile.whatsapp_number, message);
+      
+      if (!result.success) {
+        console.error('❌ [TEST] Falha ao enviar mensagem:', result.error);
+        throw new Error(result.error || 'Erro desconhecido ao enviar mensagem');
+      }
 
-      console.log(`✅ [TEST] Alerta de teste enviado: ${domains.length} domínios`);
+      console.log(`✅ [TEST] Alerta de teste enviado com sucesso: ${domains.length} domínios`);
 
       return {
         phoneNumber: profile.whatsapp_number,
@@ -470,7 +493,8 @@ _Sistema ativo e monitorando 24/7_
       };
 
     } catch (error) {
-      console.error('❌ [TEST] Erro ao enviar alerta de teste:', error);
+      console.error('❌ [TEST] Erro ao enviar alerta de teste:', error.message);
+      console.error('❌ [TEST] Stack:', error.stack);
       throw error;
     }
   }
