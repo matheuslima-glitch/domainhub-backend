@@ -165,4 +165,43 @@ router.get('/critical-stats/:userId', async (req, res, next) => {
   }
 });
 
+/**
+ * POST /api/whatsapp/send-test-alert
+ * Envia notificação de teste com alertas de domínios
+ */
+router.post('/send-test-alert', async (req, res, next) => {
+  try {
+    const { userId } = req.body;
+
+    console.log('📱 [WHATSAPP] Enviando alerta de teste para usuário:', userId);
+
+    if (!userId) {
+      return res.status(400).json({
+        success: false,
+        error: 'ID do usuário é obrigatório'
+      });
+    }
+
+    const result = await notificationService.sendTestAlert(userId);
+
+    console.log(`✅ [WHATSAPP] Alerta de teste enviado com sucesso`);
+
+    res.json({
+      success: true,
+      message: 'Notificação de teste enviada com sucesso!',
+      phoneNumber: result.phoneNumber,
+      alertsSent: result.alertsSent,
+      suspended: result.suspended,
+      expired: result.expired
+    });
+  } catch (error) {
+    console.error('❌ [WHATSAPP] Erro ao enviar alerta de teste:', error.message);
+    res.status(500).json({
+      success: false,
+      error: 'Erro ao enviar notificação de teste',
+      message: error.message
+    });
+  }
+});
+
 module.exports = router;

@@ -352,6 +352,128 @@ class NotificationService {
       };
     }
   }
+
+  /**
+   * Envia alerta de teste com domínios críticos
+   * @param {string} userId - ID do usuário
+   * @returns {Promise<object>}
+   */
+  async sendTestAlert(userId) {
+    try {
+      console.log('🧪 [TEST] Enviando alerta de teste para:', userId);
+
+      // Buscar dados do usuário
+      const { data: profile, error: profileError } = await this.client
+        .from('profiles')
+        .select('full_name, whatsapp_number')
+        .eq('id', userId)
+        .single();
+
+      if (profileError) throw profileError;
+
+      if (!profile.whatsapp_number) {
+        throw new Error('Usuário não tem número de WhatsApp cadastrado');
+      }
+
+      // Buscar domínios críticos
+      const { data: domains, error: domainsError } = await this.client
+        .from('domains')
+        .select('*')
+        .eq('user_id', userId)
+        .in('status', ['suspended', 'expired'])
+        .order('expiration_date', { ascending: true });
+
+      if (domainsError) throw domainsError;
+
+      // Se não tem domínios críticos, enviar mensagem de sucesso
+      if (!domains || domains.length === 0) {
+        const testMessage = `🤖 *DOMAIN HUB - Teste de Notificação*
+
+Olá ${profile.full_name || ''}! 👋
+
+✅ *Número WhatsApp configurado com sucesso!*
+
+Você receberá alertas automáticos quando:
+• 🔴 Domínios forem suspensos
+• 🟠 Domínios expirarem
+• 🟡 Domínios estiverem próximos do vencimento
+
+*Ótima notícia:* Você não tem domínios com problemas no momento! 🎉
+
+📊 Status atual: Todos os domínios OK
+
+_Sistema ativo e monitorando 24/7_
+🕒 ${new Date().toLocaleString('pt-BR')}`;
+
+        const whatsappService = require('./messages');
+        await whatsappService.sendMessage(profile.whatsapp_number, testMessage);
+
+        console.log('✅ [TEST] Mensagem de teste enviada (sem domínios críticos)');
+
+        return {
+          phoneNumber: profile.whatsapp_number,
+          alertsSent: 0,
+          suspended: 0,
+          expired: 0,
+          message: 'Teste enviado - Nenhum domínio crítico'
+        };
+      }
+
+      // Separar por status
+      const suspended = domains.filter(d => d.status === 'suspended');
+      const expired = domains.filter(d => d.status === 'expired');
+
+      // Gerar mensagem formatada
+      let message = `🤖 *DOMAIN HUB*\n\n⚠️ *ALERTA DE TESTE*\n\n${profile.full_name || 'Olá'}! Esta é uma mensagem de teste.\n\nVocê tem domínios que precisam de atenção:\n\n`;
+
+      if (suspended.length > 0) {
+        message += `🔴 *${suspended.length} Domínio${suspended.length > 1 ? 's' : ''} Suspenso${suspended.length > 1 ? 's' : ''}:*\n`;
+        suspended.slice(0, 5).forEach(d => {
+          message += `• ${d.domain_name}\n`;
+        });
+        if (suspended.length > 5) {
+          message += `  ... e mais ${suspended.length - 5}\n`;
+        }
+        message += `\n`;
+      }
+
+      if (expired.length > 0) {
+        message += `🟠 *${expired.length} Domínio${expired.length > 1 ? 's' : ''} Expirado${expired.length > 1 ? 's' : ''}:*\n`;
+        expired.slice(0, 5).forEach(d => {
+          message += `• ${d.domain_name}\n`;
+        });
+        if (expired.length > 5) {
+          message += `  ... e mais ${expired.length - 5}\n`;
+        }
+        message += `\n`;
+      }
+
+      message += `⚠️ *Possíveis Consequências:*\n`;
+      message += `• Sites offline\n`;
+      message += `• E-mails bloqueados\n`;
+      message += `• Perda de acesso ao painel\n\n`;
+      message += `👉 *Ação Necessária:*\n`;
+      message += `Acesse o painel Domain Hub para resolver!\n\n`;
+      message += `_Notificação de teste enviada com sucesso ✅_\n`;
+      message += `🕒 ${new Date().toLocaleString('pt-BR')}`;
+
+      const whatsappService = require('./messages');
+      await whatsappService.sendMessage(profile.whatsapp_number, message);
+
+      console.log(`✅ [TEST] Alerta de teste enviado: ${domains.length} domínios`);
+
+      return {
+        phoneNumber: profile.whatsapp_number,
+        alertsSent: domains.length,
+        suspended: suspended.length,
+        expired: expired.length
+      };
+
+    } catch (error) {
+      console.error('❌ [TEST] Erro ao enviar alerta de teste:', error);
+      throw error;
+    }
+  }
 }
 
 module.exports = new NotificationService();
