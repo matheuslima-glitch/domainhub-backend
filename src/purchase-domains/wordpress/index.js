@@ -886,7 +886,6 @@ class WordPressDomainPurchase {
   }
 
 
-
 /**
  * ADICIONAR DOMÍNIO AO CPANEL 
  */
