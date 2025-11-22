@@ -1,6 +1,7 @@
 /**
- * COMPRA DE DOMÍNIOS WORDPRESS - MODULO PRINCIPAL
- * ✅ VERSÃO FINAL COM PLUGINS, LOGIN /wordpanel124 E CALLBACKS COMPLETOS
+ * COMPRA DE DOMÍNIOS WORDPRESS - VERSÃO CORRIGIDA
+ * SEGUINDO EXATAMENTE A LÓGICA DA LISTAGEM DE COMANDOS
+ * COM CALLBACKS COMPLETOS PARA FRONTEND
  */
 
 const axios = require('axios');
@@ -29,8 +30,11 @@ class WordPressDomainPurchase {
     this.maxRetries = 10;
     this.priceLimit = 1.00;
     
+    // 🔥 CAMINHO CORRETO - SEMPRE /home/USERNAME
+    this.basePath = `/home/${config.CPANEL_USERNAME}`;
+    
     // Site modelo para copiar plugins
-    this.modelSitePath = `/home/${config.CPANEL_USERNAME}/mynervify.com`;
+    this.modelSitePath = `${this.basePath}/mynervify.com`;
     
     // Dados de contato para registro
     this.registrantInfo = {
@@ -445,7 +449,7 @@ class WordPressDomainPurchase {
 
   /**
    * PROCESSAR PÓS-COMPRA
-   * ⚠️ ORDEM IMPORTANTE: Cloudflare → cPanel → WordPress → Plugins
+   * 🔥 ORDEM CORRIGIDA: Cloudflare → cPanel → WordPress → Plugins
    */
   async processPostPurchase(domain, userId, sessionId, trafficSource = null) {
     try {
@@ -478,30 +482,64 @@ class WordPressDomainPurchase {
       console.log(`🖥️ [CPANEL] Adicionando domínio ao cPanel...`);
       await this.updateProgress(sessionId, 'cpanel', 'in_progress', 
         `Adicionando ${domain} ao cPanel...`, domain);
-      await this.addDomainToCPanel(domain);
+      
+      const cpanelSuccess = await this.addDomainToCPanel(domain);
+      
+      if (!cpanelSuccess) {
+        console.error(`❌ [CPANEL] Falha ao adicionar domínio`);
+        await this.updateProgress(sessionId, 'cpanel', 'error', 
+          `Erro ao adicionar ${domain} ao cPanel`, domain);
+        return;
+      }
+      
+      await this.updateProgress(sessionId, 'cpanel', 'completed', 
+        `Domínio ${domain} adicionado ao cPanel com sucesso!`, domain);
       
       console.log(`✅ [CPANEL] Domínio adicionado - prosseguindo para WordPress`);
       
+      // Aguardar 5 segundos para o cPanel processar
+      await this.delay(5000);
+      
       // ========================
-      // ETAPA 4: WORDPRESS (APÓS CLOUDFLARE)
+      // ETAPA 4: WORDPRESS
       // ========================
       console.log(`🌐 [WORDPRESS] Instalando WordPress...`);
       await this.updateProgress(sessionId, 'wordpress', 'in_progress', 
         `Instalando WordPress em ${domain}...`, domain);
+      
       const wpInstalled = await this.installWordPress(domain, sessionId);
       
       if (!wpInstalled) {
-        console.error(`❌ [WORDPRESS] Falha na instalação - abortando configuração de plugins`);
+        console.error(`❌ [WORDPRESS] Falha na instalação`);
         await this.updateProgress(sessionId, 'wordpress', 'error', 
           `Erro ao instalar WordPress em ${domain}`, domain);
+        return;
+      }
+      
+      await this.updateProgress(sessionId, 'wordpress', 'completed', 
+        `WordPress instalado com sucesso em ${domain}!`, domain);
+      
+      console.log(`✅ [WORDPRESS] Instalado - prosseguindo para plugins`);
+      
+      // Aguardar 10 segundos para WordPress finalizar instalação
+      await this.delay(10000);
+      
+      // ========================
+      // ETAPA 5: PLUGINS
+      // ========================
+      console.log(`🔌 [PLUGINS] Configurando plugins...`);
+      await this.updateProgress(sessionId, 'plugins', 'in_progress', 
+        `Configurando plugins para ${domain}...`, domain);
+      
+      const pluginsSuccess = await this.setupWordPressPlugins(domain, sessionId);
+      
+      if (!pluginsSuccess) {
+        console.error(`❌ [PLUGINS] Falha na configuração`);
+        await this.updateProgress(sessionId, 'plugins', 'error', 
+          `Erro ao configurar plugins em ${domain}`, domain);
       } else {
-        console.log(`✅ [WORDPRESS] Instalado - prosseguindo para plugins`);
-        
-        // ========================
-        // ETAPA 5: PLUGINS (APÓS WORDPRESS)
-        // ========================
-        console.log(`🔌 [PLUGINS] Configurando plugins...`);
-        await this.setupWordPressPlugins(domain, sessionId);
+        await this.updateProgress(sessionId, 'plugins', 'completed', 
+          `Plugins configurados com sucesso em ${domain}!`, domain);
       }
       
       // ========================
@@ -510,14 +548,21 @@ class WordPressDomainPurchase {
       console.log(`💾 [SUPABASE] Salvando domínio no banco de dados...`);
       await this.updateProgress(sessionId, 'supabase', 'in_progress', 
         `Salvando informações de ${domain}...`, domain);
+      
       const savedDomain = await this.saveDomainToSupabase(domain, userId, cloudflareSetup, trafficSource);
       
-      // ========================
-      // ETAPA 7: LOG
-      // ========================
       if (savedDomain?.id) {
+        await this.updateProgress(sessionId, 'supabase', 'completed', 
+          `Domínio ${domain} salvo no banco de dados!`, domain);
+        
+        // ========================
+        // ETAPA 7: LOG
+        // ========================
         console.log(`📝 [LOG] Registrando atividade...`);
         await this.saveActivityLog(savedDomain.id, userId, trafficSource);
+      } else {
+        await this.updateProgress(sessionId, 'supabase', 'error', 
+          `Erro ao salvar ${domain} no banco de dados`, domain);
       }
       
       // ========================
@@ -656,47 +701,7 @@ class WordPressDomainPurchase {
       
       await this.delay(3000);
       
-      // ETAPA 5: Buscar domínio específico (verificar se foi criado)
-      console.log(`🔍 [CLOUDFLARE] Buscando domínio específico...`);
-      try {
-        const searchResponse = await axios.get(
-          `${this.cloudflareAPI}/zones`,
-          {
-            params: { name: domain },
-            headers: {
-              'X-Auth-Email': config.CLOUDFLARE_EMAIL,
-              'X-Auth-Key': config.CLOUDFLARE_API_KEY
-            }
-          }
-        );
-        console.log(`✅ [CLOUDFLARE] Domínio encontrado na busca`);
-      } catch (error) {
-        console.error(`⚠️ [CLOUDFLARE] Erro ao buscar:`, error.message);
-      }
-      
-      await this.delay(2000);
-      
-      // ETAPA 6: Buscar registros DNS (verificação)
-      console.log(`🔍 [CLOUDFLARE] Buscando registros DNS...`);
-      try {
-        const dnsResponse = await axios.get(
-          `${this.cloudflareAPI}/zones/${zoneId}/dns_records`,
-          {
-            headers: {
-              'X-Auth-Email': config.CLOUDFLARE_EMAIL,
-              'X-Auth-Key': config.CLOUDFLARE_API_KEY
-            }
-          }
-        );
-        const records = dnsResponse.data.result || [];
-        console.log(`✅ [CLOUDFLARE] ${records.length} registros DNS encontrados`);
-      } catch (error) {
-        console.error(`⚠️ [CLOUDFLARE] Erro ao buscar DNS:`, error.message);
-      }
-      
-      await this.delay(2000);
-      
-      // ETAPA 7: Alterar SSL para "full"
+      // ETAPA 5: Alterar SSL para "full"
       console.log(`🔒 [CLOUDFLARE] Alterando SSL para Full...`);
       try {
         await axios.patch(
@@ -717,7 +722,7 @@ class WordPressDomainPurchase {
       
       await this.delay(2000);
       
-      // ETAPA 8: Criar Filtro WAF - Sitemap
+      // ETAPA 6: Criar Filtro WAF - Sitemap
       console.log(`🛡️ [CLOUDFLARE] Criando filtro WAF - Sitemap...`);
       let sitemapFilterId = null;
       try {
@@ -746,7 +751,7 @@ class WordPressDomainPurchase {
       
       await this.delay(2000);
       
-      // ETAPA 9: Criar Regra de Bloqueio - Sitemap
+      // ETAPA 7: Criar Regra de Bloqueio - Sitemap
       if (sitemapFilterId) {
         console.log(`🛡️ [CLOUDFLARE] Criando regra bloqueio - Sitemap...`);
         try {
@@ -775,7 +780,7 @@ class WordPressDomainPurchase {
       
       await this.delay(2000);
       
-      // ETAPA 10: Criar Filtro WAF - ?s=
+      // ETAPA 8: Criar Filtro WAF - ?s=
       console.log(`🛡️ [CLOUDFLARE] Criando filtro WAF - ?s=...`);
       let queryFilterId = null;
       try {
@@ -804,7 +809,7 @@ class WordPressDomainPurchase {
       
       await this.delay(2000);
       
-      // ETAPA 11: Criar Regra de Bloqueio - ?s=
+      // ETAPA 9: Criar Regra de Bloqueio - ?s=
       if (queryFilterId) {
         console.log(`🛡️ [CLOUDFLARE] Criando regra bloqueio - ?s=...`);
         try {
@@ -966,8 +971,8 @@ class WordPressDomainPurchase {
   }
 
   /**
-   * INSTALAR WORDPRESS VIA SOFTACULOUS
-   * ✅ COM CALLBACKS PARA O FRONTEND
+   * 🔥 INSTALAR WORDPRESS VIA SOFTACULOUS (MÉTODO CORRETO)
+   * Usando a mesma lógica do cURL da listagem de comandos
    */
   async installWordPress(domain, sessionId) {
     try {
@@ -978,31 +983,38 @@ class WordPressDomainPurchase {
         .map((char, i) => i === 0 ? char.toUpperCase() : char)
         .join('');
       
-      // Endpoint CORRETO da API Softaculous
+      // 🔥 ENDPOINT CORRETO - IGUAL À LISTAGEM
       const softaculousUrl = `${config.CPANEL_URL}/frontend/jupiter/softaculous/index.live.php`;
       
+      // 🔥 PARÂMETROS DA URL
       const params = {
         api: 'json',
         act: 'software',
         soft: '26' // WordPress ID no Softaculous
       };
       
-      const data = {
+      // 🔥 DADOS DO FORMULÁRIO (igual ao cURL da listagem)
+      const formData = new URLSearchParams({
         softsubmit: '1',
         softdomain: domain,
-        softdirectory: '',
+        softdirectory: '', // Raiz do domínio
         admin_username: config.WORDPRESS_DEFAULT_USER || 'love9365',
         admin_pass: config.WORDPRESS_DEFAULT_PASSWORD || 'DiyEMn^7q4az#<22',
         admin_email: config.WORDPRESS_ADMIN_EMAIL || 'domain@gexcorp.com.br',
         site_name: siteName,
-        language: 'pt_BR'
-      };
+        language: 'pt_BR',
+        sets_plugins: 'Plugins'
+      });
       
       console.log(`📤 [WORDPRESS] Enviando requisição para Softaculous...`);
+      console.log(`   URL: ${softaculousUrl}`);
+      console.log(`   Domínio: ${domain}`);
+      console.log(`   Site Name: ${siteName}`);
       
+      // 🔥 REQUISIÇÃO USANDO AXIOS (equivalente ao cURL)
       const response = await axios.post(
         softaculousUrl,
-        new URLSearchParams(data).toString(),
+        formData.toString(),
         {
           params: params,
           auth: {
@@ -1012,14 +1024,15 @@ class WordPressDomainPurchase {
           headers: {
             'Content-Type': 'application/x-www-form-urlencoded'
           },
-          timeout: 120000
+          timeout: 120000 // 2 minutos
         }
       );
       
       console.log(`📥 [WORDPRESS] Resposta recebida`);
+      console.log(`   Status: ${response.status}`);
       
       // Verificar sucesso
-      if (response.data && response.data.insid) {
+      if (response.data && (response.data.insid || response.data.success)) {
         console.log(`✅ [WORDPRESS] Instalado com sucesso!`);
         
         // ✅ CALLBACK: WordPress instalado
@@ -1029,32 +1042,65 @@ class WordPressDomainPurchase {
         return true;
       }
       
+      // Se chegou aqui, algo deu errado
       console.error(`❌ [WORDPRESS] Instalação falhou`);
+      console.error(`   Resposta completa:`, JSON.stringify(response.data, null, 2));
+      
       return false;
       
     } catch (error) {
       console.error('❌ [WORDPRESS] Erro:', error.message);
+      if (error.response) {
+        console.error(`   Status: ${error.response.status}`);
+        console.error(`   Data:`, JSON.stringify(error.response.data, null, 2));
+      }
       return false;
     }
   }
 
   /**
-   * CONFIGURAR PLUGINS DO WORDPRESS
-   * ✅ COM CALLBACKS DETALHADOS PARA O FRONTEND
+   * 🔥 CONFIGURAR PLUGINS DO WORDPRESS (MÉTODO CORRIGIDO)
+   * Usando comandos Bash iguais à listagem
    */
   async setupWordPressPlugins(domain, sessionId) {
     try {
-      const destinationPath = `/home/${config.CPANEL_USERNAME}/${domain}`;
-      
       console.log(`🔌 [PLUGINS] Iniciando configuração de plugins para ${domain}`);
       
+      // 🔥 ETAPA 1: ENCONTRAR O CAMINHO REAL DO WORDPRESS
+      console.log(`🔍 [PLUGINS] Buscando caminho real do WordPress...`);
+      await this.updateProgress(sessionId, 'plugins', 'in_progress', 
+        `Localizando instalação do WordPress...`, domain);
+      
+      const findWpCommand = `find ${this.basePath} -name "wp-config.php" -path "*${domain}*" 2>/dev/null | head -1`;
+      
+      let wpConfigPath = '';
+      try {
+        const { stdout } = await execAsync(findWpCommand);
+        wpConfigPath = stdout.trim();
+        
+        if (!wpConfigPath) {
+          console.error(`❌ [PLUGINS] wp-config.php não encontrado para ${domain}`);
+          return false;
+        }
+        
+        console.log(`✅ [PLUGINS] wp-config.php encontrado: ${wpConfigPath}`);
+      } catch (error) {
+        console.error(`❌ [PLUGINS] Erro ao procurar wp-config.php:`, error.message);
+        return false;
+      }
+      
+      // 🔥 EXTRAIR O DIRETÓRIO DO WORDPRESS
+      const destinationPath = wpConfigPath.replace('/wp-config.php', '');
+      console.log(`📂 [PLUGINS] Diretório WordPress: ${destinationPath}`);
+      
       // ========================
-      // ETAPA 1: COPIAR PLUGINS
+      // ETAPA 2: COPIAR PLUGINS
       // ========================
       console.log(`📋 [PLUGINS] Copiando plugins do site modelo...`);
       await this.updateProgress(sessionId, 'plugins', 'in_progress', 
         `Copiando plugins para ${domain}...`, domain);
       
+      // 🔥 COMANDO BASH - IGUAL À LISTAGEM
       const copyCommand = `
         cp -r ${this.modelSitePath}/wp-content/plugins/* ${destinationPath}/wp-content/plugins/ && \
         chmod -R 755 ${destinationPath}/wp-content/plugins/ && \
@@ -1067,12 +1113,13 @@ class WordPressDomainPurchase {
       await this.delay(3000);
       
       // ========================
-      // ETAPA 2: ATIVAR PLUGINS
+      // ETAPA 3: ATIVAR PLUGINS
       // ========================
       console.log(`🔌 [PLUGINS] Ativando plugins...`);
       await this.updateProgress(sessionId, 'plugins', 'in_progress', 
         `Ativando plugins em ${domain}...`, domain);
       
+      // 🔥 COMANDO BASH VIA WP-CLI - IGUAL À LISTAGEM
       const activateCommand = `
         cd ${destinationPath} && \
         wp plugin activate wordfence --allow-root && \
@@ -1087,16 +1134,17 @@ class WordPressDomainPurchase {
         wp plugin activate duplicate-post --allow-root
       `;
       
-      const { stdout: activateOutput } = await execAsync(activateCommand);
+      await execAsync(activateCommand);
       console.log(`✅ [PLUGINS] Plugins ativados`);
       
       // ========================
-      // ETAPA 3: AUTO-UPDATE
+      // ETAPA 4: AUTO-UPDATE
       // ========================
       console.log(`🔄 [PLUGINS] Habilitando auto-update...`);
       await this.updateProgress(sessionId, 'plugins', 'in_progress', 
         `Configurando atualização automática em ${domain}...`, domain);
       
+      // 🔥 COMANDO BASH - IGUAL À LISTAGEM
       const autoUpdateCommand = `
         cd ${destinationPath} && \
         wp plugin auto-updates enable --all --allow-root
@@ -1106,12 +1154,13 @@ class WordPressDomainPurchase {
       console.log(`✅ [PLUGINS] Auto-update habilitado`);
       
       // ========================
-      // ETAPA 4: ATUALIZAR PLUGINS
+      // ETAPA 5: ATUALIZAR PLUGINS
       // ========================
       console.log(`⚡ [PLUGINS] Atualizando plugins...`);
       await this.updateProgress(sessionId, 'plugins', 'in_progress', 
         `Atualizando plugins em ${domain}...`, domain);
       
+      // 🔥 COMANDO BASH - IGUAL À LISTAGEM
       const updateCommand = `
         cd ${destinationPath} && \
         wp plugin update --all --allow-root
@@ -1121,7 +1170,7 @@ class WordPressDomainPurchase {
       console.log(`✅ [PLUGINS] Plugins atualizados`);
       
       // ========================
-      // ETAPA 5: CONFIGURAR LOGIN /wordpanel124
+      // ETAPA 6: CONFIGURAR LOGIN /wordpanel124
       // ========================
       console.log(`⚙️ [CONFIG] Configurando URL de login...`);
       await this.updateProgress(sessionId, 'plugins', 'in_progress', 
@@ -1156,7 +1205,7 @@ class WordPressDomainPurchase {
       console.log(`✅ [CONFIG] Login configurado: /wordpanel124`);
       
       // ========================
-      // ETAPA 6: CONFIGURAR PERMALINKS
+      // ETAPA 7: CONFIGURAR PERMALINKS
       // ========================
       console.log(`🔗 [CONFIG] Configurando permalinks...`);
       await this.updateProgress(sessionId, 'plugins', 'in_progress', 
@@ -1199,7 +1248,11 @@ class WordPressDomainPurchase {
    */
   async getDomainInfoFromNamecheap(domain) {
     try {
-      console.log(`🔍 [NAMECHEAP] Buscando informações de ${domain}...`);
+      console.log(`📋 [NAMECHEAP] Buscando informações de ${domain}...`);
+      
+      const domainParts = domain.split('.');
+      const tld = domainParts.pop();
+      const sld = domainParts.join('.');
       
       const params = {
         ApiUser: config.NAMECHEAP_API_USER,
@@ -1214,20 +1267,18 @@ class WordPressDomainPurchase {
       const xmlData = response.data;
       
       if (!xmlData.includes('Status="OK"')) {
-        console.error('⚠️ [NAMECHEAP] Erro ao buscar informações');
+        console.error(`❌ [NAMECHEAP] Erro ao buscar info de ${domain}`);
         return null;
       }
       
-      const info = {
-        domain_name: domain
-      };
+      const info = {};
       
-      const createdDateMatch = xmlData.match(/CreatedDate="([^"]+)"/);
-      if (createdDateMatch) {
-        info.created_date = createdDateMatch[1];
+      const createdMatch = xmlData.match(/CreatedDate="([^"]+)"/);
+      if (createdMatch) {
+        info.created_date = createdMatch[1];
       }
       
-      const expiresMatch = xmlData.match(/Expires="([^"]+)"/);
+      const expiresMatch = xmlData.match(/ExpiredDate="([^"]+)"/);
       if (expiresMatch) {
         info.expiration_date = expiresMatch[1];
       }
@@ -1235,11 +1286,6 @@ class WordPressDomainPurchase {
       const statusMatch = xmlData.match(/Status="([^"]+)"/);
       if (statusMatch) {
         info.status = statusMatch[1];
-      }
-      
-      const whoisGuardMatch = xmlData.match(/WhoisGuard="([^"]+)"/);
-      if (whoisGuardMatch) {
-        info.whois_guard = whoisGuardMatch[1] === 'ENABLED';
       }
       
       const autoRenewMatch = xmlData.match(/AutoRenew="([^"]+)"/);
@@ -1445,6 +1491,9 @@ class WordPressDomainPurchase {
           domain_name: domainName,
           updated_at: new Date().toISOString()
         }, { onConflict: 'session_id' });
+      
+      console.log(`📊 [PROGRESS] ${step} - ${status} - ${message}`);
+      
     } catch (error) {
       console.error('❌ [PROGRESS] Erro:', error.message);
     }
