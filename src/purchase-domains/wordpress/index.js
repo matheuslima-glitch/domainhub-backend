@@ -1042,7 +1042,9 @@ async addDomainToCPanel(domain) {
 }
 
 /**
- * INSTALAR WORDPRESS
+ * INSTALAR WORDPRESS - AUTENTICAÇÃO CORRIGIDA
+ * 
+ * Tenta múltiplas formas de autenticação para Softaculous
  */
 async installWordPress(domain, sessionId) {
   const MAX_RETRIES = 5;
@@ -1054,13 +1056,8 @@ async installWordPress(domain, sessionId) {
       .map((char, i) => i === 0 ? char.toUpperCase() : char)
       .join('');
   
-  const softaculousUrl = `${config.CPANEL_URL}/frontend/jupiter/softaculous/index.live.php`;
-  
-  const params = {
-    api: 'json',
-    act: 'software',
-    soft: '26'
-  };
+  // IMPORTANTE: Softaculous pode precisar de URL diferente ou autenticação específica
+  const baseUrl = config.CPANEL_URL.replace(':2083', '').replace('https://', '');
   
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {
@@ -1086,7 +1083,7 @@ async installWordPress(domain, sessionId) {
         formData.append('sets[plugins]', 'Plugins');
         console.log(`   Estratégia: COM sets[plugins]`);
       } else {
-        console.log(`   Estratégia: SEM sets[plugins] (fallback)`);
+        console.log(`   Estratégia: SEM sets[plugins]`);
       }
       
       if (attempt > 1) {
@@ -1097,11 +1094,22 @@ async installWordPress(domain, sessionId) {
       
       console.log(`📤 [WORDPRESS] Enviando requisição...`);
       
-      const response = await axios.post(
-        softaculousUrl,
-        formData.toString(),
-        {
-          params: params,
+      // ==========================================
+      // ESTRATÉGIAS DE AUTENTICAÇÃO
+      // ==========================================
+      let softaculousUrl;
+      let axiosConfig;
+      
+      if (attempt <= 2) {
+        // ESTRATÉGIA 1-2: Basic Auth padrão (seu código original)
+        console.log(`   Auth: Basic Auth (username:password)`);
+        softaculousUrl = `${config.CPANEL_URL}/frontend/jupiter/softaculous/index.live.php`;
+        axiosConfig = {
+          params: {
+            api: 'json',
+            act: 'software',
+            soft: '26'
+          },
           auth: {
             username: config.CPANEL_USERNAME,
             password: config.CPANEL_PASSWORD
@@ -1110,15 +1118,95 @@ async installWordPress(domain, sessionId) {
             'Content-Type': 'application/x-www-form-urlencoded'
           },
           timeout: 120000 + (attempt * 30000)
-        }
+        };
+        
+      } else if (attempt === 3) {
+        // ESTRATÉGIA 3: Credenciais na URL (como cURL -u faz)
+        console.log(`   Auth: Credenciais na URL`);
+        softaculousUrl = `https://${encodeURIComponent(config.CPANEL_USERNAME)}:${encodeURIComponent(config.CPANEL_PASSWORD)}@${baseUrl}:2083/frontend/jupiter/softaculous/index.live.php`;
+        axiosConfig = {
+          params: {
+            api: 'json',
+            act: 'software',
+            soft: '26'
+          },
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded'
+          },
+          timeout: 120000 + (attempt * 30000)
+        };
+        
+      } else if (attempt === 4) {
+        // ESTRATÉGIA 4: Authorization header manual
+        console.log(`   Auth: Authorization header (Base64)`);
+        const credentials = Buffer.from(`${config.CPANEL_USERNAME}:${config.CPANEL_PASSWORD}`).toString('base64');
+        softaculousUrl = `${config.CPANEL_URL}/frontend/jupiter/softaculous/index.live.php`;
+        axiosConfig = {
+          params: {
+            api: 'json',
+            act: 'software',
+            soft: '26'
+          },
+          headers: {
+            'Authorization': `Basic ${credentials}`,
+            'Content-Type': 'application/x-www-form-urlencoded'
+          },
+          timeout: 120000 + (attempt * 30000)
+        };
+        
+      } else {
+        // ESTRATÉGIA 5: cPanel API Token (fallback)
+        console.log(`   Auth: cPanel API Token`);
+        softaculousUrl = `${config.CPANEL_URL}/frontend/jupiter/softaculous/index.live.php`;
+        axiosConfig = {
+          params: {
+            api: 'json',
+            act: 'software',
+            soft: '26'
+          },
+          headers: {
+            'Authorization': `cpanel ${config.CPANEL_USERNAME}:${config.CPANEL_API_TOKEN}`,
+            'Content-Type': 'application/x-www-form-urlencoded'
+          },
+          timeout: 120000 + (attempt * 30000)
+        };
+      }
+      
+      console.log(`   URL: ${softaculousUrl.replace(/:([^:]+)@/, ':****@')}`); // Ocultar senha no log
+      
+      // ==========================================
+      // FAZER REQUISIÇÃO
+      // ==========================================
+      const response = await axios.post(
+        softaculousUrl,
+        formData.toString(),
+        axiosConfig
       );
       
       console.log(`📥 [WORDPRESS] Resposta recebida (tentativa ${attempt}):`);
       console.log(`   Status: ${response.status}`);
-      console.log(`   Data:`, JSON.stringify(response.data, null, 2));
       
+      // Verificar se retornou HTML de login (401 disfarçado)
+      if (typeof response.data === 'string') {
+        if (response.data.includes('Login do cPanel') || response.data.includes('<form')) {
+          console.error(`❌ [WORDPRESS] Tentativa ${attempt} - Retornou página de login`);
+          console.error(`   Autenticação falhou - tentando próxima estratégia...`);
+          continue;
+        }
+      }
+      
+      // Log curto da resposta
+      const dataStr = typeof response.data === 'string' 
+        ? response.data.substring(0, 200) 
+        : JSON.stringify(response.data, null, 2);
+      console.log(`   Data (preview):`, dataStr);
+      
+      // ==========================================
+      // VALIDAR SUCESSO
+      // ==========================================
       if (response.data && (response.data.insid || response.data.success)) {
         console.log(`✅ [WORDPRESS] SUCESSO na tentativa ${attempt}!`);
+        console.log(`   Installation ID: ${response.data.insid || 'N/A'}`);
         
         await this.updateProgress(sessionId, 'wordpress', 'completed', 
           `WordPress instalado em ${domain}!`, domain);
@@ -1149,8 +1237,20 @@ async installWordPress(domain, sessionId) {
       console.error(`❌ [WORDPRESS] Tentativa ${attempt} - Erro:`, error.message);
       
       if (error.response) {
-        console.error(`   Status: ${error.response.status}`);
-        console.error(`   Data:`, JSON.stringify(error.response.data, null, 2));
+        console.error(`   Status HTTP: ${error.response.status}`);
+        
+        if (error.response.status === 401) {
+          console.error(`   Erro 401: Autenticação recusada`);
+          console.error(`   Tentando próxima estratégia de autenticação...`);
+        }
+        
+        // Log só preview da resposta
+        if (error.response.data) {
+          const errorData = typeof error.response.data === 'string' 
+            ? error.response.data.substring(0, 300)
+            : JSON.stringify(error.response.data).substring(0, 300);
+          console.error(`   Resposta (preview):`, errorData);
+        }
       }
       
       if (error.code === 'ETIMEDOUT') {
@@ -1165,7 +1265,9 @@ async installWordPress(domain, sessionId) {
     }
   }
   
-  // Verificação final
+  // ==========================================
+  // VERIFICAÇÃO FINAL
+  // ==========================================
   console.log(`🔍 [WORDPRESS] Todas as tentativas falharam - verificando se WordPress existe...`);
   
   try {
@@ -1179,6 +1281,7 @@ async installWordPress(domain, sessionId) {
     if (wpConfigPath) {
       console.log(`✅ [WORDPRESS] WordPress ENCONTRADO no sistema!`);
       console.log(`   Caminho: ${wpConfigPath}`);
+      console.log(`   Provavelmente foi instalado mas Softaculous não confirmou`);
       
       await this.updateProgress(sessionId, 'wordpress', 'completed', 
         `WordPress encontrado em ${domain}!`, domain);
@@ -1190,7 +1293,17 @@ async installWordPress(domain, sessionId) {
     console.error(`⚠️ [WORDPRESS] Erro ao verificar instalação:`, verifyError.message);
   }
   
+  // ==========================================
+  // FALHA TOTAL
+  // ==========================================
   console.error(`❌ [WORDPRESS] FALHA TOTAL após ${MAX_RETRIES} tentativas`);
+  console.error(`   Domínio: ${domain}`);
+  console.error(`   Todas as estratégias de autenticação falharam:`);
+  console.error(`   1. Basic Auth (username:password)`);
+  console.error(`   2. Basic Auth retry`);
+  console.error(`   3. Credenciais na URL`);
+  console.error(`   4. Authorization header manual`);
+  console.error(`   5. cPanel API Token`);
   
   await this.updateProgress(sessionId, 'wordpress', 'error', 
     `Erro ao instalar WordPress após ${MAX_RETRIES} tentativas`, domain);
