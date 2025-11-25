@@ -835,138 +835,119 @@ class WordPressDomainPurchase {
     }
   }
 
-  /**
-   * ADICIONAR DOMÍNIO AO CPANEL
-   * 🔥 CORRIGIDO: Usando UAPI (API 3) addondomain corretamente com logs detalhados
-   */
-  async addDomainToCPanel(domain) {
-    console.log(`\n${'='.repeat(70)}`);
-    console.log(`🖥️ [CPANEL] ADICIONANDO DOMÍNIO AO CPANEL`);
-    console.log(`   Domain: ${domain}`);
-    console.log(`${'='.repeat(70)}`);
+ /**
+ * ADICIONAR DOMÍNIO AO CPANEL
+ */
+async addDomainToCPanel(domain) {
+  console.log(`\n${'='.repeat(70)}`);
+  console.log(`🖥️ [CPANEL] ADICIONANDO DOMÍNIO AO CPANEL`);
+  console.log(`   Domain: ${domain}`);
+  console.log(`${'='.repeat(70)}`);
+  
+  try {
+    // Configurações do domínio
+    const domainParts = domain.split('.');
+    const subdomain = domainParts[0];
+    const dir = domain.replace(/\./g, '_');
     
-    try {
-      // Configurações do domínio
-      const domainParts = domain.split('.');
-      const subdomain = domainParts[0]; // primeira parte do domínio
-      const dir = domain.replace(/\./g, '_'); // diretório com underscores
+    console.log(`📋 [CPANEL] Configuração:`);
+    console.log(`   Domain completo: ${domain}`);
+    console.log(`   Subdomain: ${subdomain}`);
+    console.log(`   Diretório: ${dir}`);
+    console.log(`   Path completo: /home/${config.CPANEL_USERNAME}/public_html/${dir}`);
+    
+    // Tentativas com retry
+    for (let attempt = 1; attempt <= 5; attempt++) {
+      console.log(`\n🔄 [CPANEL] Tentativa ${attempt}/5`);
       
-      console.log(`📋 [CPANEL] Configuração:`);
-      console.log(`   Domain completo: ${domain}`);
-      console.log(`   Subdomain: ${subdomain}`);
-      console.log(`   Diretório: ${dir}`);
-      console.log(`   Path completo: /home/${config.CPANEL_USERNAME}/public_html/${dir}`);
-      
-      // Tentativas com retry
-      for (let attempt = 1; attempt <= 5; attempt++) {
-        console.log(`\n🔄 [CPANEL] Tentativa ${attempt}/5`);
+      try {
+        // CORREÇÃO 1: Usar query string na URL (mais confiável para UAPI)
+        const params = new URLSearchParams({
+          domain: domain,
+          subdomain: subdomain,
+          dir: dir
+        });
         
-        try {
-          // Construir URL da API UAPI (API 3)
-          const apiUrl = `${config.CPANEL_URL}/execute/AddonDomain/addaddondomain`;
+        const apiUrl = `${config.CPANEL_URL}/execute/AddonDomain/addaddondomain?${params.toString()}`;
+        
+        console.log(`📤 [CPANEL] Requisição:`);
+        console.log(`   URL: ${apiUrl}`);
+        console.log(`   Method: GET`);
+        
+        // CORREÇÃO 2: Usar GET com parâmetros na URL (padrão UAPI)
+        const response = await axios.get(apiUrl, {
+          headers: {
+            'Authorization': `cpanel ${config.CPANEL_USERNAME}:${config.CPANEL_API_TOKEN}`
+          },
+          timeout: 60000, // CORREÇÃO 3: Timeout aumentado para 60s
+          // CORREÇÃO 4: Configurações adicionais de conexão
+          httpsAgent: new (require('https').Agent)({
+            rejectUnauthorized: false, // Aceita certificados self-signed
+            keepAlive: true
+          })
+        });
+        
+        console.log(`📥 [CPANEL] Resposta recebida:`);
+        console.log(`   Status HTTP: ${response.status}`);
+        console.log(`   Data:`, JSON.stringify(response.data, null, 2));
+        
+        // Verificar sucesso na resposta UAPI
+        if (response.data && response.data.status === 1) {
+          console.log(`✅ [CPANEL] Domínio ${domain} adicionado com sucesso!`);
+          await this.delay(5000);
+          return true;
+        }
+        
+        // Verificar se domínio já existe
+        if (response.data && response.data.errors) {
+          const errors = Array.isArray(response.data.errors) ? response.data.errors : [response.data.errors];
+          const errorMsg = errors.join(', ');
           
-          console.log(`📤 [CPANEL] Requisição:`);
-          console.log(`   URL: ${apiUrl}`);
-          console.log(`   Method: POST`);
-          console.log(`   Domain: ${domain}`);
-          console.log(`   Subdomain: ${subdomain}`);
-          console.log(`   Dir: ${dir}`);
+          console.log(`⚠️ [CPANEL] Erro detectado: ${errorMsg}`);
           
-          // Fazer requisição POST com parâmetros no body
-          const response = await axios.post(
-            apiUrl,
-            {
-              domain: domain,
-              subdomain: subdomain,
-              dir: dir
-            },
-            {
-              headers: {
-                'Authorization': `cpanel ${config.CPANEL_USERNAME}:${config.CPANEL_API_TOKEN}`,
-                'Content-Type': 'application/x-www-form-urlencoded'
-              },
-              timeout: 30000
-            }
-          );
-          
-          console.log(`📥 [CPANEL] Resposta recebida:`);
-          console.log(`   Status HTTP: ${response.status}`);
-          console.log(`   Data:`, JSON.stringify(response.data, null, 2));
-          
-          // Verificar sucesso na resposta UAPI
-          if (response.data && response.data.status === 1) {
-            console.log(`✅ [CPANEL] Domínio ${domain} adicionado com sucesso!`);
-            console.log(`   Resultado: ${response.data.statusmsg || 'Sucesso'}`);
-            
-            // Aguardar para o cPanel processar
-            console.log(`⏳ [CPANEL] Aguardando 5s para processamento...`);
+          if (errorMsg.toLowerCase().includes('already') || 
+              errorMsg.toLowerCase().includes('existe') ||
+              errorMsg.toLowerCase().includes('exist')) {
+            console.log(`✅ [CPANEL] Domínio já existe - considerando sucesso`);
             await this.delay(5000);
-            
             return true;
           }
-          
-          // Verificar se domínio já existe
-          if (response.data && response.data.errors) {
-            const errors = Array.isArray(response.data.errors) ? response.data.errors : [response.data.errors];
-            const errorMsg = errors.join(', ');
-            
-            console.log(`⚠️ [CPANEL] Erro detectado: ${errorMsg}`);
-            
-            // Se já existe, considerar sucesso
-            if (errorMsg.toLowerCase().includes('already') || 
-                errorMsg.toLowerCase().includes('existe') ||
-                errorMsg.toLowerCase().includes('exist')) {
-              console.log(`✅ [CPANEL] Domínio já existe - considerando sucesso`);
-              await this.delay(5000);
-              return true;
-            }
-          }
-          
-          // Se não teve sucesso e não existe, log de erro
-          console.error(`❌ [CPANEL] Tentativa ${attempt} falhou`);
-          console.error(`   Response completo:`, JSON.stringify(response.data, null, 2));
-          
-          // Aguardar antes de próxima tentativa
-          if (attempt < 5) {
-            const waitTime = attempt * 6000;
-            console.log(`⏳ [CPANEL] Aguardando ${waitTime/1000}s antes da próxima tentativa...`);
-            await this.delay(waitTime);
-          }
-          
-        } catch (error) {
-          console.error(`❌ [CPANEL] Erro na tentativa ${attempt}:`);
-          console.error(`   Mensagem: ${error.message}`);
-          
-          if (error.response) {
-            console.error(`   Status HTTP: ${error.response.status}`);
-            console.error(`   Status Text: ${error.response.statusText}`);
-            console.error(`   Headers:`, JSON.stringify(error.response.headers, null, 2));
-            console.error(`   Data:`, JSON.stringify(error.response.data, null, 2));
-          }
-          
-          if (error.code) {
-            console.error(`   Error Code: ${error.code}`);
-          }
-          
-          // Aguardar antes de próxima tentativa
-          if (attempt < 5) {
-            const waitTime = attempt * 6000;
-            console.log(`⏳ [CPANEL] Aguardando ${waitTime/1000}s antes da próxima tentativa...`);
-            await this.delay(waitTime);
-          }
+        }
+        
+        console.error(`❌ [CPANEL] Tentativa ${attempt} falhou`);
+        
+        if (attempt < 5) {
+          const waitTime = attempt * 6000;
+          console.log(`⏳ [CPANEL] Aguardando ${waitTime/1000}s...`);
+          await this.delay(waitTime);
+        }
+        
+      } catch (error) {
+        console.error(`❌ [CPANEL] Erro na tentativa ${attempt}:`);
+        console.error(`   Mensagem: ${error.message}`);
+        console.error(`   Code: ${error.code || 'N/A'}`);
+        
+        if (error.response) {
+          console.error(`   Status: ${error.response.status}`);
+          console.error(`   Data:`, JSON.stringify(error.response.data, null, 2));
+        }
+        
+        if (attempt < 5) {
+          const waitTime = attempt * 6000;
+          console.log(`⏳ [CPANEL] Aguardando ${waitTime/1000}s...`);
+          await this.delay(waitTime);
         }
       }
-      
-      console.error(`\n❌ [CPANEL] FALHA TOTAL após 5 tentativas`);
-      console.error(`   Domínio: ${domain}`);
-      return false;
-      
-    } catch (error) {
-      console.error(`❌ [CPANEL] Erro fatal:`, error.message);
-      return false;
     }
+    
+    console.error(`\n❌ [CPANEL] FALHA TOTAL após 5 tentativas - Domínio: ${domain}`);
+    return false;
+    
+  } catch (error) {
+    console.error(`❌ [CPANEL] Erro fatal:`, error.message);
+    return false;
   }
-
+}
   /**
    * SALVAR NO SUPABASE
    */
