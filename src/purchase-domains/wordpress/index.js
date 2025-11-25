@@ -1066,26 +1066,26 @@ async addDomainToCPanel(domain) {
         await this.delay(delayMs);
       }
       
-      // Gerar nome de subdomínio e diretório
-      const subdomain = domain.replace(/\./g, '_');
-      const directory = domain.replace(/\./g, '_');
-      
       console.log(`📝 [CPANEL] Enviando requisição...`);
-      console.log(`   Domínio: ${domain}`);
-      console.log(`   Subdomínio: ${subdomain}`);
-      console.log(`   Diretório: ${directory}`);
       
+      // ==========================================
+      // USAR O ENDPOINT QUE FUNCIONAVA ANTES
+      // ==========================================
       const addResponse = await axios.post(
-        `${config.CPANEL_URL}/execute/AddonDomain/addaddondomain`,
+        `${config.CPANEL_URL}/json-api/cpanel`,
+        null,
         {
-          domain: domain,
-          subdomain: subdomain,
-          dir: directory
-        },
-        {
+          params: {
+            cpanel_jsonapi_module: 'AddonDomain',
+            cpanel_jsonapi_func: 'addaddondomain',
+            newdomain: domain,
+            subdomain: domain.split('.')[0],
+            dir: `/public_html/${domain}`,
+            disallowdot: 1
+          },
           headers: {
             'Authorization': `cpanel ${config.CPANEL_USERNAME}:${config.CPANEL_API_TOKEN}`,
-            'Content-Type': 'application/json'
+            'Content-Type': 'application/x-www-form-urlencoded'
           },
           timeout: 30000 + (attempt * 5000)
         }
@@ -1094,34 +1094,68 @@ async addDomainToCPanel(domain) {
       console.log(`📥 [CPANEL] Resposta recebida (tentativa ${attempt}):`);
       console.log(JSON.stringify(addResponse.data, null, 2));
       
-      // Verificar sucesso
-      if (addResponse.data && addResponse.data.status === 1) {
-        console.log(`✅ [CPANEL] SUCESSO na tentativa ${attempt}!`);
-        console.log(`   Diretório: /home/${config.CPANEL_USERNAME}/${directory}`);
+      const cpanelData = addResponse.data.cpanelresult?.data;
+      
+      // VERIFICAÇÃO 1: Array
+      if (Array.isArray(cpanelData) && cpanelData.length > 0) {
+        const hasSuccess = cpanelData.some(item => item.result === 1);
         
-        // Aguardar propagação
-        console.log(`⏳ [CPANEL] Aguardando 5s para propagação...`);
-        await this.delay(5000);
+        if (hasSuccess) {
+          const successItem = cpanelData.find(item => item.result === 1);
+          console.log(`✅ [CPANEL] SUCESSO na tentativa ${attempt}!`);
+          console.log(`   Mensagem: ${successItem.reason || 'Domínio adicionado'}`);
+          
+          // Aguardar propagação
+          console.log(`⏳ [CPANEL] Aguardando 5s para propagação...`);
+          await this.delay(5000);
+          
+          return true;
+        }
         
-        return true;
+        console.warn(`⚠️ [CPANEL] Tentativa ${attempt} - Array retornado mas sem sucesso`);
+        const failItem = cpanelData[0];
+        console.warn(`   Reason: ${failItem.reason || 'Desconhecido'}`);
+        
+        if (failItem.reason && failItem.reason.toLowerCase().includes('já existe')) {
+          console.log(`✅ [CPANEL] Domínio já existe - considerando sucesso`);
+          await this.delay(5000);
+          return true;
+        }
+        
+        continue;
       }
       
-      // Verificar erro "já existe"
-      const errorMsg = addResponse.data?.errors?.[0] || 
-                      addResponse.data?.error || 
-                      '';
-      
-      if (errorMsg && (errorMsg.toLowerCase().includes('already') || 
-          errorMsg.toLowerCase().includes('existe'))) {
-        console.log(`✅ [CPANEL] Domínio já existia - continuando...`);
-        await this.delay(5000);
-        return true;
+      // VERIFICAÇÃO 2: Objeto
+      if (cpanelData && typeof cpanelData === 'object' && !Array.isArray(cpanelData)) {
+        if (cpanelData.result === 1) {
+          console.log(`✅ [CPANEL] SUCESSO na tentativa ${attempt}!`);
+          await this.delay(5000);
+          return true;
+        }
+        
+        console.warn(`⚠️ [CPANEL] Tentativa ${attempt} - Objeto retornado mas result !== 1`);
+        continue;
       }
       
-      console.warn(`⚠️ [CPANEL] Tentativa ${attempt} - Resposta sem sucesso claro`);
+      // VERIFICAÇÃO 3: Erro explícito
+      if (addResponse.data.cpanelresult?.error) {
+        const errorMsg = addResponse.data.cpanelresult.error;
+        console.error(`❌ [CPANEL] Tentativa ${attempt} - Erro retornado:`, errorMsg);
+        
+        if (errorMsg.toLowerCase().includes('já existe') || 
+            errorMsg.toLowerCase().includes('already exists')) {
+          console.log(`✅ [CPANEL] Domínio já existe - considerando sucesso`);
+          await this.delay(5000);
+          return true;
+        }
+        
+        continue;
+      }
+      
+      console.warn(`⚠️ [CPANEL] Tentativa ${attempt} - Resposta inesperada`);
       
     } catch (error) {
-      console.error(`❌ [CPANEL] Tentativa ${attempt} - Erro:`, error.message);
+      console.error(`❌ [CPANEL] Tentativa ${attempt} - Erro na requisição:`, error.message);
       
       if (error.response) {
         console.error(`   Status HTTP: ${error.response.status}`);
