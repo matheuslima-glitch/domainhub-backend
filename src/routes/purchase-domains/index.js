@@ -229,7 +229,8 @@ async function processAsyncPurchase(params) {
           sessionId,
           domainManual,
           userId,
-          trafficSource
+          trafficSource,
+          plataforma
         });
       } else if (plataforma === 'atomicat') {
         const atomicatPurchase = new AtomiCatDomainPurchase();
@@ -240,7 +241,8 @@ async function processAsyncPurchase(params) {
           sessionId,
           domainManual,
           userId,
-          trafficSource
+          trafficSource,
+          plataforma
         });
       }
       
@@ -255,7 +257,8 @@ async function processAsyncPurchase(params) {
         nicho,
         sessionId,
         domainManual: null,
-        userId
+        userId,
+        plataforma
       });
       
     } else if (plataforma === 'atomicat') {
@@ -269,7 +272,8 @@ async function processAsyncPurchase(params) {
         nicho,
         sessionId,
         domainManual: null,
-        userId
+        userId,
+        plataforma
       });
     }
 
@@ -462,5 +466,6 @@ setInterval(() => {
 
 // Importar config aqui para ter acesso nas funções
 const config = require('../../config/env');
+
 
 module.exports = router;

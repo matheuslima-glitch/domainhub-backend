@@ -42,13 +42,16 @@ class AtomiCatDomainPurchase {
    * FUNÇÃO PRINCIPAL - APENAS COMPRA (SEM CLOUDFLARE/WORDPRESS)
    */
   async purchaseDomain(params) {
-    const { quantidade, idioma, nicho, sessionId, domainManual, userId, trafficSource } = params;
+    const { quantidade, idioma, nicho, sessionId, domainManual, userId, trafficSource, plataforma } = params;
     
     console.log(`🚀 [ATOMICAT] Iniciando compra`);
     console.log(`   Usuário: ${userId}`);
     console.log(`   Manual: ${domainManual ? 'SIM' : 'NÃO'}`);
     if (trafficSource) {
       console.log(`   Fonte de Tráfego: ${trafficSource}`);
+    }
+    if (plataforma) {
+      console.log(`   Plataforma: ${plataforma}`);
     }
     console.log(`   ⚠️ MODO ATOMICAT: Apenas compra (sem Cloudflare/WordPress)`);
     
@@ -85,8 +88,8 @@ class AtomiCatDomainPurchase {
         await this.updateProgress(sessionId, 'purchasing', 'completed', 
           `Domínio ${domainManual} comprado com sucesso!`, domainManual);
         
-        // Processar pós-compra com fonte de tráfego e sessionId
-        await this.processPostPurchase(domainManual, userId, sessionId, trafficSource);
+        // Processar pós-compra com fonte de tráfego, sessionId e plataforma
+        await this.processPostPurchase(domainManual, userId, sessionId, trafficSource, plataforma);
       } else {
         await this.updateProgress(sessionId, 'error', 'error', 
           `Erro na compra: ${purchaseResult.error}`);
@@ -154,8 +157,8 @@ class AtomiCatDomainPurchase {
               await this.updateProgress(sessionId, 'purchasing', 'completed', 
                 `Domínio ${generatedDomain} comprado com sucesso!`, generatedDomain);
               
-              // Processar pós-compra com sessionId
-              await this.processPostPurchase(domain, userId, sessionId);
+              // Processar pós-compra com sessionId, trafficSource e plataforma
+              await this.processPostPurchase(domain, userId, sessionId, trafficSource, plataforma);
               
             } else {
               console.error(`❌ Erro na compra: ${purchaseResult.error}`);
@@ -224,11 +227,14 @@ class AtomiCatDomainPurchase {
    * - Salvar log de atividade
    * - Enviar notificação WhatsApp
    */
-  async processPostPurchase(domain, userId, sessionId = null, trafficSource = null) {
+  async processPostPurchase(domain, userId, sessionId = null, trafficSource = null, plataforma = null) {
     try {
       console.log(`🔧 [POST-PURCHASE-ATOMICAT] Iniciando para ${domain}`);
       if (trafficSource) {
         console.log(`   Fonte de Tráfego: ${trafficSource}`);
+      }
+      if (plataforma) {
+        console.log(`   Plataforma: ${plataforma}`);
       }
       
       // Aguardar 5 segundos para domínio ser processado na Namecheap
@@ -238,8 +244,8 @@ class AtomiCatDomainPurchase {
       // Buscar informações do domínio na Namecheap
       const namecheapInfo = await this.getDomainInfoFromNamecheap(domain);
       
-      // Salvar no Supabase com dados reais e fonte de tráfego
-      const savedDomain = await this.saveDomainToSupabase(domain, userId, namecheapInfo, trafficSource);
+      // Salvar no Supabase com dados reais, fonte de tráfego e plataforma
+      const savedDomain = await this.saveDomainToSupabase(domain, userId, namecheapInfo, trafficSource, plataforma);
       
       // Salvar log de atividade
       if (savedDomain?.id) {
@@ -608,7 +614,7 @@ class AtomiCatDomainPurchase {
    * SALVAR NO SUPABASE - VERSÃO MELHORADA
    * Usa informações REAIS da Namecheap
    */
-  async saveDomainToSupabase(domain, userId, namecheapInfo, trafficSource = null) {
+  async saveDomainToSupabase(domain, userId, namecheapInfo, trafficSource = null, plataforma = null) {
     try {
       console.log(`💾 [SUPABASE-ATOMICAT] Salvando ${domain}...`);
       
@@ -626,6 +632,7 @@ class AtomiCatDomainPurchase {
         purchaseDate = new Date(namecheapInfo.created_date).toISOString();
       }
       
+      // Payload para a função RPC (sem traffic_source e platform)
       const payload = {
         p_user_id: userId || config.SUPABASE_USER_ID,
         p_domain_name: domain,
@@ -640,12 +647,6 @@ class AtomiCatDomainPurchase {
         p_auto_renew: namecheapInfo?.auto_renew || false
       };
       
-      // Adicionar fonte de tráfego se fornecida
-      if (trafficSource) {
-        payload.p_traffic_source = trafficSource;
-        console.log(`   Fonte de Tráfego: ${trafficSource}`);
-      }
-      
       const { data, error } = await supabase.rpc('upsert_domain_stats', payload);
       
       if (error) {
@@ -655,13 +656,48 @@ class AtomiCatDomainPurchase {
       
       console.log('✅ [SUPABASE-ATOMICAT] Domínio salvo com dados reais');
       
-      // Buscar id (não domain_id)
+      // Buscar id do domínio
       const { data: domainData } = await supabase
         .from('domains')
         .select('id')
         .eq('domain_name', domain)
         .eq('user_id', userId || config.SUPABASE_USER_ID)
         .single();
+      
+      if (!domainData?.id) {
+        console.error('⚠️ [SUPABASE-ATOMICAT] Erro ao buscar domain_id');
+        return null;
+      }
+      
+      console.log(`✅ [SUPABASE-ATOMICAT] Domain ID: ${domainData.id}`);
+      
+      // Atualizar traffic_source e platform separadamente se fornecidos
+      const updateFields = {};
+      if (trafficSource) {
+        updateFields.traffic_source = trafficSource;
+      }
+      if (plataforma) {
+        updateFields.platform = plataforma;
+      }
+      
+      if (Object.keys(updateFields).length > 0) {
+        console.log(`💾 [SUPABASE-ATOMICAT] Atualizando campos adicionais:`, updateFields);
+        const { error: updateError } = await supabase
+          .from('domains')
+          .update(updateFields)
+          .eq('id', domainData.id);
+        
+        if (updateError) {
+          console.error('⚠️ [SUPABASE-ATOMICAT] Erro ao atualizar campos:', updateError.message);
+        } else {
+          if (trafficSource) {
+            console.log(`✅ [SUPABASE-ATOMICAT] Fonte de tráfego atualizada: ${trafficSource}`);
+          }
+          if (plataforma) {
+            console.log(`✅ [SUPABASE-ATOMICAT] Plataforma atualizada: ${plataforma}`);
+          }
+        }
+      }
       
       return domainData;
       

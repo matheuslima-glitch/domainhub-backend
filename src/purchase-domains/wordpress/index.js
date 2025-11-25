@@ -55,13 +55,16 @@ class WordPressDomainPurchase {
    * FUNÇÃO PRINCIPAL - ORQUESTRA TODO O PROCESSO
    */
   async purchaseDomain(params) {
-    const { quantidade, idioma, nicho, sessionId, domainManual, userId, trafficSource } = params;
+    const { quantidade, idioma, nicho, sessionId, domainManual, userId, trafficSource, plataforma } = params;
     
     console.log(`🚀 [WORDPRESS] Iniciando compra`);
     console.log(`   Usuário: ${userId}`);
     console.log(`   Manual: ${domainManual ? 'SIM' : 'NÃO'}`);
     if (trafficSource) {
       console.log(`   Fonte de Tráfego: ${trafficSource}`);
+    }
+    if (plataforma) {
+      console.log(`   Plataforma: ${plataforma}`);
     }
     
     await this.updateProgress(sessionId, 'generating', 'in_progress', 'Iniciando processo...');
@@ -99,8 +102,8 @@ class WordPressDomainPurchase {
         await this.updateProgress(sessionId, 'purchasing', 'completed', 
           `Domínio ${domainManual} comprado com sucesso!`, domainManual);
         
-        // Processar todas as configurações
-        await this.processPostPurchase(domainManual, userId, sessionId, trafficSource);
+        // Processar todas as configurações (incluindo plataforma)
+        await this.processPostPurchase(domainManual, userId, sessionId, trafficSource, plataforma);
       } else {
         await this.updateProgress(sessionId, 'error', 'error', 
           `Erro na compra: ${purchaseResult.error}`);
@@ -164,7 +167,7 @@ class WordPressDomainPurchase {
               await this.updateProgress(sessionId, 'purchasing', 'completed', 
                 `Domínio ${generatedDomain} comprado com sucesso!`, generatedDomain);
               
-              await this.processPostPurchase(domain, userId, sessionId, trafficSource);
+              await this.processPostPurchase(domain, userId, sessionId, trafficSource, plataforma);
             } else {
               console.error(`❌ Erro na compra: ${purchaseResult.error}`);
               retries++;
@@ -451,11 +454,14 @@ class WordPressDomainPurchase {
    * PROCESSAR PÓS-COMPRA
    * 🔥 SEM INSTALAÇÃO DE WORDPRESS - APENAS CLOUDFLARE E CPANEL
    */
-  async processPostPurchase(domain, userId, sessionId, trafficSource = null) {
+  async processPostPurchase(domain, userId, sessionId, trafficSource = null, plataforma = null) {
     try {
       console.log(`🔧 [POST-PURCHASE] Iniciando configurações para ${domain}`);
       if (trafficSource) {
         console.log(`   Fonte de Tráfego: ${trafficSource}`);
+      }
+      if (plataforma) {
+        console.log(`   Plataforma: ${plataforma}`);
       }
       
       let cloudflareSetup = null;
@@ -504,7 +510,7 @@ class WordPressDomainPurchase {
       await this.updateProgress(sessionId, 'supabase', 'in_progress', 
         `Salvando informações de ${domain}...`, domain);
       
-      const savedDomain = await this.saveDomainToSupabase(domain, userId, cloudflareSetup, trafficSource);
+      const savedDomain = await this.saveDomainToSupabase(domain, userId, cloudflareSetup, trafficSource, plataforma);
       
       if (savedDomain?.id) {
         await this.updateProgress(sessionId, 'supabase', 'completed', 
@@ -952,7 +958,7 @@ async addDomainToCPanel(domain) {
   /**
    * SALVAR NO SUPABASE
    */
-  async saveDomainToSupabase(domain, userId, cloudflareSetup, trafficSource = null) {
+  async saveDomainToSupabase(domain, userId, cloudflareSetup, trafficSource = null, plataforma = null) {
     try {
       console.log(`💾 [SUPABASE] Buscando informações completas antes de salvar...`);
       
@@ -965,7 +971,7 @@ async addDomainToCPanel(domain) {
         expirationDate = new Date(namecheapInfo.expiration_date).toISOString();
       }
       
-      // Payload para a função RPC (sem traffic_source)
+      // Payload para a função RPC (sem traffic_source e platform)
       const payload = {
         p_user_id: userId || config.SUPABASE_USER_ID,
         p_domain_name: domain,
@@ -1006,18 +1012,31 @@ async addDomainToCPanel(domain) {
       
       console.log(`✅ [SUPABASE] Domain ID: ${domainData.id}`);
       
-      // Atualizar traffic_source separadamente se fornecido
+      // Atualizar traffic_source e platform separadamente se fornecidos
+      const updateFields = {};
       if (trafficSource) {
-        console.log(`💾 [SUPABASE] Atualizando fonte de tráfego: ${trafficSource}`);
+        updateFields.traffic_source = trafficSource;
+      }
+      if (plataforma) {
+        updateFields.platform = plataforma;
+      }
+      
+      if (Object.keys(updateFields).length > 0) {
+        console.log(`💾 [SUPABASE] Atualizando campos adicionais:`, updateFields);
         const { error: updateError } = await supabase
           .from('domains')
-          .update({ traffic_source: trafficSource })
+          .update(updateFields)
           .eq('id', domainData.id);
         
         if (updateError) {
-          console.error('⚠️ [SUPABASE] Erro ao atualizar traffic_source:', updateError.message);
+          console.error('⚠️ [SUPABASE] Erro ao atualizar campos:', updateError.message);
         } else {
-          console.log(`✅ [SUPABASE] Fonte de tráfego atualizada: ${trafficSource}`);
+          if (trafficSource) {
+            console.log(`✅ [SUPABASE] Fonte de tráfego atualizada: ${trafficSource}`);
+          }
+          if (plataforma) {
+            console.log(`✅ [SUPABASE] Plataforma atualizada: ${plataforma}`);
+          }
         }
       }
       
