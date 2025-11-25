@@ -463,15 +463,4 @@ setInterval(() => {
 // Importar config aqui para ter acesso nas funções
 const config = require('../../config/env');
 
-// ROTA DE TESTE DE LÓGICA DA ADIÇÃO DO DOMÍNIO AO CPANEL
-router.post('/test-wordpress', async (req, res) => {
-  const { domain } = req.body;
-  const sessionId = `test-${Date.now()}`;
-  const purchaseService = new WordPressDomainPurchase();
-  const success = await purchaseService.processPostPurchase(domain, sessionId);
-  res.json({ success, domain, sessionId });
-});
-//FIM DA ROTA DE TESTE
-
-
 module.exports = router;

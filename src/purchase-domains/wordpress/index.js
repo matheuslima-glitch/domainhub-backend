@@ -600,8 +600,8 @@ class WordPressDomainPurchase {
           `${this.cloudflareAPI}/zones/${zoneId}/dns_records`,
           {
             type: 'A',
-            name: '@',
-            content: config.SERVER_IP,
+            name: domain,
+            content: config.HOSTING_SERVER_IP || '69.46.11.10',
             ttl: 1,
             proxied: true
           },
@@ -647,7 +647,7 @@ class WordPressDomainPurchase {
       
       await this.delay(2000);
       
-      // ETAPA 5: Criar CNAME track
+      // ETAPA 5: Criar CNAME track (RedTrack)
       console.log(`📍 [CLOUDFLARE] Criando CNAME track...`);
       try {
         await axios.post(
@@ -655,9 +655,9 @@ class WordPressDomainPurchase {
           {
             type: 'CNAME',
             name: 'track',
-            content: domain,
+            content: 'khrv4.ttrk.io',
             ttl: 1,
-            proxied: true
+            proxied: false
           },
           {
             headers: {
@@ -674,16 +674,17 @@ class WordPressDomainPurchase {
       
       await this.delay(2000);
       
-      // ETAPA 6: Criar Filtro WAF - user-agent
-      console.log(`🛡️ [CLOUDFLARE] Criando filtro WAF - user-agent...`);
-      let userAgentFilterId = null;
+      // ETAPA 6: Criar Filtro WAF - Sitemap
+      console.log(`🛡️ [CLOUDFLARE] Criando filtro WAF - Sitemap...`);
+      let sitemapFilterId = null;
       try {
-        const filterResponse = await axios.post(
+        const sitemapFilterResponse = await axios.post(
           `${this.cloudflareAPI}/zones/${zoneId}/filters`,
           [
             {
-              expression: '(http.user_agent contains "SemrushBot") or (http.user_agent contains "AhrefsBot") or (http.user_agent contains "DotBot")',
-              description: 'Bloqueio-user-agent'
+              expression: '(http.request.uri contains "sitemap" or http.request.full_uri contains "sitemap")',
+              paused: false,
+              description: 'Bloqueio (Sitemap)'
             }
           ],
           {
@@ -694,25 +695,25 @@ class WordPressDomainPurchase {
             }
           }
         );
-        userAgentFilterId = filterResponse.data.result[0].id;
-        console.log(`✅ [CLOUDFLARE] Filtro WAF user-agent criado - ID: ${userAgentFilterId}`);
+        sitemapFilterId = sitemapFilterResponse.data.result[0].id;
+        console.log(`✅ [CLOUDFLARE] Filtro WAF Sitemap criado - ID: ${sitemapFilterId}`);
       } catch (error) {
-        console.error(`⚠️ [CLOUDFLARE] Erro filtro user-agent:`, error.message);
+        console.error(`⚠️ [CLOUDFLARE] Erro filtro Sitemap:`, error.message);
       }
       
       await this.delay(2000);
       
-      // ETAPA 7: Criar Regra de Bloqueio - user-agent
-      if (userAgentFilterId) {
-        console.log(`🛡️ [CLOUDFLARE] Criando regra bloqueio - user-agent...`);
+      // ETAPA 7: Criar Regra de Bloqueio - Sitemap
+      if (sitemapFilterId) {
+        console.log(`🛡️ [CLOUDFLARE] Criando regra bloqueio - Sitemap...`);
         try {
           await axios.post(
             `${this.cloudflareAPI}/zones/${zoneId}/firewall/rules`,
             [
               {
                 action: 'block',
-                filter: { id: userAgentFilterId },
-                description: 'Bloqueio-user-agent'
+                filter: { id: sitemapFilterId },
+                description: 'Bloqueio-Sitemap'
               }
             ],
             {
@@ -723,9 +724,9 @@ class WordPressDomainPurchase {
               }
             }
           );
-          console.log(`✅ [CLOUDFLARE] Regra bloqueio user-agent criada`);
+          console.log(`✅ [CLOUDFLARE] Regra bloqueio Sitemap criada`);
         } catch (error) {
-          console.error(`⚠️ [CLOUDFLARE] Erro regra user-agent:`, error.message);
+          console.error(`⚠️ [CLOUDFLARE] Erro regra Sitemap:`, error.message);
         }
       }
       
@@ -739,8 +740,9 @@ class WordPressDomainPurchase {
           `${this.cloudflareAPI}/zones/${zoneId}/filters`,
           [
             {
-              expression: '(http.request.uri.query contains "s=")',
-              description: 'Bloqueio-?s='
+              expression: '(http.request.uri contains "?s=" or http.request.full_uri contains "?s=")',
+              paused: false,
+              description: 'Bloqueio (?s=)'
             }
           ],
           {
@@ -790,7 +792,7 @@ class WordPressDomainPurchase {
       console.log(`   Zone ID: ${zoneId}`);
       console.log(`   DNS: A, CNAME www, CNAME track`);
       console.log(`   SSL: Full`);
-      console.log(`   WAF: 2 filtros + 2 regras de bloqueio`);
+      console.log(`   WAF: 2 filtros + 2 regras de bloqueio (sitemap, ?s=)`);
       
       return { zoneId: zoneId, nameservers: nameservers };
       
@@ -963,6 +965,7 @@ async addDomainToCPanel(domain) {
         expirationDate = new Date(namecheapInfo.expiration_date).toISOString();
       }
       
+      // Payload para a função RPC (sem traffic_source)
       const payload = {
         p_user_id: userId || config.SUPABASE_USER_ID,
         p_domain_name: domain,
@@ -977,11 +980,6 @@ async addDomainToCPanel(domain) {
         p_auto_renew: namecheapInfo?.auto_renew || false
       };
       
-      if (trafficSource) {
-        payload.p_traffic_source = trafficSource;
-        console.log(`   Fonte de Tráfego: ${trafficSource}`);
-      }
-      
       console.log(`💾 [SUPABASE] Salvando domínio...`);
       
       const { data, error } = await supabase.rpc('upsert_domain_stats', payload);
@@ -993,6 +991,7 @@ async addDomainToCPanel(domain) {
       
       console.log('✅ [SUPABASE] Domínio salvo com sucesso');
       
+      // Buscar o ID do domínio recém-criado
       const { data: domainData, error: fetchError } = await supabase
         .from('domains')
         .select('id')
@@ -1006,6 +1005,21 @@ async addDomainToCPanel(domain) {
       }
       
       console.log(`✅ [SUPABASE] Domain ID: ${domainData.id}`);
+      
+      // Atualizar traffic_source separadamente se fornecido
+      if (trafficSource) {
+        console.log(`💾 [SUPABASE] Atualizando fonte de tráfego: ${trafficSource}`);
+        const { error: updateError } = await supabase
+          .from('domains')
+          .update({ traffic_source: trafficSource })
+          .eq('id', domainData.id);
+        
+        if (updateError) {
+          console.error('⚠️ [SUPABASE] Erro ao atualizar traffic_source:', updateError.message);
+        } else {
+          console.log(`✅ [SUPABASE] Fonte de tráfego atualizada: ${trafficSource}`);
+        }
+      }
       
       return domainData;
       
