@@ -449,7 +449,7 @@ class WordPressDomainPurchase {
 
   /**
    * PROCESSAR PÓS-COMPRA
-   * 🔥 ORDEM CORRIGIDA: Cloudflare → cPanel → WordPress → Plugins
+   * 🔥 SEM INSTALAÇÃO DE WORDPRESS - APENAS CLOUDFLARE E CPANEL
    */
   async processPostPurchase(domain, userId, sessionId, trafficSource = null) {
     try {
@@ -495,55 +495,10 @@ class WordPressDomainPurchase {
       await this.updateProgress(sessionId, 'cpanel', 'completed', 
         `Domínio ${domain} adicionado ao cPanel com sucesso!`, domain);
       
-      console.log(`✅ [CPANEL] Domínio adicionado - prosseguindo para WordPress`);
-      
-      // Aguardar 5 segundos para o cPanel processar
-      await this.delay(5000);
+      console.log(`✅ [CPANEL] Domínio adicionado com sucesso`);
       
       // ========================
-      // ETAPA 4: WORDPRESS
-      // ========================
-      console.log(`🌐 [WORDPRESS] Instalando WordPress...`);
-      await this.updateProgress(sessionId, 'wordpress', 'in_progress', 
-        `Instalando WordPress em ${domain}...`, domain);
-      
-      const wpInstalled = await this.installWordPress(domain, sessionId);
-      
-      if (!wpInstalled) {
-        console.error(`❌ [WORDPRESS] Falha na instalação`);
-        await this.updateProgress(sessionId, 'wordpress', 'error', 
-          `Erro ao instalar WordPress em ${domain}`, domain);
-        return;
-      }
-      
-      await this.updateProgress(sessionId, 'wordpress', 'completed', 
-        `WordPress instalado com sucesso em ${domain}!`, domain);
-      
-      console.log(`✅ [WORDPRESS] Instalado - prosseguindo para plugins`);
-      
-      // Aguardar 10 segundos para WordPress finalizar instalação
-      await this.delay(10000);
-      
-      // ========================
-      // ETAPA 5: PLUGINS
-      // ========================
-      console.log(`🔌 [PLUGINS] Configurando plugins...`);
-      await this.updateProgress(sessionId, 'plugins', 'in_progress', 
-        `Configurando plugins para ${domain}...`, domain);
-      
-      const pluginsSuccess = await this.setupWordPressPlugins(domain, sessionId);
-      
-      if (!pluginsSuccess) {
-        console.error(`❌ [PLUGINS] Falha na configuração`);
-        await this.updateProgress(sessionId, 'plugins', 'error', 
-          `Erro ao configurar plugins em ${domain}`, domain);
-      } else {
-        await this.updateProgress(sessionId, 'plugins', 'completed', 
-          `Plugins configurados com sucesso em ${domain}!`, domain);
-      }
-      
-      // ========================
-      // ETAPA 6: SUPABASE
+      // ETAPA 4: SUPABASE
       // ========================
       console.log(`💾 [SUPABASE] Salvando domínio no banco de dados...`);
       await this.updateProgress(sessionId, 'supabase', 'in_progress', 
@@ -556,7 +511,7 @@ class WordPressDomainPurchase {
           `Domínio ${domain} salvo no banco de dados!`, domain);
         
         // ========================
-        // ETAPA 7: LOG
+        // ETAPA 5: LOG
         // ========================
         console.log(`📝 [LOG] Registrando atividade...`);
         await this.saveActivityLog(savedDomain.id, userId, trafficSource);
@@ -566,7 +521,7 @@ class WordPressDomainPurchase {
       }
       
       // ========================
-      // ETAPA 8: WHATSAPP
+      // ETAPA 6: WHATSAPP
       // ========================
       console.log(`📱 [WHATSAPP] Enviando notificação...`);
       await this.sendWhatsAppNotification(domain, 'success');
@@ -598,16 +553,14 @@ class WordPressDomainPurchase {
         {
           name: domain,
           account: { id: config.CLOUDFLARE_ACCOUNT_ID },
-          jump_start: true,
-          type: 'full'
+          jump_start: true
         },
         {
           headers: {
             'X-Auth-Email': config.CLOUDFLARE_EMAIL,
             'X-Auth-Key': config.CLOUDFLARE_API_KEY,
             'Content-Type': 'application/json'
-          },
-          timeout: 30000
+          }
         }
       );
       
@@ -617,10 +570,58 @@ class WordPressDomainPurchase {
       console.log(`✅ [CLOUDFLARE] Zona criada - ID: ${zoneId}`);
       console.log(`   Nameservers: ${nameservers.join(', ')}`);
       
-      await this.delay(3000);
+      await this.delay(2000);
       
-      // ETAPA 2: Criar CNAME www
-      console.log(`📝 [CLOUDFLARE] Criando CNAME www...`);
+      // ETAPA 2: Configurar SSL Full
+      console.log(`🔒 [CLOUDFLARE] Configurando SSL Full...`);
+      try {
+        await axios.patch(
+          `${this.cloudflareAPI}/zones/${zoneId}/settings/ssl`,
+          { value: 'full' },
+          {
+            headers: {
+              'X-Auth-Email': config.CLOUDFLARE_EMAIL,
+              'X-Auth-Key': config.CLOUDFLARE_API_KEY,
+              'Content-Type': 'application/json'
+            }
+          }
+        );
+        console.log(`✅ [CLOUDFLARE] SSL Full configurado`);
+      } catch (error) {
+        console.error(`⚠️ [CLOUDFLARE] Erro SSL:`, error.message);
+      }
+      
+      await this.delay(2000);
+      
+      // ETAPA 3: Criar registro A
+      console.log(`📍 [CLOUDFLARE] Criando DNS A...`);
+      try {
+        await axios.post(
+          `${this.cloudflareAPI}/zones/${zoneId}/dns_records`,
+          {
+            type: 'A',
+            name: '@',
+            content: config.SERVER_IP,
+            ttl: 1,
+            proxied: true
+          },
+          {
+            headers: {
+              'X-Auth-Email': config.CLOUDFLARE_EMAIL,
+              'X-Auth-Key': config.CLOUDFLARE_API_KEY,
+              'Content-Type': 'application/json'
+            }
+          }
+        );
+        console.log(`✅ [CLOUDFLARE] DNS A criado`);
+      } catch (error) {
+        console.error(`⚠️ [CLOUDFLARE] Erro DNS A:`, error.message);
+      }
+      
+      await this.delay(2000);
+      
+      // ETAPA 4: Criar CNAME www
+      console.log(`📍 [CLOUDFLARE] Criando CNAME www...`);
       try {
         await axios.post(
           `${this.cloudflareAPI}/zones/${zoneId}/dns_records`,
@@ -646,43 +647,15 @@ class WordPressDomainPurchase {
       
       await this.delay(2000);
       
-      // ETAPA 3: Criar CNAME track (Redtrack)
-      console.log(`📝 [CLOUDFLARE] Criando CNAME track...`);
+      // ETAPA 5: Criar CNAME track
+      console.log(`📍 [CLOUDFLARE] Criando CNAME track...`);
       try {
         await axios.post(
           `${this.cloudflareAPI}/zones/${zoneId}/dns_records`,
           {
             type: 'CNAME',
             name: 'track',
-            content: 'track.redtrack.io',
-            ttl: 1,
-            proxied: false
-          },
-          {
-            headers: {
-              'X-Auth-Email': config.CLOUDFLARE_EMAIL,
-              'X-Auth-Key': config.CLOUDFLARE_API_KEY,
-              'Content-Type': 'application/json'
-            }
-          }
-        );
-        console.log(`✅ [CLOUDFLARE] CNAME track criado (Redtrack)`);
-      } catch (error) {
-        console.error(`⚠️ [CLOUDFLARE] Erro CNAME track:`, error.message);
-      }
-      
-      await this.delay(2000);
-      
-      // ETAPA 4: Criar registro A
-      console.log(`📝 [CLOUDFLARE] Criando registro A...`);
-      const serverIP = config.HOSTING_SERVER_IP || '69.46.11.10';
-      try {
-        await axios.post(
-          `${this.cloudflareAPI}/zones/${zoneId}/dns_records`,
-          {
-            type: 'A',
-            name: domain,
-            content: serverIP,
+            content: domain,
             ttl: 1,
             proxied: true
           },
@@ -694,45 +667,23 @@ class WordPressDomainPurchase {
             }
           }
         );
-        console.log(`✅ [CLOUDFLARE] Registro A criado (IP: ${serverIP})`);
+        console.log(`✅ [CLOUDFLARE] CNAME track criado`);
       } catch (error) {
-        console.error(`⚠️ [CLOUDFLARE] Erro registro A:`, error.message);
-      }
-      
-      await this.delay(3000);
-      
-      // ETAPA 5: Alterar SSL para "full"
-      console.log(`🔒 [CLOUDFLARE] Alterando SSL para Full...`);
-      try {
-        await axios.patch(
-          `${this.cloudflareAPI}/zones/${zoneId}/settings/ssl`,
-          { value: 'full' },
-          {
-            headers: {
-              'X-Auth-Email': config.CLOUDFLARE_EMAIL,
-              'X-Auth-Key': config.CLOUDFLARE_API_KEY,
-              'Content-Type': 'application/json'
-            }
-          }
-        );
-        console.log(`✅ [CLOUDFLARE] SSL alterado para Full`);
-      } catch (error) {
-        console.error(`⚠️ [CLOUDFLARE] Erro SSL:`, error.message);
+        console.error(`⚠️ [CLOUDFLARE] Erro CNAME track:`, error.message);
       }
       
       await this.delay(2000);
       
-      // ETAPA 6: Criar Filtro WAF - Sitemap
-      console.log(`🛡️ [CLOUDFLARE] Criando filtro WAF - Sitemap...`);
-      let sitemapFilterId = null;
+      // ETAPA 6: Criar Filtro WAF - user-agent
+      console.log(`🛡️ [CLOUDFLARE] Criando filtro WAF - user-agent...`);
+      let userAgentFilterId = null;
       try {
-        const sitemapFilterResponse = await axios.post(
+        const filterResponse = await axios.post(
           `${this.cloudflareAPI}/zones/${zoneId}/filters`,
           [
             {
-              expression: '(http.request.uri contains "sitemap" or http.request.full_uri contains "sitemap")',
-              paused: false,
-              description: 'Bloqueio (Sitemap)'
+              expression: '(http.user_agent contains "SemrushBot") or (http.user_agent contains "AhrefsBot") or (http.user_agent contains "DotBot")',
+              description: 'Bloqueio-user-agent'
             }
           ],
           {
@@ -743,25 +694,25 @@ class WordPressDomainPurchase {
             }
           }
         );
-        sitemapFilterId = sitemapFilterResponse.data.result[0].id;
-        console.log(`✅ [CLOUDFLARE] Filtro WAF Sitemap criado - ID: ${sitemapFilterId}`);
+        userAgentFilterId = filterResponse.data.result[0].id;
+        console.log(`✅ [CLOUDFLARE] Filtro WAF user-agent criado - ID: ${userAgentFilterId}`);
       } catch (error) {
-        console.error(`⚠️ [CLOUDFLARE] Erro filtro Sitemap:`, error.message);
+        console.error(`⚠️ [CLOUDFLARE] Erro filtro user-agent:`, error.message);
       }
       
       await this.delay(2000);
       
-      // ETAPA 7: Criar Regra de Bloqueio - Sitemap
-      if (sitemapFilterId) {
-        console.log(`🛡️ [CLOUDFLARE] Criando regra bloqueio - Sitemap...`);
+      // ETAPA 7: Criar Regra de Bloqueio - user-agent
+      if (userAgentFilterId) {
+        console.log(`🛡️ [CLOUDFLARE] Criando regra bloqueio - user-agent...`);
         try {
           await axios.post(
             `${this.cloudflareAPI}/zones/${zoneId}/firewall/rules`,
             [
               {
                 action: 'block',
-                filter: { id: sitemapFilterId },
-                description: 'Bloqueio-Sitemap'
+                filter: { id: userAgentFilterId },
+                description: 'Bloqueio-user-agent'
               }
             ],
             {
@@ -772,9 +723,9 @@ class WordPressDomainPurchase {
               }
             }
           );
-          console.log(`✅ [CLOUDFLARE] Regra bloqueio Sitemap criada`);
+          console.log(`✅ [CLOUDFLARE] Regra bloqueio user-agent criada`);
         } catch (error) {
-          console.error(`⚠️ [CLOUDFLARE] Erro regra Sitemap:`, error.message);
+          console.error(`⚠️ [CLOUDFLARE] Erro regra user-agent:`, error.message);
         }
       }
       
@@ -788,9 +739,8 @@ class WordPressDomainPurchase {
           `${this.cloudflareAPI}/zones/${zoneId}/filters`,
           [
             {
-              expression: '(http.request.uri contains "?s=" or http.request.full_uri contains "?s=")',
-              paused: false,
-              description: 'Bloqueio (?s=)'
+              expression: '(http.request.uri.query contains "s=")',
+              description: 'Bloqueio-?s='
             }
           ],
           {
@@ -885,665 +835,135 @@ class WordPressDomainPurchase {
     }
   }
 
-
-
-// ==========================================================================
-// 1. ADICIONAR DOMÍNIO AO CPANEL
-// ==========================================================================
-async addDomainToCPanel(domain) {
-  console.log(`\n${'='.repeat(70)}`);
-  console.log(`🖥️ [CPANEL] ADICIONANDO DOMÍNIO: ${domain}`);
-  console.log(`${'='.repeat(70)}`);
-  
-  try {
-    const subdomain = domain.split('.')[0];
-    const dir = domain.replace(/\./g, '_');
-    
-    console.log(`📋 Configuração:`);
+  /**
+   * ADICIONAR DOMÍNIO AO CPANEL
+   * 🔥 CORRIGIDO: Usando UAPI (API 3) addondomain corretamente com logs detalhados
+   */
+  async addDomainToCPanel(domain) {
+    console.log(`\n${'='.repeat(70)}`);
+    console.log(`🖥️ [CPANEL] ADICIONANDO DOMÍNIO AO CPANEL`);
     console.log(`   Domain: ${domain}`);
-    console.log(`   Subdomain: ${subdomain}`);
-    console.log(`   Directory: /public_html/${dir}`);
+    console.log(`${'='.repeat(70)}`);
     
-    for (let attempt = 1; attempt <= 5; attempt++) {
-      console.log(`\n🔄 [CPANEL] Tentativa ${attempt}/5...`);
+    try {
+      // Configurações do domínio
+      const domainParts = domain.split('.');
+      const subdomain = domainParts[0]; // primeira parte do domínio
+      const dir = domain.replace(/\./g, '_'); // diretório com underscores
       
-      try {
-        const response = await axios.get(
-          `${config.CPANEL_URL}/json-api/cpanel`,
-          {
-            params: {
-              cpanel_jsonapi_user: config.CPANEL_USERNAME,
-              cpanel_jsonapi_apiversion: '2',
-              cpanel_jsonapi_module: 'AddonDomain',
-              cpanel_jsonapi_func: 'addaddondomain',
+      console.log(`📋 [CPANEL] Configuração:`);
+      console.log(`   Domain completo: ${domain}`);
+      console.log(`   Subdomain: ${subdomain}`);
+      console.log(`   Diretório: ${dir}`);
+      console.log(`   Path completo: /home/${config.CPANEL_USERNAME}/public_html/${dir}`);
+      
+      // Tentativas com retry
+      for (let attempt = 1; attempt <= 5; attempt++) {
+        console.log(`\n🔄 [CPANEL] Tentativa ${attempt}/5`);
+        
+        try {
+          // Construir URL da API UAPI (API 3)
+          const apiUrl = `${config.CPANEL_URL}/execute/AddonDomain/addaddondomain`;
+          
+          console.log(`📤 [CPANEL] Requisição:`);
+          console.log(`   URL: ${apiUrl}`);
+          console.log(`   Method: POST`);
+          console.log(`   Domain: ${domain}`);
+          console.log(`   Subdomain: ${subdomain}`);
+          console.log(`   Dir: ${dir}`);
+          
+          // Fazer requisição POST com parâmetros no body
+          const response = await axios.post(
+            apiUrl,
+            {
               domain: domain,
               subdomain: subdomain,
-              dir: `/public_html/${dir}`,
-              disallowdot: 1
+              dir: dir
             },
-            headers: {
-              'Authorization': `cpanel ${config.CPANEL_USERNAME}:${config.CPANEL_API_TOKEN}`
-            },
-            timeout: 30000
-          }
-        );
-        
-        const result = response.data?.cpanelresult?.data?.[0];
-        
-        if (result && result.result === 1) {
-          console.log(`✅ [CPANEL] Domínio adicionado com sucesso!`);
-          await this.delay(5000);
-          return true;
-        }
-        
-        if (result && result.reason) {
-          const reason = result.reason.toLowerCase();
-          if (reason.includes('already') || reason.includes('existe')) {
-            console.log(`✅ [CPANEL] Domínio já existe`);
+            {
+              headers: {
+                'Authorization': `cpanel ${config.CPANEL_USERNAME}:${config.CPANEL_API_TOKEN}`,
+                'Content-Type': 'application/x-www-form-urlencoded'
+              },
+              timeout: 30000
+            }
+          );
+          
+          console.log(`📥 [CPANEL] Resposta recebida:`);
+          console.log(`   Status HTTP: ${response.status}`);
+          console.log(`   Data:`, JSON.stringify(response.data, null, 2));
+          
+          // Verificar sucesso na resposta UAPI
+          if (response.data && response.data.status === 1) {
+            console.log(`✅ [CPANEL] Domínio ${domain} adicionado com sucesso!`);
+            console.log(`   Resultado: ${response.data.statusmsg || 'Sucesso'}`);
+            
+            // Aguardar para o cPanel processar
+            console.log(`⏳ [CPANEL] Aguardando 5s para processamento...`);
             await this.delay(5000);
-            return true;
-          }
-        }
-        
-        if (attempt < 5) {
-          await this.delay(attempt * 6000);
-        }
-        
-      } catch (error) {
-        console.error(`❌ [CPANEL] Erro tentativa ${attempt}:`, error.message);
-        if (attempt < 5) {
-          await this.delay(attempt * 6000);
-        }
-      }
-    }
-    
-    console.error(`❌ [CPANEL] FALHA após 5 tentativas`);
-    return false;
-    
-  } catch (error) {
-    console.error(`❌ [CPANEL] Erro fatal:`, error.message);
-    return false;
-  }
-}
-
-// ==========================================================================
-// 2. INSTALAR WORDPRESS VIA SOFTACULOUS 6.2.8
-// ==========================================================================
-async installWordPress(domain, sessionId) {
-  console.log(`\n${'='.repeat(70)}`);
-  console.log(`🌐 [WORDPRESS] INSTALANDO VIA SOFTACULOUS 6.2.8`);
-  console.log(`   Domain: ${domain}`);
-  console.log(`${'='.repeat(70)}`);
-  
-  try {
-    await this.updateProgress(sessionId, 'wordpress', 'in_progress', 
-      `Instalando WordPress via Softaculous em ${domain}...`, domain);
-    
-    const siteName = domain.split('.')[0]
-      .charAt(0).toUpperCase() + domain.split('.')[0].slice(1);
-    
-    for (let attempt = 1; attempt <= 5; attempt++) {
-      console.log(`\n🔄 [WORDPRESS] Tentativa ${attempt}/5...`);
-      
-      try {
-        const softaculousUrl = `${config.CPANEL_URL}/frontend/jupiter/softaculous/index.live.php`;
-        
-        console.log(`📤 [WORDPRESS] Requisição Softaculous API...`);
-        console.log(`   URL: ${softaculousUrl}`);
-        console.log(`   Domain: ${domain}`);
-        
-        const querystring = require('querystring');
-        
-        const params = querystring.stringify({
-          api: 'json',
-          act: 'software',
-          soft: '26',
-          softdomain: domain,
-          softdirectory: '',
-          softproto: 'https://',
-          create_db: '1',
-          dbname: `wp_${domain.split('.')[0].substring(0, 10)}`,
-          dbusername: `wp_${domain.split('.')[0].substring(0, 10)}`,
-          site_name: siteName,
-          site_desc: `Site WordPress - ${siteName}`,
-          admin_username: config.WORDPRESS_DEFAULT_USER,
-          admin_pass: config.WORDPRESS_DEFAULT_PASSWORD,
-          admin_email: config.WORDPRESS_ADMIN_EMAIL,
-          admin_fname: 'Admin',
-          admin_lname: siteName,
-          language: 'pt_BR',
-          eu_auto_upgrade: '1',
-          auto_upgrade: '1',
-          auto_upgrade_plugins: '1',
-          auto_upgrade_themes: '1',
-          disable_notify_install: '1',
-          disable_notify_update: '1',
-          softsubmit: '1'
-        });
-        
-        const response = await axios.post(
-          softaculousUrl,
-          params,
-          {
-            headers: {
-              'Authorization': `cpanel ${config.CPANEL_USERNAME}:${config.CPANEL_API_TOKEN}`,
-              'Content-Type': 'application/x-www-form-urlencoded'
-            },
-            timeout: 180000
-          }
-        );
-        
-        console.log(`📥 [WORDPRESS] Resposta - Status: ${response.status}`);
-        
-        if (response.data) {
-          console.log(`📄 [WORDPRESS] Response:`, JSON.stringify(response.data, null, 2));
-        }
-        
-        const isSuccess = response.status === 200 && 
-                         response.data && 
-                         !response.data.error &&
-                         !response.data.errors;
-        
-        if (isSuccess) {
-          console.log(`✅ [WORDPRESS] Instalação iniciada via Softaculous!`);
-          console.log(`   🎯 Instalação SERÁ visível na interface do Softaculous`);
-          console.log(`\n📋 CREDENCIAIS:`);
-          console.log(`   URL: https://${domain}`);
-          console.log(`   Admin: https://${domain}/wp-admin`);
-          console.log(`   User: ${config.WORDPRESS_DEFAULT_USER}`);
-          console.log(`   Pass: ${config.WORDPRESS_DEFAULT_PASSWORD}`);
-          
-          console.log(`\n⏳ Aguardando 30s...`);
-          await this.delay(30000);
-          
-          const verified = await this.verifyWordPressInstallation(domain, config);
-          
-          if (verified) {
-            console.log(`✅ [WORDPRESS] Instalação VERIFICADA!`);
-            
-            await this.updateProgress(sessionId, 'wordpress', 'completed', 
-              `WordPress instalado com sucesso em ${domain}!`, domain);
             
             return true;
-          } else {
-            console.log(`⚠️ [WORDPRESS] Instalação iniciada, aguardando...`);
-            
-            if (attempt < 5) {
-              console.log(`⏳ Aguardando mais 30s...`);
-              await this.delay(30000);
-              continue;
-            }
           }
-        } else {
-          if (response.data && response.data.error) {
-            console.error(`❌ [WORDPRESS] Erro:`, response.data.error);
-          }
+          
+          // Verificar se domínio já existe
           if (response.data && response.data.errors) {
-            console.error(`❌ [WORDPRESS] Erros:`, response.data.errors);
+            const errors = Array.isArray(response.data.errors) ? response.data.errors : [response.data.errors];
+            const errorMsg = errors.join(', ');
+            
+            console.log(`⚠️ [CPANEL] Erro detectado: ${errorMsg}`);
+            
+            // Se já existe, considerar sucesso
+            if (errorMsg.toLowerCase().includes('already') || 
+                errorMsg.toLowerCase().includes('existe') ||
+                errorMsg.toLowerCase().includes('exist')) {
+              console.log(`✅ [CPANEL] Domínio já existe - considerando sucesso`);
+              await this.delay(5000);
+              return true;
+            }
           }
-        }
-        
-        console.error(`⚠️ [WORDPRESS] Tentativa ${attempt} falhou`);
-        
-        if (attempt < 5) {
-          const waitTime = 15000 + (attempt * 10000);
-          console.log(`⏳ Aguardando ${waitTime/1000}s...`);
-          await this.delay(waitTime);
-        }
-        
-      } catch (error) {
-        console.error(`❌ [WORDPRESS] Erro tentativa ${attempt}:`, error.message);
-        
-        if (error.response) {
-          console.error(`   Status: ${error.response.status}`);
-          console.error(`   Data:`, JSON.stringify(error.response.data, null, 2));
-        }
-        
-        if (error.code === 'ECONNABORTED' || error.message.includes('timeout')) {
-          console.log(`⏳ [WORDPRESS] Timeout - verificando...`);
-          await this.delay(30000);
           
-          const verified = await this.verifyWordPressInstallation(domain, config);
-          if (verified) {
-            console.log(`✅ [WORDPRESS] Instalação verificada!`);
-            
-            await this.updateProgress(sessionId, 'wordpress', 'completed', 
-              `WordPress instalado com sucesso em ${domain}!`, domain);
-            
-            return true;
+          // Se não teve sucesso e não existe, log de erro
+          console.error(`❌ [CPANEL] Tentativa ${attempt} falhou`);
+          console.error(`   Response completo:`, JSON.stringify(response.data, null, 2));
+          
+          // Aguardar antes de próxima tentativa
+          if (attempt < 5) {
+            const waitTime = attempt * 6000;
+            console.log(`⏳ [CPANEL] Aguardando ${waitTime/1000}s antes da próxima tentativa...`);
+            await this.delay(waitTime);
+          }
+          
+        } catch (error) {
+          console.error(`❌ [CPANEL] Erro na tentativa ${attempt}:`);
+          console.error(`   Mensagem: ${error.message}`);
+          
+          if (error.response) {
+            console.error(`   Status HTTP: ${error.response.status}`);
+            console.error(`   Status Text: ${error.response.statusText}`);
+            console.error(`   Headers:`, JSON.stringify(error.response.headers, null, 2));
+            console.error(`   Data:`, JSON.stringify(error.response.data, null, 2));
+          }
+          
+          if (error.code) {
+            console.error(`   Error Code: ${error.code}`);
+          }
+          
+          // Aguardar antes de próxima tentativa
+          if (attempt < 5) {
+            const waitTime = attempt * 6000;
+            console.log(`⏳ [CPANEL] Aguardando ${waitTime/1000}s antes da próxima tentativa...`);
+            await this.delay(waitTime);
           }
         }
-        
-        if (attempt < 5) {
-          const waitTime = 15000 + (attempt * 10000);
-          await this.delay(waitTime);
-        }
-      }
-    }
-    
-    console.log(`\n🔍 [WORDPRESS] Verificação final...`);
-    const finalCheck = await this.verifyWordPressInstallation(domain, config);
-    
-    if (finalCheck) {
-      console.log(`✅ [WORDPRESS] Instalação CONFIRMADA!`);
-      
-      await this.updateProgress(sessionId, 'wordpress', 'completed', 
-        `WordPress instalado com sucesso em ${domain}!`, domain);
-      
-      return true;
-    }
-    
-    console.error(`\n❌ [WORDPRESS] FALHA TOTAL`);
-    
-    await this.updateProgress(sessionId, 'wordpress', 'error', 
-      `Falha ao instalar WordPress em ${domain}`, domain);
-    
-    return false;
-    
-  } catch (error) {
-    console.error(`❌ [WORDPRESS] Erro fatal:`, error.message);
-    
-    await this.updateProgress(sessionId, 'wordpress', 'error', 
-      `Erro fatal: ${error.message}`, domain);
-    
-    return false;
-  }
-}
-
-// ==========================================================================
-// 3. VERIFICAR INSTALAÇÃO NO FILESYSTEM
-// ==========================================================================
-async verifyWordPressInstallation(domain, config) {
-  console.log(`\n🔍 [VERIFY] Verificando WordPress...`);
-  
-  try {
-    const { promisify } = require('util');
-    const { exec } = require('child_process');
-    const execAsync = promisify(exec);
-    
-    const USERNAME = config.CPANEL_USERNAME;
-    const DOMAIN_DIR = domain.replace(/\./g, '_');
-    const WP_PATH = `/home/${USERNAME}/public_html/${DOMAIN_DIR}`;
-    
-    console.log(`🔎 Verificando: ${WP_PATH}`);
-    
-    const checkCommand = `[ -f "${WP_PATH}/wp-config.php" ] && echo "EXISTS" || echo "NOT_FOUND"`;
-    
-    const { stdout } = await execAsync(checkCommand, { timeout: 10000 });
-    
-    if (stdout.trim() === 'EXISTS') {
-      console.log(`✅ [VERIFY] wp-config.php encontrado!`);
-      
-      const structureCheck = `ls -d ${WP_PATH}/wp-admin ${WP_PATH}/wp-content ${WP_PATH}/wp-includes 2>/dev/null | wc -l`;
-      
-      const { stdout: count } = await execAsync(structureCheck, { timeout: 10000 });
-      const dirCount = parseInt(count.trim());
-      
-      if (dirCount === 3) {
-        console.log(`✅ [VERIFY] Estrutura completa!`);
-        return true;
-      } else {
-        console.log(`⚠️ [VERIFY] Estrutura incompleta - ${dirCount}/3 diretórios`);
-        return false;
-      }
-    }
-    
-    console.log(`❌ [VERIFY] WordPress não encontrado`);
-    return false;
-    
-  } catch (error) {
-    console.error(`❌ [VERIFY] Erro:`, error.message);
-    return false;
-  }
-}
-
-// ==========================================================================
-// 4. CONFIGURAR PLUGINS
-// ==========================================================================
-async setupWordPressPlugins(domain, sessionId) {
-  console.log(`\n${'='.repeat(70)}`);
-  console.log(`🔌 [PLUGINS] CONFIGURANDO PLUGINS`);
-  console.log(`   Domain: ${domain}`);
-  console.log(`${'='.repeat(70)}`);
-  
-  try {
-    const { promisify } = require('util');
-    const { exec } = require('child_process');
-    const execAsync = promisify(exec);
-    
-    await this.updateProgress(sessionId, 'plugins', 'in_progress', 
-      `Configurando plugins em ${domain}...`, domain);
-    
-    const USERNAME = config.CPANEL_USERNAME;
-    const DOMAIN_DIR = domain.replace(/\./g, '_');
-    const WP_PATH = `/home/${USERNAME}/public_html/${DOMAIN_DIR}`;
-    
-    let wpReady = false;
-    for (let i = 1; i <= 10; i++) {
-      const check = `[ -f "${WP_PATH}/wp-config.php" ] && echo "YES" || echo "NO"`;
-      const { stdout } = await execAsync(check, { timeout: 10000 });
-      
-      if (stdout.trim() === 'YES') {
-        console.log(`✅ [PLUGINS] WordPress encontrado: ${WP_PATH}`);
-        wpReady = true;
-        break;
       }
       
-      console.log(`⏳ [PLUGINS] Aguardando... (${i}/10)`);
-      await this.delay(3000);
-    }
-    
-    if (!wpReady) {
-      console.error(`❌ [PLUGINS] WordPress não encontrado`);
+      console.error(`\n❌ [CPANEL] FALHA TOTAL após 5 tentativas`);
+      console.error(`   Domínio: ${domain}`);
       return false;
-    }
-    
-    console.log(`\n1️⃣ Copiando plugins...`);
-    try {
-      const copyCmd = `cp -r /home/${USERNAME}/mynervify.com/wp-content/plugins/* ${WP_PATH}/wp-content/plugins/ 2>&1`;
-      await execAsync(copyCmd, { timeout: 60000 });
-      console.log(`✅ [PLUGINS] Plugins copiados`);
+      
     } catch (error) {
-      console.error(`⚠️ [PLUGINS] Erro ao copiar:`, error.message);
-    }
-    
-    console.log(`\n2️⃣ Ativando plugins...`);
-    const plugins = [
-      'wordfence',
-      'wordpress-seo',
-      'litespeed-cache',
-      'elementor',
-      'elementor-pro',
-      'elementor-automation',
-      'insert-headers-and-footers',
-      'google-site-kit',
-      'rename-wp-admin-login',
-      'duplicate-post'
-    ];
-    
-    for (const plugin of plugins) {
-      try {
-        const cmd = `cd ${WP_PATH} && wp plugin activate ${plugin} --allow-root 2>&1`;
-        const { stdout } = await execAsync(cmd, { timeout: 30000 });
-        console.log(`✅ ${plugin}: ${stdout.trim()}`);
-      } catch (error) {
-        console.error(`⚠️ ${plugin}: ${error.message}`);
-      }
-    }
-    
-    console.log(`\n3️⃣ Auto-update...`);
-    try {
-      const cmd = `cd ${WP_PATH} && wp plugin auto-updates enable --all --allow-root 2>&1`;
-      await execAsync(cmd, { timeout: 30000 });
-      console.log(`✅ Auto-update habilitado`);
-    } catch (error) {
-      console.error(`⚠️ Erro:`, error.message);
-    }
-    
-    console.log(`\n4️⃣ Atualizando plugins...`);
-    try {
-      const cmd = `cd ${WP_PATH} && wp plugin update --all --allow-root 2>&1`;
-      await execAsync(cmd, { timeout: 180000 });
-      console.log(`✅ Plugins atualizados`);
-    } catch (error) {
-      console.error(`⚠️ Erro:`, error.message);
-    }
-    
-    console.log(`\n5️⃣ Login customizado...`);
-    try {
-      const cmd = `cd ${WP_PATH} && wp option update rwl_page 'wordpanel124' --allow-root 2>&1`;
-      await execAsync(cmd, { timeout: 15000 });
-      console.log(`✅ Login: /wordpanel124`);
-    } catch (error) {
-      console.error(`⚠️ Erro:`, error.message);
-    }
-    
-    console.log(`\n6️⃣ Permalinks...`);
-    try {
-      const cmd = `cd ${WP_PATH} && wp rewrite structure '/%postname%/' --allow-root 2>&1`;
-      await execAsync(cmd, { timeout: 15000 });
-      console.log(`✅ Permalinks: /%postname%/`);
-    } catch (error) {
-      console.error(`⚠️ Erro:`, error.message);
-    }
-    
-    console.log(`\n✅ [PLUGINS] Configuração concluída!`);
-    
-    await this.updateProgress(sessionId, 'plugins', 'completed', 
-      `Plugins configurados em ${domain}!`, domain);
-    
-    return true;
-    
-  } catch (error) {
-    console.error(`❌ [PLUGINS] Erro fatal:`, error.message);
-    
-    await this.updateProgress(sessionId, 'plugins', 'error', 
-      `Erro: ${error.message}`, domain);
-    
-    return false;
-  }
-}
-
-// ==========================================================================
-// 5. HELPER: DELAY
-// ==========================================================================
-async delay(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-/**
- * NOTIFICAR WHATSAPP
- */
-async sendWhatsAppNotification(domain, status, errorMsg = '') {
-  const MAX_RETRIES = 5;
-  
-  if (!config.ZAPI_INSTANCE || !config.ZAPI_CLIENT_TOKEN) {
-    console.log('⚠️ [WHATSAPP-WORDPRESS] ZAPI não configurado');
-    return false;
-  }
-  
-  console.log(`📱 [WHATSAPP] Enviando notificação para ${domain}...`);
-  
-  try {
-    const phoneNumber = config.WHATSAPP_PHONE_NUMBER;
-    
-    if (!phoneNumber) {
-      console.error('❌ [WHATSAPP] Número de telefone não configurado');
+      console.error(`❌ [CPANEL] Erro fatal:`, error.message);
       return false;
-    }
-    
-    const agora = new Date();
-    const dataFormatada = new Intl.DateTimeFormat('pt-BR', {
-      timeZone: 'America/Sao_Paulo',
-      day: '2-digit',
-      month: '2-digit',
-      year: 'numeric'
-    }).format(agora);
-    
-    const horaFormatada = new Intl.DateTimeFormat('pt-BR', {
-      timeZone: 'America/Sao_Paulo',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit'
-    }).format(agora);
-    
-    let message;
-    if (status === 'success') {
-      message = `🤖 *Domain Hub*\n\n` +
-        `Lerricke, um novo domínio foi criado ✅:\n\n` +
-        `🌐Domínio: ${domain}\n` +
-        `🛜 Plataforma : WordPress + Plugins\n` +
-        `🔐Login: ${domain}/wordpanel124\n` +
-        `🗓️Data: ${dataFormatada} ás ${horaFormatada}`;
-    } else {
-      message = `🤖 *Domain Hub*\n\n` +
-        `Lerricke, houve um erro ao criar o domínio ❌:\n\n` +
-        `🌐Domínio tentado: ${domain}\n` +
-        `❌Erro: ${errorMsg}\n` +
-        `🗓️Data: ${dataFormatada} ás ${horaFormatada}`;
-    }
-    
-    const zapiUrl = config.ZAPI_INSTANCE;
-    
-    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-      try {
-        console.log(`🔄 [WHATSAPP] Tentativa ${attempt}/${MAX_RETRIES}...`);
-        console.log(`   Para: ${phoneNumber}`);
-        console.log(`   Mensagem: ${message.substring(0, 50)}...`);
-        
-        if (attempt > 1) {
-          const delayMs = attempt * 2000;
-          console.log(`⏳ [WHATSAPP] Aguardando ${delayMs/1000}s...`);
-          await this.delay(delayMs);
-        }
-        
-        const response = await axios.post(
-          zapiUrl,
-          { 
-            phone: phoneNumber.replace(/\D/g, ''), 
-            message: message 
-          },
-          { 
-            timeout: 10000 + (attempt * 2000),
-            headers: {
-              'Client-Token': config.ZAPI_CLIENT_TOKEN,
-              'Content-Type': 'application/json'
-            }
-          }
-        );
-        
-        console.log(`📥 [WHATSAPP] Resposta recebida (tentativa ${attempt}):`);
-        console.log(`   Status: ${response.status}`);
-        console.log(`   Data:`, JSON.stringify(response.data, null, 2));
-        
-        if (response.status >= 200 && response.status < 300) {
-          console.log(`✅ [WHATSAPP] SUCESSO na tentativa ${attempt}!`);
-          
-          if (response.data) {
-            if (response.data.error === false || response.data.success === true) {
-              console.log(`   Confirmado: error=false ou success=true`);
-              return true;
-            }
-            
-            if (!response.data.hasOwnProperty('error')) {
-              console.log(`   Sem campo error - considerando sucesso`);
-              return true;
-            }
-            
-            if (response.data.messageId || response.data.queueId || response.data.id) {
-              console.log(`   Message ID encontrado - sucesso`);
-              return true;
-            }
-          }
-          
-          console.log(`   Status 2xx - considerando sucesso`);
-          return true;
-        }
-        
-        console.warn(`⚠️ [WHATSAPP] Tentativa ${attempt} - Status ${response.status}`);
-        
-        if (attempt < MAX_RETRIES) {
-          console.log(`🔄 [WHATSAPP] Tentando novamente...`);
-          continue;
-        }
-        
-      } catch (error) {
-        console.error(`❌ [WHATSAPP] Tentativa ${attempt} - Erro:`, error.message);
-        
-        if (error.response) {
-          console.error(`   Status: ${error.response.status}`);
-          console.error(`   Data:`, JSON.stringify(error.response.data, null, 2));
-          
-          if (error.response.status === 429) {
-            console.error(`   Rate limit - aguardando mais tempo`);
-            if (attempt < MAX_RETRIES) {
-              await this.delay(10000);
-            }
-          }
-        }
-        
-        if (attempt < MAX_RETRIES) {
-          console.log(`🔄 [WHATSAPP] Tentando novamente...`);
-          continue;
-        }
-      }
-    }
-    
-    console.error(`❌ [WHATSAPP] FALHA após ${MAX_RETRIES} tentativas`);
-    console.error(`   ⚠️ IMPORTANTE: Isto NÃO impede o processo de continuar`);
-    
-    return false;
-    
-  } catch (error) {
-    console.error('❌ [WHATSAPP] Erro crítico:', error.message);
-    return false;
-  }
-}
-
-// ==========================================
-// FIM DAS 4 FUNÇÕES RESILIENTES
-// ==========================================
-
-  /**
-   * BUSCAR INFORMAÇÕES DO DOMÍNIO NA NAMECHEAP
-   */
-  async getDomainInfoFromNamecheap(domain) {
-    try {
-      console.log(`📋 [NAMECHEAP] Buscando informações de ${domain}...`);
-      
-      const domainParts = domain.split('.');
-      const tld = domainParts.pop();
-      const sld = domainParts.join('.');
-      
-      const params = {
-        ApiUser: config.NAMECHEAP_API_USER,
-        ApiKey: config.NAMECHEAP_API_KEY,
-        UserName: config.NAMECHEAP_API_USER,
-        Command: 'namecheap.domains.getInfo',
-        ClientIp: config.NAMECHEAP_CLIENT_IP,
-        DomainName: domain
-      };
-      
-      const response = await axios.get(this.namecheapAPI, { params, timeout: 30000 });
-      const xmlData = response.data;
-      
-      if (!xmlData.includes('Status="OK"')) {
-        console.error(`❌ [NAMECHEAP] Erro ao buscar info de ${domain}`);
-        return null;
-      }
-      
-      const info = {};
-      
-      const createdMatch = xmlData.match(/CreatedDate="([^"]+)"/);
-      if (createdMatch) {
-        info.created_date = createdMatch[1];
-      }
-      
-      const expiresMatch = xmlData.match(/ExpiredDate="([^"]+)"/);
-      if (expiresMatch) {
-        info.expiration_date = expiresMatch[1];
-      }
-      
-      const statusMatch = xmlData.match(/Status="([^"]+)"/);
-      if (statusMatch) {
-        info.status = statusMatch[1];
-      }
-      
-      const autoRenewMatch = xmlData.match(/AutoRenew="([^"]+)"/);
-      if (autoRenewMatch) {
-        info.auto_renew = autoRenewMatch[1] === 'true';
-      }
-      
-      console.log(`✅ [NAMECHEAP] Informações obtidas:`);
-      console.log(`   Criado: ${info.created_date || 'N/A'}`);
-      console.log(`   Expira: ${info.expiration_date || 'N/A'}`);
-      console.log(`   Status: ${info.status || 'N/A'}`);
-      
-      return info;
-      
-    } catch (error) {
-      console.error(`⚠️ [NAMECHEAP] Erro ao buscar info:`, error.message);
-      return null;
     }
   }
 
@@ -1622,7 +1042,7 @@ async sendWhatsAppNotification(domain, status, errorMsg = '') {
     try {
       console.log(`📝 [LOG] Registrando atividade para domínio ${domainId}...`);
       
-      let newValue = 'Domínio comprado com IA - WordPress + Plugins Configurados';
+      let newValue = 'Domínio comprado com IA - Configurado no cPanel';
       if (trafficSource) {
         newValue += ` | Fonte de Tráfego: ${trafficSource}`;
       }
@@ -1649,7 +1069,6 @@ async sendWhatsAppNotification(domain, status, errorMsg = '') {
       console.error('❌ [LOG] Erro:', error.message);
     }
   }
-
 
   /**
    * NOTIFICAR WHATSAPP
@@ -1679,14 +1098,13 @@ async sendWhatsAppNotification(domain, status, errorMsg = '') {
         second: '2-digit'
       }).format(agora);
       
-      // MENSAGEM
+      // MENSAGEM - ATUALIZADA SEM WORDPRESS
       let message;
       if (status === 'success') {
         message = `🤖 *Domain Hub*\n\n` +
           `Lerricke, um novo domínio foi criado ✅:\n\n` +
           `🌐Domínio: ${domain}\n` +
-          `🛜 Plataforma : WordPress + Plugins\n` +
-          `🔐Login: ${domain}/wordpanel124\n` +
+          `🛜 Plataforma : Wordpress\n` +
           `🗓️Data: ${dataFormatada} ás ${horaFormatada}`;
       } else {
         message = `🤖 *Domain Hub*\n\n` +
@@ -1729,7 +1147,6 @@ async sendWhatsAppNotification(domain, status, errorMsg = '') {
     }
   }
 
-
   /**
    * ATUALIZAR PROGRESSO
    */
@@ -1750,6 +1167,69 @@ async sendWhatsAppNotification(domain, status, errorMsg = '') {
       
     } catch (error) {
       console.error('❌ [PROGRESS] Erro:', error.message);
+    }
+  }
+
+  /**
+   * BUSCAR INFORMAÇÕES DO DOMÍNIO NA NAMECHEAP
+   */
+  async getDomainInfoFromNamecheap(domain) {
+    try {
+      console.log(`📋 [NAMECHEAP] Buscando informações de ${domain}...`);
+      
+      const domainParts = domain.split('.');
+      const tld = domainParts.pop();
+      const sld = domainParts.join('.');
+      
+      const params = {
+        ApiUser: config.NAMECHEAP_API_USER,
+        ApiKey: config.NAMECHEAP_API_KEY,
+        UserName: config.NAMECHEAP_API_USER,
+        Command: 'namecheap.domains.getInfo',
+        ClientIp: config.NAMECHEAP_CLIENT_IP,
+        DomainName: domain
+      };
+      
+      const response = await axios.get(this.namecheapAPI, { params, timeout: 30000 });
+      const xmlData = response.data;
+      
+      if (!xmlData.includes('Status="OK"')) {
+        console.error(`❌ [NAMECHEAP] Erro ao buscar info de ${domain}`);
+        return null;
+      }
+      
+      const info = {};
+      
+      const createdMatch = xmlData.match(/CreatedDate="([^"]+)"/);
+      if (createdMatch) {
+        info.created_date = createdMatch[1];
+      }
+      
+      const expiresMatch = xmlData.match(/ExpiredDate="([^"]+)"/);
+      if (expiresMatch) {
+        info.expiration_date = expiresMatch[1];
+      }
+      
+      const statusMatch = xmlData.match(/Status="([^"]+)"/);
+      if (statusMatch) {
+        info.status = statusMatch[1];
+      }
+      
+      const autoRenewMatch = xmlData.match(/AutoRenew="([^"]+)"/);
+      if (autoRenewMatch) {
+        info.auto_renew = autoRenewMatch[1] === 'true';
+      }
+      
+      console.log(`✅ [NAMECHEAP] Informações obtidas:`);
+      console.log(`   Criado: ${info.created_date || 'N/A'}`);
+      console.log(`   Expira: ${info.expiration_date || 'N/A'}`);
+      console.log(`   Status: ${info.status || 'N/A'}`);
+      
+      return info;
+      
+    } catch (error) {
+      console.error(`⚠️ [NAMECHEAP] Erro ao buscar info:`, error.message);
+      return null;
     }
   }
 
