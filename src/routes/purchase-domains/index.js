@@ -38,7 +38,8 @@ router.post('/', async (req, res) => {
       plataforma = 'wordpress', 
       nicho,
       domainManual = null,
-      userId = null
+      userId = null,
+      trafficSource = null
     } = req.body;
 
     // Se não tiver userId no body, tentar pegar do header
@@ -76,6 +77,7 @@ router.post('/', async (req, res) => {
     console.log(`🌐 Idioma: ${idioma}`);
     console.log(`🏷️ Nicho: ${nicho || 'N/A'}`);
     console.log(`✍️ Domínio Manual: ${domainManual || 'N/A'}`);
+    console.log(`📡 Fonte de Tráfego: ${trafficSource || 'N/A'}`);
     console.log(`${'='.repeat(70)}\n`);
 
     // Responder imediatamente ao cliente (requisição assíncrona)
@@ -96,7 +98,8 @@ router.post('/', async (req, res) => {
       plataforma,
       nicho,
       domainManual,
-      userId: finalUserId
+      userId: finalUserId,
+      trafficSource
     });
 
   } catch (error) {
@@ -249,6 +252,7 @@ async function processAsyncPurchase(params) {
     } else if (plataforma === 'wordpress') {
       // Compra com IA para WordPress
       console.log(`🌐 [WORDPRESS] Processando compra com IA`);
+      console.log(`   Fonte de Tráfego: ${trafficSource || 'N/A'}`);
       
       const wordpressPurchase = new WordPressDomainPurchase();
       result = await wordpressPurchase.purchaseDomain({
@@ -258,12 +262,14 @@ async function processAsyncPurchase(params) {
         sessionId,
         domainManual: null,
         userId,
-        plataforma
+        plataforma,
+        trafficSource
       });
       
     } else if (plataforma === 'atomicat') {
       // Compra com IA para AtomiCat
       console.log(`🚀 [ATOMICAT] Processando compra com IA`);
+      console.log(`   Fonte de Tráfego: ${trafficSource || 'N/A'}`);
       
       const atomicatPurchase = new AtomiCatDomainPurchase();
       result = await atomicatPurchase.purchaseDomain({
@@ -273,7 +279,8 @@ async function processAsyncPurchase(params) {
         sessionId,
         domainManual: null,
         userId,
-        plataforma
+        plataforma,
+        trafficSource
       });
     }
 
