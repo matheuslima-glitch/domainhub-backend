@@ -837,6 +837,7 @@ class WordPressDomainPurchase {
 
  /**
  * ADICIONAR DOMÍNIO AO CPANEL
+ * CORRIGIDO: Usando API 2 (json-api) que funciona neste cPanel
  */
 async addDomainToCPanel(domain) {
   console.log(`\n${'='.repeat(70)}`);
@@ -854,36 +855,35 @@ async addDomainToCPanel(domain) {
     console.log(`   Domain completo: ${domain}`);
     console.log(`   Subdomain: ${subdomain}`);
     console.log(`   Diretório: ${dir}`);
-    console.log(`   Path completo: /home/${config.CPANEL_USERNAME}/public_html/${dir}`);
     
     // Tentativas com retry
     for (let attempt = 1; attempt <= 5; attempt++) {
       console.log(`\n🔄 [CPANEL] Tentativa ${attempt}/5`);
       
       try {
-        // CORREÇÃO 1: Usar query string na URL (mais confiável para UAPI)
+        // API 2 - Formato correto para este cPanel
         const params = new URLSearchParams({
-          domain: domain,
-          subdomain: subdomain,
-          dir: dir
+          cpanel_jsonapi_apiversion: '2',
+          cpanel_jsonapi_module: 'AddonDomain',
+          cpanel_jsonapi_func: 'addaddondomain',
+          dir: dir,
+          newdomain: domain,
+          subdomain: subdomain
         });
         
-        const apiUrl = `${config.CPANEL_URL}/execute/AddonDomain/addaddondomain?${params.toString()}`;
+        const apiUrl = `${config.CPANEL_URL}/json-api/cpanel?${params.toString()}`;
         
         console.log(`📤 [CPANEL] Requisição:`);
         console.log(`   URL: ${apiUrl}`);
         console.log(`   Method: GET`);
         
-        // CORREÇÃO 2: Usar GET com parâmetros na URL (padrão UAPI)
         const response = await axios.get(apiUrl, {
           headers: {
             'Authorization': `cpanel ${config.CPANEL_USERNAME}:${config.CPANEL_API_TOKEN}`
           },
-          timeout: 60000, // CORREÇÃO 3: Timeout aumentado para 60s
-          // CORREÇÃO 4: Configurações adicionais de conexão
+          timeout: 60000,
           httpsAgent: new (require('https').Agent)({
-            rejectUnauthorized: false, // Aceita certificados self-signed
-            keepAlive: true
+            rejectUnauthorized: false
           })
         });
         
@@ -891,30 +891,29 @@ async addDomainToCPanel(domain) {
         console.log(`   Status HTTP: ${response.status}`);
         console.log(`   Data:`, JSON.stringify(response.data, null, 2));
         
-        // Verificar sucesso na resposta UAPI
-        if (response.data && response.data.status === 1) {
+        // Verificar sucesso na resposta API 2
+        const result = response.data?.cpanelresult?.data?.[0];
+        
+        if (result?.result === 1) {
           console.log(`✅ [CPANEL] Domínio ${domain} adicionado com sucesso!`);
+          console.log(`   Motivo: ${result.reason || 'Sucesso'}`);
           await this.delay(5000);
           return true;
         }
         
         // Verificar se domínio já existe
-        if (response.data && response.data.errors) {
-          const errors = Array.isArray(response.data.errors) ? response.data.errors : [response.data.errors];
-          const errorMsg = errors.join(', ');
-          
-          console.log(`⚠️ [CPANEL] Erro detectado: ${errorMsg}`);
-          
-          if (errorMsg.toLowerCase().includes('already') || 
-              errorMsg.toLowerCase().includes('existe') ||
-              errorMsg.toLowerCase().includes('exist')) {
-            console.log(`✅ [CPANEL] Domínio já existe - considerando sucesso`);
-            await this.delay(5000);
-            return true;
-          }
+        const reason = result?.reason || '';
+        if (reason.toLowerCase().includes('already') || 
+            reason.toLowerCase().includes('existe') ||
+            reason.toLowerCase().includes('exist') ||
+            reason.toLowerCase().includes('já')) {
+          console.log(`✅ [CPANEL] Domínio já existe - considerando sucesso`);
+          await this.delay(5000);
+          return true;
         }
         
         console.error(`❌ [CPANEL] Tentativa ${attempt} falhou`);
+        console.error(`   Reason: ${reason}`);
         
         if (attempt < 5) {
           const waitTime = attempt * 6000;
