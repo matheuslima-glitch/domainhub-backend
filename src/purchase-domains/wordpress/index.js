@@ -1,7 +1,6 @@
 /**
- * COMPRA DE DOMÍNIOS WORDPRESS - VERSÃO CORRIGIDA
- * ✅ SEGUINDO EXATAMENTE A LÓGICA DA LISTAGEM DE COMANDOS
- * ✅ COM CALLBACKS COMPLETOS PARA FRONTEND
+ * COMPRA DE DOMÍNIOS WORDPRESS 
+ * COM CALLBACKS COMPLETOS PARA FRONTEND
  */
 
 const axios = require('axios');
@@ -9,6 +8,7 @@ const config = require('../../config/env');
 const { createClient } = require('@supabase/supabase-js');
 const { exec } = require('child_process');
 const { promisify } = require('util');
+
 
 const execAsync = promisify(exec);
 

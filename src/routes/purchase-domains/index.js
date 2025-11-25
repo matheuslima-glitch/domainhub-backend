@@ -1,7 +1,6 @@
 /**
- * ROTA PRINCIPAL DE COMPRA DE DOMÍNIOS - VERSÃO COMPLETA
+ * ROTA PRINCIPAL DE COMPRA DE DOMÍNIOS MANUAL
  * Este arquivo gerencia as requisições de compra e direciona para WordPress ou AtomiCat
- * Inclui suporte para compra manual (quando clicar na lupa)
  */
 
 const express = require('express');
