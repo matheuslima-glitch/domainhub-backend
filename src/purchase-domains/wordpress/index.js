@@ -97,11 +97,12 @@ class WordPressDomainPurchase {
    * FUNÇÃO PRINCIPAL - ORQUESTRA TODO O PROCESSO
    */
   async purchaseDomain(params) {
-    const { quantidade, idioma, nicho, sessionId, domainManual, userId, trafficSource, plataforma } = params;
+    const { quantidade, idioma, nicho, sessionId, domainManual, userId, trafficSource, plataforma, isManual } = params;
     
     console.log(`🚀 [WORDPRESS] Iniciando compra`);
     console.log(`   Usuário: ${userId}`);
     console.log(`   Manual: ${domainManual ? 'SIM' : 'NÃO'}`);
+    console.log(`   Sem limite de preço: ${isManual ? 'SIM' : 'NÃO'}`);
     if (trafficSource) {
       console.log(`   Fonte de Tráfego: ${trafficSource}`);
     }
@@ -134,11 +135,16 @@ class WordPressDomainPurchase {
         return { success: false, error: 'Domínio não disponível' };
       }
       
-      // Verificar preço
-      if (availabilityCheck.price > this.priceLimit) {
+      // Verificar preço APENAS se NÃO for compra manual
+      if (!isManual && availabilityCheck.price > this.priceLimit) {
         await this.updateProgress(sessionId, 'error', 'error', 
           `Domínio ${domainManual} muito caro: $${availabilityCheck.price}`);
         return { success: false, error: 'Domínio muito caro' };
+      }
+      
+      // Log do preço para compra manual
+      if (isManual) {
+        console.log(`💰 [MANUAL] Preço do domínio: $${availabilityCheck.price} (sem limite de preço)`);
       }
       
       // ⚠️ CHECKPOINT: Verificar cancelamento antes de comprar

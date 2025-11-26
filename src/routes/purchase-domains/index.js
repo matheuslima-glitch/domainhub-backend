@@ -147,6 +147,33 @@ router.post('/', async (req, res) => {
       });
     }
 
+    // ============================================
+    // VERIFICAÇÃO DE SALDO ANTES DE INICIAR
+    // ============================================
+    console.log(`💰 [IA] Verificando saldo antes de iniciar compra...`);
+    
+    const AtomiCatForBalance = require('../../purchase-domains/atomicat');
+    const balanceChecker = new AtomiCatForBalance();
+    const currentBalance = await balanceChecker.checkBalance();
+    
+    // Calcular saldo mínimo necessário (quantidade * $1.00 para margem)
+    const minRequired = quantidade * 1.00;
+    
+    console.log(`💰 [IA] Saldo atual: $${currentBalance.toFixed(2)}`);
+    console.log(`💰 [IA] Saldo necessário (${quantidade} domínios): $${minRequired.toFixed(2)}`);
+    
+    if (currentBalance < minRequired) {
+      console.log(`❌ [IA] Saldo insuficiente!`);
+      return res.status(400).json({
+        success: false,
+        error: `Saldo insuficiente na Namecheap. Disponível: $${currentBalance.toFixed(2)}. Necessário: $${minRequired.toFixed(2)}. Adicione no mínimo $15.00 para continuar.`,
+        balance: currentBalance,
+        required: minRequired
+      });
+    }
+    
+    console.log(`✅ [IA] Saldo suficiente para prosseguir`);
+
     // Gerar session ID único
     sessionId = uuidv4();
     processingSessions.set(sessionId, {
@@ -164,6 +191,7 @@ router.post('/', async (req, res) => {
     console.log(`🏷️ Nicho: ${nicho || 'N/A'}`);
     console.log(`✍️ Domínio Manual: ${domainManual || 'N/A'}`);
     console.log(`📡 Fonte de Tráfego: ${trafficSource || 'N/A'}`);
+    console.log(`💰 Saldo disponível: $${currentBalance.toFixed(2)}`);
     console.log(`${'='.repeat(70)}\n`);
 
     // Responder imediatamente ao cliente (requisição assíncrona)
@@ -173,7 +201,8 @@ router.post('/', async (req, res) => {
       sessionId: sessionId,
       plataforma: plataforma,
       quantidade: domainManual ? 1 : quantidade,
-      manual: !!domainManual
+      manual: !!domainManual,
+      balance: currentBalance
     });
 
     // Processar compra de forma assíncrona
@@ -229,11 +258,11 @@ router.post('/manual', async (req, res) => {
       });
     }
     
-    // Validar formato do domínio
-    if (!domain.endsWith('.online')) {
+    // Validar formato do domínio (deve ter pelo menos um ponto)
+    if (!domain.includes('.') || domain.startsWith('.') || domain.endsWith('.')) {
       return res.status(400).json({
         success: false,
-        error: 'Apenas domínios .online são suportados'
+        error: 'Formato de domínio inválido'
       });
     }
     
@@ -245,12 +274,36 @@ router.post('/manual', async (req, res) => {
       });
     }
     
+    // ============================================
+    // VERIFICAÇÃO DE SALDO ANTES DE INICIAR
+    // ============================================
+    console.log(`💰 [MANUAL] Verificando saldo antes de iniciar compra...`);
+    
+    const AtomiCatForBalance = require('../../purchase-domains/atomicat');
+    const balanceChecker = new AtomiCatForBalance();
+    const currentBalance = await balanceChecker.checkBalance();
+    
+    console.log(`💰 [MANUAL] Saldo atual: $${currentBalance.toFixed(2)}`);
+    
+    // Verificar se tem saldo mínimo (pelo menos $1 para margem de segurança)
+    if (currentBalance < 1.00) {
+      console.log(`❌ [MANUAL] Saldo insuficiente! Necessário mínimo $1.00, disponível: $${currentBalance.toFixed(2)}`);
+      return res.status(400).json({
+        success: false,
+        error: `Saldo insuficiente na Namecheap. Disponível: $${currentBalance.toFixed(2)}. Adicione no mínimo $15.00 para continuar.`,
+        balance: currentBalance
+      });
+    }
+    
+    console.log(`✅ [MANUAL] Saldo suficiente para prosseguir`);
+    
     sessionId = uuidv4();
     processingSessions.set(sessionId, {
       startTime: Date.now(),
       userId: finalUserId,
       platform: platform.toLowerCase(),
-      trafficSource: trafficSource.trim()
+      trafficSource: trafficSource.trim(),
+      isManual: true  // Flag para indicar compra manual (sem limite de preço)
     });
     
     console.log(`\n📝 [MANUAL] Compra manual iniciada`);
@@ -266,7 +319,8 @@ router.post('/manual', async (req, res) => {
       sessionId: sessionId,
       domain: domain,
       platform: platform.toLowerCase(),
-      trafficSource: trafficSource.trim()
+      trafficSource: trafficSource.trim(),
+      balance: currentBalance
     });
     
     // Processar de forma assíncrona com a plataforma selecionada
@@ -278,6 +332,7 @@ router.post('/manual', async (req, res) => {
       nicho: null,
       domainManual: domain,
       userId: finalUserId,
+      isManual: true,  // Flag para remover limite de preço
       trafficSource: trafficSource.trim()
     });
     
@@ -298,7 +353,7 @@ router.post('/manual', async (req, res) => {
  * Executa a compra em background após responder ao cliente
  */
 async function processAsyncPurchase(params) {
-  const { sessionId, quantidade, idioma, plataforma, nicho, domainManual, userId, trafficSource } = params;
+  const { sessionId, quantidade, idioma, plataforma, nicho, domainManual, userId, trafficSource, isManual } = params;
   
   try {
     let result;
@@ -308,6 +363,7 @@ async function processAsyncPurchase(params) {
       console.log(`📝 [MANUAL] Processando compra manual: ${domainManual}`);
       console.log(`   Plataforma: ${plataforma}`);
       console.log(`   Fonte de Tráfego: ${trafficSource || 'N/A'}`);
+      console.log(`   Sem limite de preço: ${isManual ? 'SIM' : 'NÃO'}`);
       
       if (plataforma === 'wordpress') {
         const wordpressPurchase = new WordPressDomainPurchase();
@@ -319,7 +375,8 @@ async function processAsyncPurchase(params) {
           domainManual,
           userId,
           trafficSource,
-          plataforma
+          plataforma,
+          isManual: true  // Compra manual = sem limite de preço
         });
       } else if (plataforma === 'atomicat') {
         const atomicatPurchase = new AtomiCatDomainPurchase();
@@ -331,7 +388,8 @@ async function processAsyncPurchase(params) {
           domainManual,
           userId,
           trafficSource,
-          plataforma
+          plataforma,
+          isManual: true  // Compra manual = sem limite de preço
         });
       }
       
@@ -349,7 +407,8 @@ async function processAsyncPurchase(params) {
         domainManual: null,
         userId,
         plataforma,
-        trafficSource
+        trafficSource,
+        isManual: false  // Compra com IA = com limite de preço
       });
       
     } else if (plataforma === 'atomicat') {
@@ -366,7 +425,8 @@ async function processAsyncPurchase(params) {
         domainManual: null,
         userId,
         plataforma,
-        trafficSource
+        trafficSource,
+        isManual: false  // Compra com IA = com limite de preço
       });
     }
 
