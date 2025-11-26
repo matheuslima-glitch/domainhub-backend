@@ -12,6 +12,9 @@ const supabase = createClient(
   config.SUPABASE_SERVICE_KEY
 );
 
+// Cache global de sessões canceladas (compartilhado entre instâncias)
+const cancelledSessions = new Set();
+
 class AtomiCatDomainPurchase {
   constructor() {
     // Configurações de APIs
@@ -36,6 +39,44 @@ class AtomiCatDomainPurchase {
       EmailAddress: 'gabrielbngomes0987@gmail.com',
       OrganizationName: 'Instituto Experience'
     };
+  }
+
+  /**
+   * VERIFICAR SE SESSÃO FOI CANCELADA
+   */
+  async isSessionCancelled(sessionId) {
+    // Verificar cache local primeiro
+    if (cancelledSessions.has(sessionId)) {
+      console.log(`🛑 [CANCEL-ATOMICAT] Sessão ${sessionId} encontrada no cache de cancelados`);
+      return true;
+    }
+    
+    // Verificar no Supabase
+    try {
+      const { data } = await supabase
+        .from('domain_purchase_progress')
+        .select('status')
+        .eq('session_id', sessionId)
+        .single();
+      
+      if (data?.status === 'canceled') {
+        cancelledSessions.add(sessionId);
+        console.log(`🛑 [CANCEL-ATOMICAT] Sessão ${sessionId} cancelada (Supabase)`);
+        return true;
+      }
+    } catch (error) {
+      // Ignorar erro de busca
+    }
+    
+    return false;
+  }
+
+  /**
+   * MARCAR SESSÃO COMO CANCELADA
+   */
+  static markAsCancelled(sessionId) {
+    cancelledSessions.add(sessionId);
+    console.log(`🛑 [CANCEL-ATOMICAT] Sessão ${sessionId} marcada como cancelada`);
   }
 
   /**
@@ -64,6 +105,13 @@ class AtomiCatDomainPurchase {
     if (domainManual) {
       console.log(`🔍 [MANUAL-ATOMICAT] Processando: ${domainManual}`);
       
+      // ⚠️ CHECKPOINT: Verificar cancelamento antes de verificar disponibilidade
+      if (await this.isSessionCancelled(sessionId)) {
+        console.log(`🛑 [CANCEL-ATOMICAT] Processo cancelado antes da verificação`);
+        await this.updateProgress(sessionId, 'canceled', 'canceled', 'Compra cancelada pelo usuário');
+        return { success: false, error: 'Compra cancelada pelo usuário', cancelled: true };
+      }
+      
       const availabilityCheck = await this.checkDomainAvailability(domainManual);
       
       if (!availabilityCheck.available) {
@@ -76,6 +124,13 @@ class AtomiCatDomainPurchase {
         await this.updateProgress(sessionId, 'error', 'error', 
           `Domínio ${domainManual} muito caro: $${availabilityCheck.price}`);
         return { success: false, error: 'Domínio muito caro' };
+      }
+      
+      // ⚠️ CHECKPOINT: Verificar cancelamento antes de comprar
+      if (await this.isSessionCancelled(sessionId)) {
+        console.log(`🛑 [CANCEL-ATOMICAT] Processo cancelado antes da compra`);
+        await this.updateProgress(sessionId, 'canceled', 'canceled', 'Compra cancelada pelo usuário');
+        return { success: false, error: 'Compra cancelada pelo usuário', cancelled: true };
       }
       
       const purchaseResult = await this.purchaseDomainNamecheap(domainManual);
@@ -99,11 +154,31 @@ class AtomiCatDomainPurchase {
     } else {
       // Compra com IA
       for (let i = 0; i < quantidade; i++) {
+        // ⚠️ CHECKPOINT: Verificar cancelamento no início de cada iteração
+        if (await this.isSessionCancelled(sessionId)) {
+          console.log(`🛑 [CANCEL-ATOMICAT] Processo cancelado no início da iteração ${i + 1}`);
+          await this.updateProgress(sessionId, 'canceled', 'canceled', 
+            `Compra cancelada. ${successCount} domínio(s) já comprado(s).`);
+          return { 
+            success: successCount > 0, 
+            domainsRegistered: domainsToRegister,
+            totalRequested: quantidade,
+            totalRegistered: successCount,
+            cancelled: true
+          };
+        }
+        
         let domain = null;
         let retries = 0;
         
         while (!domain && retries < this.maxRetries) {
           try {
+            // ⚠️ CHECKPOINT: Verificar cancelamento em cada retry
+            if (await this.isSessionCancelled(sessionId)) {
+              console.log(`🛑 [CANCEL-ATOMICAT] Processo cancelado durante retry ${retries}`);
+              throw new Error('CANCELLED');
+            }
+            
             console.log(`🤖 [AI-ATOMICAT] Gerando domínio genérico ${i + 1}/${quantidade} (tentativa ${retries + 1})`);
             await this.updateProgress(sessionId, 'generating', 'in_progress', 
               `Gerando domínio genérico ${i + 1}/${quantidade}`);
@@ -137,6 +212,12 @@ class AtomiCatDomainPurchase {
               retries++;
               await this.delay(2000);
               continue;
+            }
+            
+            // ⚠️ CHECKPOINT: Verificar cancelamento antes de comprar
+            if (await this.isSessionCancelled(sessionId)) {
+              console.log(`🛑 [CANCEL-ATOMICAT] Processo cancelado antes de comprar ${generatedDomain}`);
+              throw new Error('CANCELLED');
             }
             
             console.log(`💳 Comprando: ${generatedDomain} por $${availabilityCheck.price}`);
@@ -183,6 +264,20 @@ class AtomiCatDomainPurchase {
             }
             
           } catch (error) {
+            // Se foi cancelado, sair do loop
+            if (error.message === 'CANCELLED') {
+              console.log(`🛑 [CANCEL-ATOMICAT] Loop interrompido por cancelamento`);
+              await this.updateProgress(sessionId, 'canceled', 'canceled', 
+                `Compra cancelada. ${successCount} domínio(s) já comprado(s).`);
+              return { 
+                success: successCount > 0, 
+                domainsRegistered: domainsToRegister,
+                totalRequested: quantidade,
+                totalRegistered: successCount,
+                cancelled: true
+              };
+            }
+            
             console.error(`❌ Erro na tentativa ${retries + 1}:`, error.message);
             retries++;
             await this.delay(3000);

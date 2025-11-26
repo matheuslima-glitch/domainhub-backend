@@ -14,6 +14,92 @@ const AtomiCatDomainPurchase = require('../../purchase-domains/atomicat');
 // Cache de sessões em processamento
 const processingSessions = new Map();
 
+// Cache de sessões canceladas (para verificação rápida)
+const cancelledSessions = new Set();
+
+/**
+ * POST /api/purchase-domains/cancel
+ * Endpoint para cancelar uma compra em andamento
+ */
+router.post('/cancel', async (req, res) => {
+  try {
+    const { sessionId } = req.body;
+    
+    if (!sessionId) {
+      return res.status(400).json({
+        success: false,
+        error: 'sessionId é obrigatório'
+      });
+    }
+    
+    console.log(`\n${'='.repeat(70)}`);
+    console.log(`🛑 CANCELAMENTO SOLICITADO`);
+    console.log(`📋 Session ID: ${sessionId}`);
+    console.log(`${'='.repeat(70)}\n`);
+    
+    // Adicionar à lista de cancelados
+    cancelledSessions.add(sessionId);
+    
+    // Atualizar no processingSessions se existir
+    if (processingSessions.has(sessionId)) {
+      const session = processingSessions.get(sessionId);
+      session.cancelled = true;
+      processingSessions.set(sessionId, session);
+    }
+    
+    // Atualizar status no Supabase
+    try {
+      const { createClient } = require('@supabase/supabase-js');
+      const supabase = createClient(
+        process.env.SUPABASE_URL || config.SUPABASE_URL,
+        process.env.SUPABASE_SERVICE_KEY || config.SUPABASE_SERVICE_KEY
+      );
+      
+      await supabase
+        .from('domain_purchase_progress')
+        .update({
+          status: 'canceled',
+          step: 'canceled',
+          message: 'Compra cancelada pelo usuário',
+          updated_at: new Date().toISOString()
+        })
+        .eq('session_id', sessionId);
+        
+      console.log(`✅ [CANCEL] Status atualizado no Supabase`);
+    } catch (dbError) {
+      console.error(`⚠️ [CANCEL] Erro ao atualizar Supabase:`, dbError.message);
+    }
+    
+    res.json({
+      success: true,
+      message: 'Cancelamento solicitado com sucesso',
+      sessionId
+    });
+    
+  } catch (error) {
+    console.error(`❌ [CANCEL] Erro:`, error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+/**
+ * Função para verificar se uma sessão foi cancelada
+ * Exportada para uso nas classes de compra
+ */
+function isSessionCancelled(sessionId) {
+  if (cancelledSessions.has(sessionId)) {
+    return true;
+  }
+  const session = processingSessions.get(sessionId);
+  return session?.cancelled === true;
+}
+
+// Exportar função de verificação para uso externo
+router.isSessionCancelled = isSessionCancelled;
+
 /**
  * POST /api/purchase-domains
  * Endpoint principal para compra de domínios com IA

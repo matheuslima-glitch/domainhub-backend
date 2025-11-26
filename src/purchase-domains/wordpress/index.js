@@ -18,6 +18,9 @@ const supabase = createClient(
   config.SUPABASE_SERVICE_KEY
 );
 
+// Cache global de sessões canceladas (compartilhado entre instâncias)
+const cancelledSessions = new Set();
+
 class WordPressDomainPurchase {
   constructor() {
     // Configurações de APIs
@@ -52,6 +55,45 @@ class WordPressDomainPurchase {
   }
 
   /**
+   * VERIFICAR SE SESSÃO FOI CANCELADA
+   * Verifica tanto no cache local quanto no Supabase
+   */
+  async isSessionCancelled(sessionId) {
+    // Verificar cache local primeiro (mais rápido)
+    if (cancelledSessions.has(sessionId)) {
+      console.log(`🛑 [CANCEL] Sessão ${sessionId} encontrada no cache de cancelados`);
+      return true;
+    }
+    
+    // Verificar no Supabase
+    try {
+      const { data } = await supabase
+        .from('domain_purchase_progress')
+        .select('status')
+        .eq('session_id', sessionId)
+        .single();
+      
+      if (data?.status === 'canceled') {
+        cancelledSessions.add(sessionId); // Adicionar ao cache
+        console.log(`🛑 [CANCEL] Sessão ${sessionId} cancelada (Supabase)`);
+        return true;
+      }
+    } catch (error) {
+      // Ignorar erro de busca
+    }
+    
+    return false;
+  }
+
+  /**
+   * MARCAR SESSÃO COMO CANCELADA
+   */
+  static markAsCancelled(sessionId) {
+    cancelledSessions.add(sessionId);
+    console.log(`🛑 [CANCEL] Sessão ${sessionId} marcada como cancelada`);
+  }
+
+  /**
    * FUNÇÃO PRINCIPAL - ORQUESTRA TODO O PROCESSO
    */
   async purchaseDomain(params) {
@@ -76,6 +118,13 @@ class WordPressDomainPurchase {
     if (domainManual) {
       console.log(`🔍 [MANUAL] Processando domínio manual: ${domainManual}`);
       
+      // ⚠️ CHECKPOINT: Verificar cancelamento antes de verificar disponibilidade
+      if (await this.isSessionCancelled(sessionId)) {
+        console.log(`🛑 [CANCEL] Processo cancelado antes da verificação de disponibilidade`);
+        await this.updateProgress(sessionId, 'canceled', 'canceled', 'Compra cancelada pelo usuário');
+        return { success: false, error: 'Compra cancelada pelo usuário', cancelled: true };
+      }
+      
       // Verificar disponibilidade com GoDaddy
       const availabilityCheck = await this.checkDomainAvailability(domainManual);
       
@@ -92,6 +141,13 @@ class WordPressDomainPurchase {
         return { success: false, error: 'Domínio muito caro' };
       }
       
+      // ⚠️ CHECKPOINT: Verificar cancelamento antes de comprar
+      if (await this.isSessionCancelled(sessionId)) {
+        console.log(`🛑 [CANCEL] Processo cancelado antes da compra`);
+        await this.updateProgress(sessionId, 'canceled', 'canceled', 'Compra cancelada pelo usuário');
+        return { success: false, error: 'Compra cancelada pelo usuário', cancelled: true };
+      }
+      
       // Comprar domínio
       const purchaseResult = await this.purchaseDomainNamecheap(domainManual);
       
@@ -101,6 +157,21 @@ class WordPressDomainPurchase {
         
         await this.updateProgress(sessionId, 'purchasing', 'completed', 
           `Domínio ${domainManual} comprado com sucesso!`, domainManual);
+        
+        // ⚠️ CHECKPOINT: Verificar cancelamento antes do pós-compra
+        if (await this.isSessionCancelled(sessionId)) {
+          console.log(`🛑 [CANCEL] Processo cancelado após compra - domínio já foi comprado!`);
+          await this.updateProgress(sessionId, 'canceled', 'canceled', 
+            'Processo cancelado. ATENÇÃO: Domínio já foi comprado na Namecheap!');
+          return { 
+            success: true, 
+            domainsRegistered: [domainManual],
+            totalRequested: 1,
+            totalRegistered: 1,
+            cancelled: true,
+            warning: 'Processo cancelado após compra - domínio registrado mas configuração interrompida'
+          };
+        }
         
         // Processar todas as configurações (incluindo plataforma)
         await this.processPostPurchase(domainManual, userId, sessionId, trafficSource, plataforma);
@@ -113,11 +184,31 @@ class WordPressDomainPurchase {
     } else {
       // Compra com IA
       for (let i = 0; i < quantidade; i++) {
+        // ⚠️ CHECKPOINT: Verificar cancelamento no início de cada iteração
+        if (await this.isSessionCancelled(sessionId)) {
+          console.log(`🛑 [CANCEL] Processo cancelado no início da iteração ${i + 1}`);
+          await this.updateProgress(sessionId, 'canceled', 'canceled', 
+            `Compra cancelada. ${successCount} domínio(s) já comprado(s).`);
+          return { 
+            success: successCount > 0, 
+            domainsRegistered: domainsToRegister,
+            totalRequested: quantidade,
+            totalRegistered: successCount,
+            cancelled: true
+          };
+        }
+        
         let domain = null;
         let retries = 0;
         
         while (!domain && retries < this.maxRetries) {
           try {
+            // ⚠️ CHECKPOINT: Verificar cancelamento em cada retry
+            if (await this.isSessionCancelled(sessionId)) {
+              console.log(`🛑 [CANCEL] Processo cancelado durante retry ${retries}`);
+              throw new Error('CANCELLED');
+            }
+            
             console.log(`🤖 [AI] Gerando domínio ${i + 1}/${quantidade}`);
             await this.updateProgress(sessionId, 'generating', 'in_progress', 
               `Gerando domínio ${i + 1}/${quantidade}`);
@@ -153,6 +244,12 @@ class WordPressDomainPurchase {
               continue;
             }
             
+            // ⚠️ CHECKPOINT: Verificar cancelamento antes de comprar
+            if (await this.isSessionCancelled(sessionId)) {
+              console.log(`🛑 [CANCEL] Processo cancelado antes de comprar ${generatedDomain}`);
+              throw new Error('CANCELLED');
+            }
+            
             console.log(`💳 Comprando: ${generatedDomain}`);
             await this.updateProgress(sessionId, 'purchasing', 'in_progress', 
               `Comprando ${generatedDomain}...`);
@@ -167,6 +264,12 @@ class WordPressDomainPurchase {
               await this.updateProgress(sessionId, 'purchasing', 'completed', 
                 `Domínio ${generatedDomain} comprado com sucesso!`, generatedDomain);
               
+              // ⚠️ CHECKPOINT: Verificar cancelamento antes do pós-compra
+              if (await this.isSessionCancelled(sessionId)) {
+                console.log(`🛑 [CANCEL] Processo cancelado após comprar ${generatedDomain} - configuração interrompida`);
+                // Não interrompe aqui, deixa salvar no Supabase pelo menos
+              }
+              
               await this.processPostPurchase(domain, userId, sessionId, trafficSource, plataforma);
             } else {
               console.error(`❌ Erro na compra: ${purchaseResult.error}`);
@@ -175,6 +278,20 @@ class WordPressDomainPurchase {
             }
             
           } catch (error) {
+            // Se foi cancelado, sair do loop
+            if (error.message === 'CANCELLED') {
+              console.log(`🛑 [CANCEL] Loop interrompido por cancelamento`);
+              await this.updateProgress(sessionId, 'canceled', 'canceled', 
+                `Compra cancelada. ${successCount} domínio(s) já comprado(s).`);
+              return { 
+                success: successCount > 0, 
+                domainsRegistered: domainsToRegister,
+                totalRequested: quantidade,
+                totalRegistered: successCount,
+                cancelled: true
+              };
+            }
+            
             console.error(`❌ Erro na tentativa ${retries + 1}:`, error.message);
             retries++;
             await this.delay(3000);
@@ -465,46 +582,71 @@ class WordPressDomainPurchase {
       }
       
       let cloudflareSetup = null;
+      let isCancelled = false;
       
-      // ========================
-      // ETAPA 1: CLOUDFLARE
-      // ========================
-      await this.updateProgress(sessionId, 'cloudflare', 'in_progress', 
-        `Configurando Cloudflare para ${domain}...`, domain);
-      cloudflareSetup = await this.setupCloudflare(domain);
-      
-      if (cloudflareSetup) {
-        // ETAPA 2: NAMESERVERS
-        await this.updateProgress(sessionId, 'nameservers', 'in_progress', 
-          `Alterando nameservers de ${domain}...`, domain);
-        await this.setNameservers(domain, cloudflareSetup.nameservers);
+      // ⚠️ CHECKPOINT: Verificar cancelamento antes do Cloudflare
+      if (await this.isSessionCancelled(sessionId)) {
+        console.log(`🛑 [CANCEL] Processo cancelado antes do Cloudflare - pulando configurações`);
+        isCancelled = true;
       }
       
-      console.log(`✅ [CLOUDFLARE] Configuração concluída - prosseguindo para cPanel`);
-      
       // ========================
-      // ETAPA 3: CPANEL
+      // ETAPA 1: CLOUDFLARE (só se não cancelado)
       // ========================
-      console.log(`🖥️ [CPANEL] Adicionando domínio ao cPanel...`);
-      await this.updateProgress(sessionId, 'cpanel', 'in_progress', 
-        `Adicionando ${domain} ao cPanel...`, domain);
-      
-      const cpanelSuccess = await this.addDomainToCPanel(domain);
-      
-      if (!cpanelSuccess) {
-        console.error(`❌ [CPANEL] Falha ao adicionar domínio`);
-        await this.updateProgress(sessionId, 'cpanel', 'error', 
-          `Erro ao adicionar ${domain} ao cPanel`, domain);
-        return;
+      if (!isCancelled) {
+        await this.updateProgress(sessionId, 'cloudflare', 'in_progress', 
+          `Configurando Cloudflare para ${domain}...`, domain);
+        cloudflareSetup = await this.setupCloudflare(domain);
+        
+        if (cloudflareSetup) {
+          // ⚠️ CHECKPOINT: Verificar cancelamento antes dos nameservers
+          if (await this.isSessionCancelled(sessionId)) {
+            console.log(`🛑 [CANCEL] Processo cancelado antes dos nameservers`);
+            isCancelled = true;
+          }
+          
+          if (!isCancelled) {
+            // ETAPA 2: NAMESERVERS
+            await this.updateProgress(sessionId, 'nameservers', 'in_progress', 
+              `Alterando nameservers de ${domain}...`, domain);
+            await this.setNameservers(domain, cloudflareSetup.nameservers);
+          }
+        }
+        
+        console.log(`✅ [CLOUDFLARE] Configuração concluída - prosseguindo para cPanel`);
       }
       
-      await this.updateProgress(sessionId, 'cpanel', 'completed', 
-        `Domínio ${domain} adicionado ao cPanel com sucesso!`, domain);
-      
-      console.log(`✅ [CPANEL] Domínio adicionado com sucesso`);
+      // ⚠️ CHECKPOINT: Verificar cancelamento antes do cPanel
+      if (!isCancelled && await this.isSessionCancelled(sessionId)) {
+        console.log(`🛑 [CANCEL] Processo cancelado antes do cPanel`);
+        isCancelled = true;
+      }
       
       // ========================
-      // ETAPA 4: SUPABASE
+      // ETAPA 3: CPANEL (só se não cancelado)
+      // ========================
+      if (!isCancelled) {
+        console.log(`🖥️ [CPANEL] Adicionando domínio ao cPanel...`);
+        await this.updateProgress(sessionId, 'cpanel', 'in_progress', 
+          `Adicionando ${domain} ao cPanel...`, domain);
+        
+        const cpanelSuccess = await this.addDomainToCPanel(domain);
+        
+        if (!cpanelSuccess) {
+          console.error(`❌ [CPANEL] Falha ao adicionar domínio`);
+          await this.updateProgress(sessionId, 'cpanel', 'error', 
+            `Erro ao adicionar ${domain} ao cPanel`, domain);
+          // Continua para salvar no Supabase mesmo assim
+        } else {
+          await this.updateProgress(sessionId, 'cpanel', 'completed', 
+            `Domínio ${domain} adicionado ao cPanel com sucesso!`, domain);
+          console.log(`✅ [CPANEL] Domínio adicionado com sucesso`);
+        }
+      }
+      
+      // ========================
+      // ETAPA 4: SUPABASE (SEMPRE EXECUTA - mesmo se cancelado)
+      // O domínio foi comprado, precisa estar no banco!
       // ========================
       console.log(`💾 [SUPABASE] Salvando domínio no banco de dados...`);
       await this.updateProgress(sessionId, 'supabase', 'in_progress', 
