@@ -1145,20 +1145,34 @@ async addDomainToCPanel(domain) {
       
       console.log('✅ [SUPABASE] Domínio salvo com sucesso');
       
-      // Buscar o ID do domínio recém-criado
-      const { data: domainData, error: fetchError } = await supabase
-        .from('domains')
-        .select('id')
-        .eq('domain_name', domain)
-        .eq('user_id', userId || config.SUPABASE_USER_ID)
-        .single();
+      // A função RPC retorna uma TABLE, então data é um array
+      // Usar o domain_id do resultado se disponível
+      let domainId = null;
       
-      if (fetchError) {
-        console.error('⚠️ [SUPABASE] Erro ao buscar domain_id:', fetchError.message);
-        return null;
+      if (data && Array.isArray(data) && data.length > 0) {
+        domainId = data[0].domain_id;
+        console.log(`✅ [SUPABASE] Domain ID (do RPC): ${domainId}`);
       }
       
-      console.log(`✅ [SUPABASE] Domain ID: ${domainData.id}`);
+      // Se não conseguiu do RPC, buscar pelo domain_name (sem filtrar por user_id)
+      if (!domainId) {
+        const { data: domainData, error: fetchError } = await supabase
+          .from('domains')
+          .select('id')
+          .eq('domain_name', domain)
+          .single();
+        
+        if (fetchError) {
+          console.error('⚠️ [SUPABASE] Erro ao buscar domain_id:', fetchError.message);
+          return null;
+        }
+        
+        domainId = domainData.id;
+        console.log(`✅ [SUPABASE] Domain ID (da busca): ${domainId}`);
+      }
+      
+      // Criar objeto para retorno compatível
+      const domainData = { id: domainId };
       
       // Atualizar traffic_source e platform separadamente se fornecidos
       const updateFields = {};

@@ -758,20 +758,34 @@ class AtomiCatDomainPurchase {
       
       console.log('✅ [SUPABASE-ATOMICAT] Domínio salvo com dados reais');
       
-      // Buscar id do domínio
-      const { data: domainData } = await supabase
-        .from('domains')
-        .select('id')
-        .eq('domain_name', domain)
-        .eq('user_id', userId || config.SUPABASE_USER_ID)
-        .single();
+      // A função RPC retorna uma TABLE, então data é um array
+      // Usar o domain_id do resultado se disponível
+      let domainId = null;
       
-      if (!domainData?.id) {
-        console.error('⚠️ [SUPABASE-ATOMICAT] Erro ao buscar domain_id');
-        return null;
+      if (data && Array.isArray(data) && data.length > 0) {
+        domainId = data[0].domain_id;
+        console.log(`✅ [SUPABASE-ATOMICAT] Domain ID (do RPC): ${domainId}`);
       }
       
-      console.log(`✅ [SUPABASE-ATOMICAT] Domain ID: ${domainData.id}`);
+      // Se não conseguiu do RPC, buscar pelo domain_name (sem filtrar por user_id)
+      if (!domainId) {
+        const { data: fetchedDomain, error: fetchError } = await supabase
+          .from('domains')
+          .select('id')
+          .eq('domain_name', domain)
+          .single();
+        
+        if (fetchError || !fetchedDomain?.id) {
+          console.error('⚠️ [SUPABASE-ATOMICAT] Erro ao buscar domain_id');
+          return null;
+        }
+        
+        domainId = fetchedDomain.id;
+        console.log(`✅ [SUPABASE-ATOMICAT] Domain ID (da busca): ${domainId}`);
+      }
+      
+      // Criar objeto para retorno compatível
+      const domainData = { id: domainId };
       
       // Atualizar traffic_source e platform separadamente se fornecidos
       const updateFields = {};
