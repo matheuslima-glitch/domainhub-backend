@@ -47,6 +47,7 @@ app.get('/api/ip', async (req, res) => {
 
 app.use('/api/balance', balanceRoutes);
 app.use('/api/domains', require('./routes/domains'));
+app.use('/api/domains/deactivation', require('./routes/domain-deactivation'));
 app.use('/api/purchase-domains', require('./routes/purchase-domains'));
 app.use('/api/whatsapp', require('./routes/whatsapp'));
 

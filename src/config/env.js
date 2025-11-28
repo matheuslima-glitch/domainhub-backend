@@ -107,6 +107,7 @@ module.exports = {
   CPANEL_USERNAME: process.env.CPANEL_USERNAME || 'institutoexperience',
   CPANEL_API_TOKEN: process.env.CPANEL_API_TOKEN,
   CPANEL_DOMAIN: process.env.CPANEL_DOMAIN || 'nexus.servidor.net.br',
+  CPANEL_PASSWORD: process.env.CPANEL_PASSWORD,
 
   // WordPress Configurações
   WORDPRESS_DEFAULT_USER: process.env.WORDPRESS_DEFAULT_USER,
