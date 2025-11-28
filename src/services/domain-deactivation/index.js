@@ -224,6 +224,8 @@ class DomainDeactivationService {
 
   /**
    * REMOVER DOMÍNIO DO CPANEL (Addon Domain)
+   * 1. Primeiro remove todos os Parked Domains associados ao subdomínio
+   * 2. Depois remove o Addon Domain
    * Todos os domínios são Addon Domains com subdomínio no padrão: {dominio}.institutoexperience.com.br
    */
   async removeCPanelDomain(domainName) {
@@ -234,6 +236,67 @@ class DomainDeactivationService {
       const subdomain = `${domainName}.institutoexperience.com.br`;
       console.log(`   📌 Subdomain calculado: ${subdomain}`);
 
+      // ETAPA 1: Listar todos os Parked Domains
+      console.log(`   📋 Listando Parked Domains...`);
+      const listParkedResponse = await axios.get(
+        `${config.CPANEL_URL}/json-api/cpanel?cpanel_jsonapi_apiversion=2&cpanel_jsonapi_module=Park&cpanel_jsonapi_func=listparkeddomains`,
+        {
+          headers: {
+            'Authorization': `cpanel ${config.CPANEL_USERNAME}:${config.CPANEL_API_TOKEN}`
+          },
+          timeout: 30000,
+          httpsAgent: new (require('https').Agent)({ rejectUnauthorized: false })
+        }
+      );
+
+      const parkedDomains = listParkedResponse.data?.cpanelresult?.data || [];
+      console.log(`   📋 Total de Parked Domains encontrados: ${parkedDomains.length}`);
+
+      // ETAPA 2: Filtrar parked domains que estão associados ao nosso subdomínio
+      // Parked domains que apontam para o mesmo diretório do addon domain
+      const relatedParked = parkedDomains.filter(pd => {
+        // Verificar se o parked domain está relacionado ao nosso domínio
+        // Pode ser o próprio subdomínio ou domínios que apontam para ele
+        return pd.domain === subdomain || 
+               pd.dir?.includes(`/${domainName}`) ||
+               pd.domain?.includes(domainName);
+      });
+
+      console.log(`   📋 Parked Domains relacionados a ${domainName}: ${relatedParked.length}`);
+
+      // ETAPA 3: Remover cada Parked Domain relacionado
+      for (const parked of relatedParked) {
+        console.log(`   🗑️ Removendo Parked Domain: ${parked.domain}...`);
+        
+        try {
+          const unparkResponse = await axios.get(
+            `${config.CPANEL_URL}/json-api/cpanel?cpanel_jsonapi_apiversion=2&cpanel_jsonapi_module=Park&cpanel_jsonapi_func=unpark&domain=${parked.domain}`,
+            {
+              headers: {
+                'Authorization': `cpanel ${config.CPANEL_USERNAME}:${config.CPANEL_API_TOKEN}`
+              },
+              timeout: 30000,
+              httpsAgent: new (require('https').Agent)({ rejectUnauthorized: false })
+            }
+          );
+
+          const unparkResult = unparkResponse.data?.cpanelresult?.data?.[0];
+          if (unparkResult?.result === 1) {
+            console.log(`      ✅ Parked Domain ${parked.domain} removido!`);
+          } else {
+            console.log(`      ⚠️ Falha ao remover Parked Domain ${parked.domain}: ${unparkResult?.reason}`);
+          }
+        } catch (unparkError) {
+          console.log(`      ⚠️ Erro ao remover Parked Domain ${parked.domain}: ${unparkError.message}`);
+        }
+        
+        // Pequeno delay entre remoções
+        await this.delay(500);
+      }
+
+      // ETAPA 4: Agora remover o Addon Domain
+      console.log(`   🗑️ Removendo Addon Domain: ${domainName}...`);
+      
       const response = await axios.get(
         `${config.CPANEL_URL}/json-api/cpanel?cpanel_jsonapi_apiversion=2&cpanel_jsonapi_module=AddonDomain&cpanel_jsonapi_func=deladdondomain&domain=${domainName}&subdomain=${subdomain}`,
         {
@@ -251,14 +314,69 @@ class DomainDeactivationService {
       
       if (result?.result === 1) {
         console.log(`   ✅ Addon Domain removido com sucesso!`);
-        return { success: true, message: result.reason || 'Addon Domain removido com sucesso' };
+        return { success: true, message: 'Domínio removido do cPanel com sucesso' };
       } else {
-        console.log(`   ⚠️ Falha ao remover:`, result?.reason);
-        return { success: false, message: result?.reason || 'Falha ao remover domínio' };
+        // Traduzir mensagens de erro com OpenAI
+        let errorMessage = result?.reason || 'Falha ao remover domínio';
+        errorMessage = await this.translateCPanelError(errorMessage);
+        
+        console.log(`   ⚠️ Falha ao remover:`, errorMessage);
+        return { success: false, message: errorMessage };
       }
     } catch (error) {
       console.error(`   ❌ Erro ao remover domínio do cPanel:`, error.message);
-      return { success: false, message: error.message };
+      const translatedError = await this.translateCPanelError(error.message);
+      return { success: false, message: translatedError };
+    }
+  }
+
+  /**
+   * TRADUZIR ERROS DO CPANEL PARA PORTUGUÊS USANDO OPENAI
+   */
+  async translateCPanelError(errorMessage) {
+    if (!errorMessage) {
+      return errorMessage;
+    }
+    
+    if (!config.OPENAI_API_KEY) {
+      console.log(`   ⚠️ OPENAI_API_KEY não configurada, retornando mensagem original`);
+      return errorMessage;
+    }
+    
+    console.log(`   🔄 Traduzindo erro do cPanel: "${errorMessage.substring(0, 80)}..."`);
+    
+    try {
+      const response = await axios.post(
+        'https://api.openai.com/v1/chat/completions',
+        {
+          model: 'gpt-4o-mini',
+          messages: [
+            {
+              role: 'system',
+              content: 'Você é um tradutor profissional especializado em mensagens técnicas de servidores e hospedagem web.'
+            },
+            {
+              role: 'user',
+              content: `Traduza essa mensagem de erro do cPanel para PORTUGUÊS BRASILEIRO:\n\n"${errorMessage}"\n\n- Retorne APENAS o texto traduzido, sem explicações\n- Mantenha termos técnicos como "cPanel", "addon domain", "subdomain" se necessário\n- Use linguagem clara e direta\n- Corrija gramática e acentuação`
+            }
+          ],
+          temperature: 0.3,
+          max_tokens: 500
+        },
+        {
+          headers: {
+            'Authorization': `Bearer ${config.OPENAI_API_KEY}`,
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+      
+      const translated = response.data.choices[0].message.content.trim();
+      console.log(`   🌐 Erro traduzido: ${translated}`);
+      return translated;
+    } catch (error) {
+      console.error(`   ❌ Erro ao traduzir mensagem:`, error.response?.data?.error?.message || error.message);
+      return errorMessage; // Retorna original se falhar
     }
   }
 
