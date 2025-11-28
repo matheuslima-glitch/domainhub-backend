@@ -1,13 +1,18 @@
 /**
- * SERVIÇO DE DESATIVAÇÃO COMPLETA DE DOMÍNIOS
+ * SERVIÇO DE DESATIVAÇÃO COMPLETA DE DOMÍNIOS - V6
  * 
- * Este serviço gerencia a desativação completa de domínios, incluindo:
- * 1. Desinstalação do WordPress via Softaculous
- * 2. Remoção do domínio do cPanel
- * 3. Remoção da zona do Cloudflare
- * 4. Atualização do status no Supabase
+ * CORREÇÃO V6: Domínios adicionados manualmente no cPanel criam subdomínios
+ * com formato diferente. Este código tenta ambos os formatos:
  * 
- * O serviço detecta automaticamente quais integrações existem para cada domínio.
+ * - Formato padrão (API/automático): vitalityjourney.institutoexperience.com.br
+ * - Formato manual (cPanel interface): vitalityjourney.online_institutoexperience.com.br
+ * 
+ * Fluxo de remoção:
+ * 1. Detecta integrações (WordPress, cPanel, Cloudflare)
+ * 2. Desinstala WordPress via Softaculous
+ * 3. Remove domínio do cPanel (tentando múltiplos métodos e formatos)
+ * 4. Remove zona do Cloudflare
+ * 5. Atualiza status no Supabase
  */
 
 const axios = require('axios');
@@ -28,7 +33,6 @@ class DomainDeactivationService {
 
   /**
    * DETECTAR INTEGRAÇÕES DO DOMÍNIO
-   * Verifica quais serviços estão configurados para o domínio
    */
   async detectIntegrations(domainName) {
     console.log(`\n🔍 [DETECT] Detectando integrações para ${domainName}...`);
@@ -111,7 +115,6 @@ class DomainDeactivationService {
 
       const installations = response.data?.installations?.['26'] || {};
       
-      // Procurar pelo domínio
       for (const [insid, installation] of Object.entries(installations)) {
         if (installation.softdomain === domainName) {
           return { ...installation, insid };
@@ -143,7 +146,6 @@ class DomainDeactivationService {
 
       const domains = response.data?.cpanelresult?.data || [];
       
-      // Procurar pelo domínio
       for (const domain of domains) {
         if (domain.domain === domainName) {
           return domain;
@@ -223,24 +225,33 @@ class DomainDeactivationService {
   }
 
   /**
-   * REMOVER DOMÍNIO DO CPANEL
-   * Tenta múltiplos métodos de remoção:
-   * 1. UAPI DomainInfo (nova interface do cPanel)
-   * 2. Addon Domain (método tradicional)
-   * 3. Parked Domain (domínio estacionado)
+   * REMOVER DOMÍNIO DO CPANEL - V6
+   * 
+   * CORREÇÃO PRINCIPAL: Quando domínio é adicionado manualmente pelo cPanel,
+   * o subdomain é criado com formato diferente:
+   * 
+   * - Automático: vitalityjourney.institutoexperience.com.br
+   * - Manual: vitalityjourney.online_institutoexperience.com.br
+   * 
+   * Este método tenta ambos os formatos.
    */
   async removeCPanelDomain(domainName) {
     console.log(`\n🗑️ [CPANEL] Removendo domínio ${domainName}...`);
 
-    // Gerar o subdomain no padrão usado
-    const subdomain = `${domainName}.institutoexperience.com.br`;
-    console.log(`   📌 Subdomain calculado: ${subdomain}`);
+    // Gerar DOIS formatos de subdomain possíveis
+    const subdomainStandard = `${domainName}.institutoexperience.com.br`;  // Formato padrão (API)
+    const subdomainManual = `${domainName}_institutoexperience.com.br`;    // Formato manual (cPanel interface)
+    
+    console.log(`   📌 Formato padrão (API): ${subdomainStandard}`);
+    console.log(`   📌 Formato manual (cPanel): ${subdomainManual}`);
 
-    // MÉTODO 1: Tentar remover usando UAPI (nova API do cPanel)
-    console.log(`\n   🔄 MÉTODO 1: Tentando remover via UAPI...`);
+    // ========================================
+    // MÉTODO 1: Tentar remover como Addon Domain (formato MANUAL primeiro)
+    // ========================================
+    console.log(`\n   🔄 MÉTODO 1: Tentando Addon Domain (formato manual)...`);
     try {
-      const uapiResponse = await axios.get(
-        `${config.CPANEL_URL}/execute/DomainInfo/domains_data?format=json`,
+      const addonManualResponse = await axios.get(
+        `${config.CPANEL_URL}/json-api/cpanel?cpanel_jsonapi_apiversion=2&cpanel_jsonapi_module=AddonDomain&cpanel_jsonapi_func=deladdondomain&domain=${domainName}&subdomain=${subdomainManual}`,
         {
           headers: {
             'Authorization': `cpanel ${config.CPANEL_USERNAME}:${config.CPANEL_API_TOKEN}`
@@ -250,34 +261,25 @@ class DomainDeactivationService {
         }
       );
 
-      console.log(`   📋 Domínios encontrados via UAPI`);
-      const domains = uapiResponse.data?.result?.data?.addon_domains || [];
-      const mainDomains = uapiResponse.data?.result?.data?.main_domain;
-      const subDomains = uapiResponse.data?.result?.data?.sub_domains || [];
-      const parkedDomains = uapiResponse.data?.result?.data?.parked_domains || [];
-
-      console.log(`   - Addon Domains: ${domains.length}`);
-      console.log(`   - Sub Domains: ${subDomains.length}`);
-      console.log(`   - Parked Domains: ${parkedDomains.length}`);
-
-      // Verificar se o domínio está na lista de addon domains
-      const isAddonDomain = domains.includes(domainName);
-      const isParkedDomain = parkedDomains.includes(domainName);
-      const isSubDomain = subDomains.includes(subdomain);
-
-      console.log(`   📌 ${domainName} é Addon Domain? ${isAddonDomain}`);
-      console.log(`   📌 ${domainName} é Parked Domain? ${isParkedDomain}`);
-      console.log(`   📌 ${subdomain} é Sub Domain? ${isSubDomain}`);
-
-    } catch (uapiError) {
-      console.log(`   ⚠️ UAPI não disponível: ${uapiError.message}`);
+      const addonManualResult = addonManualResponse.data?.cpanelresult?.data?.[0];
+      
+      if (addonManualResult?.result === 1) {
+        console.log(`   ✅ Addon Domain removido (formato manual)!`);
+        return { success: true, message: 'Domínio removido do cPanel com sucesso' };
+      } else {
+        console.log(`   ⚠️ Formato manual falhou: ${addonManualResult?.reason}`);
+      }
+    } catch (addonManualError) {
+      console.log(`   ⚠️ Erro no formato manual: ${addonManualError.message}`);
     }
 
-    // MÉTODO 2: Listar e remover Parked Domains primeiro
-    console.log(`\n   🔄 MÉTODO 2: Verificando e removendo Parked Domains...`);
+    // ========================================
+    // MÉTODO 2: Tentar remover como Addon Domain (formato PADRÃO)
+    // ========================================
+    console.log(`\n   🔄 MÉTODO 2: Tentando Addon Domain (formato padrão)...`);
     try {
-      const listParkedResponse = await axios.get(
-        `${config.CPANEL_URL}/json-api/cpanel?cpanel_jsonapi_apiversion=2&cpanel_jsonapi_module=Park&cpanel_jsonapi_func=listparkeddomains`,
+      const addonStandardResponse = await axios.get(
+        `${config.CPANEL_URL}/json-api/cpanel?cpanel_jsonapi_apiversion=2&cpanel_jsonapi_module=AddonDomain&cpanel_jsonapi_func=deladdondomain&domain=${domainName}&subdomain=${subdomainStandard}`,
         {
           headers: {
             'Authorization': `cpanel ${config.CPANEL_USERNAME}:${config.CPANEL_API_TOKEN}`
@@ -287,48 +289,57 @@ class DomainDeactivationService {
         }
       );
 
-      const parkedDomains = listParkedResponse.data?.cpanelresult?.data || [];
-      console.log(`   📋 Total de Parked Domains: ${parkedDomains.length}`);
-
-      // Procurar pelo subdomínio na lista de parked domains
-      const parkedSubdomain = parkedDomains.find(pd => pd.domain === subdomain);
+      const addonStandardResult = addonStandardResponse.data?.cpanelresult?.data?.[0];
       
-      if (parkedSubdomain) {
-        console.log(`   🎯 Encontrado subdomínio como Parked Domain: ${subdomain}`);
-        console.log(`   🗑️ Removendo Parked Domain: ${subdomain}...`);
-        
-        const unparkResponse = await axios.get(
-          `${config.CPANEL_URL}/json-api/cpanel?cpanel_jsonapi_apiversion=2&cpanel_jsonapi_module=Park&cpanel_jsonapi_func=unpark&domain=${subdomain}`,
-          {
-            headers: {
-              'Authorization': `cpanel ${config.CPANEL_USERNAME}:${config.CPANEL_API_TOKEN}`
-            },
-            timeout: 30000,
-            httpsAgent: new (require('https').Agent)({ rejectUnauthorized: false })
-          }
-        );
-
-        const unparkResult = unparkResponse.data?.cpanelresult?.data?.[0];
-        if (unparkResult?.result === 1) {
-          console.log(`   ✅ Parked Domain ${subdomain} removido!`);
-        } else {
-          console.log(`   ⚠️ Falha ao remover parked: ${unparkResult?.reason}`);
-        }
-        
-        await this.delay(1000);
+      if (addonStandardResult?.result === 1) {
+        console.log(`   ✅ Addon Domain removido (formato padrão)!`);
+        return { success: true, message: 'Domínio removido do cPanel com sucesso' };
+      } else {
+        console.log(`   ⚠️ Formato padrão falhou: ${addonStandardResult?.reason}`);
       }
+    } catch (addonStandardError) {
+      console.log(`   ⚠️ Erro no formato padrão: ${addonStandardError.message}`);
+    }
 
-      // Também verificar parked domains relacionados ao domínio principal
-      const relatedParked = parkedDomains.filter(pd => 
-        pd.domain?.includes(domainName) && pd.domain !== subdomain
+    // ========================================
+    // MÉTODO 3: Listar SubDomains e encontrar o formato correto
+    // ========================================
+    console.log(`\n   🔄 MÉTODO 3: Listando SubDomains para encontrar formato correto...`);
+    try {
+      const listSubResponse = await axios.get(
+        `${config.CPANEL_URL}/json-api/cpanel?cpanel_jsonapi_apiversion=2&cpanel_jsonapi_module=SubDomain&cpanel_jsonapi_func=listsubdomains`,
+        {
+          headers: {
+            'Authorization': `cpanel ${config.CPANEL_USERNAME}:${config.CPANEL_API_TOKEN}`
+          },
+          timeout: 30000,
+          httpsAgent: new (require('https').Agent)({ rejectUnauthorized: false })
+        }
       );
 
-      for (const parked of relatedParked) {
-        console.log(`   🗑️ Removendo Parked Domain relacionado: ${parked.domain}...`);
+      const subdomains = listSubResponse.data?.cpanelresult?.data || [];
+      console.log(`   📋 Total de SubDomains: ${subdomains.length}`);
+
+      // Procurar subdomínios relacionados ao domínio
+      const relatedSubdomains = subdomains.filter(sd => 
+        sd.subdomain?.includes(domainName.replace('.online', '').replace('.com', '').replace('.site', ''))
+      );
+
+      console.log(`   🔍 SubDomains relacionados a ${domainName}:`);
+      for (const sd of relatedSubdomains) {
+        console.log(`      - subdomain: ${sd.subdomain}`);
+        console.log(`        domain: ${sd.domain}`);
+        console.log(`        dir: ${sd.dir}`);
+      }
+
+      // Tentar remover cada subdomínio relacionado
+      for (const sd of relatedSubdomains) {
+        console.log(`\n   🗑️ Tentando remover subdomínio: ${sd.domain}...`);
         
         try {
-          await axios.get(
-            `${config.CPANEL_URL}/json-api/cpanel?cpanel_jsonapi_apiversion=2&cpanel_jsonapi_module=Park&cpanel_jsonapi_func=unpark&domain=${parked.domain}`,
+          // Primeiro, tentar remover como Addon Domain usando o subdomain encontrado
+          const addonFoundResponse = await axios.get(
+            `${config.CPANEL_URL}/json-api/cpanel?cpanel_jsonapi_apiversion=2&cpanel_jsonapi_module=AddonDomain&cpanel_jsonapi_func=deladdondomain&domain=${domainName}&subdomain=${sd.domain}`,
             {
               headers: {
                 'Authorization': `cpanel ${config.CPANEL_USERNAME}:${config.CPANEL_API_TOKEN}`
@@ -337,48 +348,32 @@ class DomainDeactivationService {
               httpsAgent: new (require('https').Agent)({ rejectUnauthorized: false })
             }
           );
-          console.log(`      ✅ Removido: ${parked.domain}`);
+
+          const addonFoundResult = addonFoundResponse.data?.cpanelresult?.data?.[0];
+          
+          if (addonFoundResult?.result === 1) {
+            console.log(`   ✅ Addon Domain removido usando subdomain: ${sd.domain}!`);
+            return { success: true, message: 'Domínio removido do cPanel com sucesso' };
+          } else {
+            console.log(`   ⚠️ Falhou: ${addonFoundResult?.reason}`);
+          }
         } catch (e) {
-          console.log(`      ⚠️ Erro: ${e.message}`);
+          console.log(`   ⚠️ Erro: ${e.message}`);
         }
-        
+
         await this.delay(500);
       }
 
-    } catch (parkError) {
-      console.log(`   ⚠️ Erro ao listar Parked Domains: ${parkError.message}`);
+    } catch (listError) {
+      console.log(`   ⚠️ Erro ao listar SubDomains: ${listError.message}`);
     }
 
-    // MÉTODO 3: Tentar remover como Addon Domain
-    console.log(`\n   🔄 MÉTODO 3: Removendo Addon Domain...`);
+    // ========================================
+    // MÉTODO 4: Tentar remover como Parked Domain
+    // ========================================
+    console.log(`\n   🔄 MÉTODO 4: Tentando remover como Parked Domain...`);
     try {
-      const addonResponse = await axios.get(
-        `${config.CPANEL_URL}/json-api/cpanel?cpanel_jsonapi_apiversion=2&cpanel_jsonapi_module=AddonDomain&cpanel_jsonapi_func=deladdondomain&domain=${domainName}&subdomain=${subdomain}`,
-        {
-          headers: {
-            'Authorization': `cpanel ${config.CPANEL_USERNAME}:${config.CPANEL_API_TOKEN}`
-          },
-          timeout: 30000,
-          httpsAgent: new (require('https').Agent)({ rejectUnauthorized: false })
-        }
-      );
-
-      const addonResult = addonResponse.data?.cpanelresult?.data?.[0];
-      
-      if (addonResult?.result === 1) {
-        console.log(`   ✅ Addon Domain removido com sucesso!`);
-        return { success: true, message: 'Domínio removido do cPanel com sucesso' };
-      } else {
-        console.log(`   ⚠️ Addon Domain falhou: ${addonResult?.reason}`);
-      }
-    } catch (addonError) {
-      console.log(`   ⚠️ Erro no Addon Domain: ${addonError.message}`);
-    }
-
-    // MÉTODO 4: Tentar remover o domínio principal como Parked Domain
-    console.log(`\n   🔄 MÉTODO 4: Tentando remover domínio como Parked...`);
-    try {
-      const unparkMainResponse = await axios.get(
+      const unparkResponse = await axios.get(
         `${config.CPANEL_URL}/json-api/cpanel?cpanel_jsonapi_apiversion=2&cpanel_jsonapi_module=Park&cpanel_jsonapi_func=unpark&domain=${domainName}`,
         {
           headers: {
@@ -389,52 +384,62 @@ class DomainDeactivationService {
         }
       );
 
-      const unparkMainResult = unparkMainResponse.data?.cpanelresult?.data?.[0];
+      const unparkResult = unparkResponse.data?.cpanelresult?.data?.[0];
       
-      if (unparkMainResult?.result === 1) {
+      if (unparkResult?.result === 1) {
         console.log(`   ✅ Domínio removido como Parked Domain!`);
         return { success: true, message: 'Domínio removido do cPanel com sucesso' };
       } else {
-        console.log(`   ⚠️ Parked Domain falhou: ${unparkMainResult?.reason}`);
+        console.log(`   ⚠️ Parked Domain falhou: ${unparkResult?.reason}`);
       }
     } catch (unparkError) {
       console.log(`   ⚠️ Erro no Parked Domain: ${unparkError.message}`);
     }
 
-    // MÉTODO 5: Tentar API2 SubDomain para remover o subdomínio
-    console.log(`\n   🔄 MÉTODO 5: Tentando remover subdomínio diretamente...`);
-    try {
-      // Extrair apenas a parte antes do domínio principal
-      // vitalityjourney.online.institutoexperience.com.br -> vitalityjourney.online
-      const subdomainPart = domainName.replace(/\./g, '_'); // Substitui pontos por underscores
-      
-      const subResponse = await axios.get(
-        `${config.CPANEL_URL}/json-api/cpanel?cpanel_jsonapi_apiversion=2&cpanel_jsonapi_module=SubDomain&cpanel_jsonapi_func=delsubdomain&domain=${subdomain}`,
-        {
-          headers: {
-            'Authorization': `cpanel ${config.CPANEL_USERNAME}:${config.CPANEL_API_TOKEN}`
-          },
-          timeout: 30000,
-          httpsAgent: new (require('https').Agent)({ rejectUnauthorized: false })
-        }
-      );
+    // ========================================
+    // MÉTODO 5: Tentar SubDomain direto (ambos formatos)
+    // ========================================
+    console.log(`\n   🔄 MÉTODO 5: Tentando remover SubDomain diretamente...`);
+    
+    // Tentar formato manual primeiro
+    const subdomainFormats = [
+      `${domainName}.institutoexperience.com.br`,    // formato com ponto
+      `${domainName}_institutoexperience.com.br`,    // formato com underscore
+    ];
 
-      const subResult = subResponse.data?.cpanelresult?.data?.[0];
-      
-      if (subResult?.result === 1) {
-        console.log(`   ✅ Subdomínio removido com sucesso!`);
-        return { success: true, message: 'Domínio removido do cPanel com sucesso' };
-      } else {
-        console.log(`   ⚠️ SubDomain falhou: ${subResult?.reason}`);
+    for (const subFormat of subdomainFormats) {
+      try {
+        console.log(`   🔄 Tentando SubDomain: ${subFormat}...`);
+        
+        const subResponse = await axios.get(
+          `${config.CPANEL_URL}/json-api/cpanel?cpanel_jsonapi_apiversion=2&cpanel_jsonapi_module=SubDomain&cpanel_jsonapi_func=delsubdomain&domain=${subFormat}`,
+          {
+            headers: {
+              'Authorization': `cpanel ${config.CPANEL_USERNAME}:${config.CPANEL_API_TOKEN}`
+            },
+            timeout: 30000,
+            httpsAgent: new (require('https').Agent)({ rejectUnauthorized: false })
+          }
+        );
+
+        const subResult = subResponse.data?.cpanelresult?.data?.[0];
+        
+        if (subResult?.result === 1) {
+          console.log(`   ✅ SubDomain removido: ${subFormat}!`);
+          return { success: true, message: 'Domínio removido do cPanel com sucesso' };
+        } else {
+          console.log(`   ⚠️ SubDomain falhou: ${subResult?.reason}`);
+        }
+      } catch (subError) {
+        console.log(`   ⚠️ Erro: ${subError.message}`);
       }
-    } catch (subError) {
-      console.log(`   ⚠️ Erro no SubDomain: ${subError.message}`);
+      
+      await this.delay(500);
     }
 
     // Se chegou aqui, todos os métodos falharam
     console.log(`\n   ❌ Todos os métodos de remoção falharam`);
     
-    // Buscar o erro mais recente para traduzir
     const errorMessage = 'Não foi possível remover o domínio do cPanel. Verifique manualmente no painel.';
     const translatedError = await this.translateCPanelError(errorMessage);
     
@@ -487,7 +492,7 @@ class DomainDeactivationService {
       return translated;
     } catch (error) {
       console.error(`   ❌ Erro ao traduzir mensagem:`, error.response?.data?.error?.message || error.message);
-      return errorMessage; // Retorna original se falhar
+      return errorMessage;
     }
   }
 
@@ -559,11 +564,10 @@ class DomainDeactivationService {
 
   /**
    * PROCESSO COMPLETO DE DESATIVAÇÃO
-   * Executa todas as etapas necessárias baseado nas integrações detectadas
    */
   async deactivateDomain(domainId, domainName) {
     console.log(`\n${'='.repeat(70)}`);
-    console.log(`🚨 [DEACTIVATION] INICIANDO DESATIVAÇÃO COMPLETA`);
+    console.log(`🚨 [DEACTIVATION] INICIANDO DESATIVAÇÃO COMPLETA - V6`);
     console.log(`   Domain ID: ${domainId}`);
     console.log(`   Domain Name: ${domainName}`);
     console.log(`${'='.repeat(70)}`);
@@ -594,7 +598,6 @@ class DomainDeactivationService {
         results.steps.wordpress.success = wpResult.success;
         results.steps.wordpress.message = wpResult.message;
         
-        // Aguardar um pouco após desinstalar WordPress
         if (wpResult.success) {
           await this.delay(2000);
         }
@@ -637,7 +640,7 @@ class DomainDeactivationService {
 
       // Log final
       console.log(`\n${'='.repeat(70)}`);
-      console.log(`📊 [DEACTIVATION] RESUMO DA DESATIVAÇÃO`);
+      console.log(`📊 [DEACTIVATION] RESUMO DA DESATIVAÇÃO - V6`);
       console.log(`${'='.repeat(70)}`);
       console.log(`   WordPress: ${results.steps.wordpress.executed ? (results.steps.wordpress.success ? '✅' : '❌') : '⏭️'} ${results.steps.wordpress.message || ''}`);
       console.log(`   cPanel: ${results.steps.cpanel.executed ? (results.steps.cpanel.success ? '✅' : '❌') : '⏭️'} ${results.steps.cpanel.message || ''}`);
