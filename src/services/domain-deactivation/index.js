@@ -223,14 +223,19 @@ class DomainDeactivationService {
   }
 
   /**
-   * REMOVER DOMÍNIO DO CPANEL
+   * REMOVER DOMÍNIO DO CPANEL (Addon Domain)
+   * Todos os domínios são Addon Domains com subdomínio no padrão: {dominio}.institutoexperience.com.br
    */
   async removeCPanelDomain(domainName) {
-    console.log(`\n🗑️ [CPANEL] Removendo domínio ${domainName}...`);
+    console.log(`\n🗑️ [CPANEL] Removendo Addon Domain ${domainName}...`);
 
     try {
+      // Gerar o subdomain no padrão usado: dominio.tld -> dominio.tld.institutoexperience.com.br
+      const subdomain = `${domainName}.institutoexperience.com.br`;
+      console.log(`   📌 Subdomain calculado: ${subdomain}`);
+
       const response = await axios.get(
-        `${config.CPANEL_URL}/json-api/cpanel?cpanel_jsonapi_apiversion=2&cpanel_jsonapi_module=Park&cpanel_jsonapi_func=unpark&domain=${domainName}`,
+        `${config.CPANEL_URL}/json-api/cpanel?cpanel_jsonapi_apiversion=2&cpanel_jsonapi_module=AddonDomain&cpanel_jsonapi_func=deladdondomain&domain=${domainName}&subdomain=${subdomain}`,
         {
           headers: {
             'Authorization': `cpanel ${config.CPANEL_USERNAME}:${config.CPANEL_API_TOKEN}`
@@ -240,11 +245,13 @@ class DomainDeactivationService {
         }
       );
 
+      console.log(`   📋 Resposta cPanel:`, JSON.stringify(response.data, null, 2));
+
       const result = response.data?.cpanelresult?.data?.[0];
       
       if (result?.result === 1) {
-        console.log(`   ✅ Domínio removido do cPanel com sucesso!`);
-        return { success: true, message: result.reason || 'Domínio removido com sucesso' };
+        console.log(`   ✅ Addon Domain removido com sucesso!`);
+        return { success: true, message: result.reason || 'Addon Domain removido com sucesso' };
       } else {
         console.log(`   ⚠️ Falha ao remover:`, result?.reason);
         return { success: false, message: result?.reason || 'Falha ao remover domínio' };
