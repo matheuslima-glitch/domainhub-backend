@@ -1,11 +1,11 @@
 /**
- * SERVIÇO DE DESATIVAÇÃO COMPLETA DE DOMÍNIOS - V6
+ * SERVIÇO DE DESATIVAÇÃO COMPLETA DE DOMÍNIOS - V7
  * 
- * CORREÇÃO V6: Domínios adicionados manualmente no cPanel criam subdomínios
- * com formato diferente. Este código tenta ambos os formatos:
- * 
- * - Formato padrão (API/automático): vitalityjourney.institutoexperience.com.br
- * - Formato manual (cPanel interface): vitalityjourney.online_institutoexperience.com.br
+ * CORREÇÕES V7:
+ * 1. Timeout aumentado de 30s para 60s (operações de remoção podem demorar)
+ * 2. Após cada método de remoção, verifica se o domínio ainda existe no cPanel
+ *    antes de tentar o próximo método (evita falsos negativos)
+ * 3. Mantém os dois formatos de subdomain (manual e padrão)
  * 
  * Fluxo de remoção:
  * 1. Detecta integrações (WordPress, cPanel, Cloudflare)
@@ -29,6 +29,7 @@ class DomainDeactivationService {
   constructor() {
     this.cloudflareAPI = 'https://api.cloudflare.com/client/v4';
     this.softaculousPath = '/frontend/jupiter/softaculous/index.live.php';
+    this.defaultTimeout = 60000; // 60 segundos (aumentado de 30s)
   }
 
   /**
@@ -108,7 +109,7 @@ class DomainDeactivationService {
             username: config.CPANEL_USERNAME,
             password: config.CPANEL_PASSWORD
           },
-          timeout: 30000,
+          timeout: this.defaultTimeout,
           httpsAgent: new (require('https').Agent)({ rejectUnauthorized: false })
         }
       );
@@ -139,7 +140,7 @@ class DomainDeactivationService {
           headers: {
             'Authorization': `cpanel ${config.CPANEL_USERNAME}:${config.CPANEL_API_TOKEN}`
           },
-          timeout: 30000,
+          timeout: this.defaultTimeout,
           httpsAgent: new (require('https').Agent)({ rejectUnauthorized: false })
         }
       );
@@ -160,6 +161,38 @@ class DomainDeactivationService {
   }
 
   /**
+   * VERIFICAR SE DOMÍNIO AINDA EXISTE NO CPANEL
+   * Usado após cada tentativa de remoção para confirmar se funcionou
+   */
+  async checkDomainStillExists(domainName) {
+    try {
+      console.log(`   🔍 Verificando se ${domainName} ainda existe no cPanel...`);
+      
+      const response = await axios.get(
+        `${config.CPANEL_URL}/json-api/cpanel?cpanel_jsonapi_apiversion=2&cpanel_jsonapi_module=AddonDomain&cpanel_jsonapi_func=listaddondomains`,
+        {
+          headers: {
+            'Authorization': `cpanel ${config.CPANEL_USERNAME}:${config.CPANEL_API_TOKEN}`
+          },
+          timeout: this.defaultTimeout,
+          httpsAgent: new (require('https').Agent)({ rejectUnauthorized: false })
+        }
+      );
+
+      const domains = response.data?.cpanelresult?.data || [];
+      const exists = domains.some(d => d.domain === domainName);
+      
+      console.log(`   ${exists ? '⚠️ Domínio ainda existe' : '✅ Domínio NÃO existe mais (removido com sucesso!)'}`);
+      
+      return exists;
+    } catch (error) {
+      console.log(`   ⚠️ Erro ao verificar existência: ${error.message}`);
+      // Em caso de erro, assumimos que ainda existe para continuar tentando
+      return true;
+    }
+  }
+
+  /**
    * BUSCAR ZONA NO CLOUDFLARE
    */
   async findCloudflareZone(domainName) {
@@ -176,7 +209,7 @@ class DomainDeactivationService {
             'X-Auth-Key': config.CLOUDFLARE_API_KEY,
             'Content-Type': 'application/json'
           },
-          timeout: 30000
+          timeout: this.defaultTimeout
         }
       );
 
@@ -206,7 +239,7 @@ class DomainDeactivationService {
           headers: {
             'Content-Type': 'application/x-www-form-urlencoded'
           },
-          timeout: 60000,
+          timeout: 90000, // 90 segundos para WordPress (pode demorar mais)
           httpsAgent: new (require('https').Agent)({ rejectUnauthorized: false })
         }
       );
@@ -225,15 +258,12 @@ class DomainDeactivationService {
   }
 
   /**
-   * REMOVER DOMÍNIO DO CPANEL - V6
+   * REMOVER DOMÍNIO DO CPANEL - V7
    * 
-   * CORREÇÃO PRINCIPAL: Quando domínio é adicionado manualmente pelo cPanel,
-   * o subdomain é criado com formato diferente:
-   * 
-   * - Automático: vitalityjourney.institutoexperience.com.br
-   * - Manual: vitalityjourney.online_institutoexperience.com.br
-   * 
-   * Este método tenta ambos os formatos.
+   * MELHORIAS V7:
+   * 1. Timeout aumentado para 60s
+   * 2. Após cada método, verifica se domínio ainda existe
+   * 3. Se domínio foi removido (mesmo com timeout), retorna sucesso
    */
   async removeCPanelDomain(domainName) {
     console.log(`\n🗑️ [CPANEL] Removendo domínio ${domainName}...`);
@@ -256,7 +286,7 @@ class DomainDeactivationService {
           headers: {
             'Authorization': `cpanel ${config.CPANEL_USERNAME}:${config.CPANEL_API_TOKEN}`
           },
-          timeout: 30000,
+          timeout: this.defaultTimeout,
           httpsAgent: new (require('https').Agent)({ rejectUnauthorized: false })
         }
       );
@@ -271,6 +301,24 @@ class DomainDeactivationService {
       }
     } catch (addonManualError) {
       console.log(`   ⚠️ Erro no formato manual: ${addonManualError.message}`);
+      
+      // Se deu timeout, verificar se o domínio foi removido mesmo assim
+      if (addonManualError.message.includes('timeout')) {
+        console.log(`   ⏱️ Timeout detectado - verificando se domínio foi removido...`);
+        await this.delay(3000); // Aguardar 3 segundos
+        
+        const stillExists = await this.checkDomainStillExists(domainName);
+        if (!stillExists) {
+          console.log(`   ✅ Domínio foi removido com sucesso (apesar do timeout)!`);
+          return { success: true, message: 'Domínio removido do cPanel com sucesso' };
+        }
+      }
+    }
+
+    // Verificar se ainda existe antes de continuar
+    const existsAfterMethod1 = await this.checkDomainStillExists(domainName);
+    if (!existsAfterMethod1) {
+      return { success: true, message: 'Domínio removido do cPanel com sucesso' };
     }
 
     // ========================================
@@ -284,7 +332,7 @@ class DomainDeactivationService {
           headers: {
             'Authorization': `cpanel ${config.CPANEL_USERNAME}:${config.CPANEL_API_TOKEN}`
           },
-          timeout: 30000,
+          timeout: this.defaultTimeout,
           httpsAgent: new (require('https').Agent)({ rejectUnauthorized: false })
         }
       );
@@ -299,6 +347,24 @@ class DomainDeactivationService {
       }
     } catch (addonStandardError) {
       console.log(`   ⚠️ Erro no formato padrão: ${addonStandardError.message}`);
+      
+      // Se deu timeout, verificar se o domínio foi removido mesmo assim
+      if (addonStandardError.message.includes('timeout')) {
+        console.log(`   ⏱️ Timeout detectado - verificando se domínio foi removido...`);
+        await this.delay(3000);
+        
+        const stillExists = await this.checkDomainStillExists(domainName);
+        if (!stillExists) {
+          console.log(`   ✅ Domínio foi removido com sucesso (apesar do timeout)!`);
+          return { success: true, message: 'Domínio removido do cPanel com sucesso' };
+        }
+      }
+    }
+
+    // Verificar se ainda existe antes de continuar
+    const existsAfterMethod2 = await this.checkDomainStillExists(domainName);
+    if (!existsAfterMethod2) {
+      return { success: true, message: 'Domínio removido do cPanel com sucesso' };
     }
 
     // ========================================
@@ -312,7 +378,7 @@ class DomainDeactivationService {
           headers: {
             'Authorization': `cpanel ${config.CPANEL_USERNAME}:${config.CPANEL_API_TOKEN}`
           },
-          timeout: 30000,
+          timeout: this.defaultTimeout,
           httpsAgent: new (require('https').Agent)({ rejectUnauthorized: false })
         }
       );
@@ -320,31 +386,33 @@ class DomainDeactivationService {
       const subdomains = listSubResponse.data?.cpanelresult?.data || [];
       console.log(`   📋 Total de SubDomains: ${subdomains.length}`);
 
-      // Procurar subdomínios relacionados ao domínio
-      const relatedSubdomains = subdomains.filter(sd => 
-        sd.subdomain?.includes(domainName.replace('.online', '').replace('.com', '').replace('.site', ''))
-      );
+      // Extrair a parte principal do domínio (sem extensão)
+      const domainBase = domainName.split('.')[0]; // vitalityjourney
+      
+      // Procurar subdomínios que correspondam EXATAMENTE ao domínio
+      const exactMatches = subdomains.filter(sd => {
+        const subBase = sd.subdomain?.split('.')[0]?.replace(/_/g, '');
+        return subBase === domainBase || sd.subdomain === domainName || sd.subdomain === domainName.replace('.', '_');
+      });
 
-      console.log(`   🔍 SubDomains relacionados a ${domainName}:`);
-      for (const sd of relatedSubdomains) {
+      console.log(`   🔍 SubDomains que correspondem a ${domainName}:`);
+      for (const sd of exactMatches) {
         console.log(`      - subdomain: ${sd.subdomain}`);
         console.log(`        domain: ${sd.domain}`);
-        console.log(`        dir: ${sd.dir}`);
       }
 
-      // Tentar remover cada subdomínio relacionado
-      for (const sd of relatedSubdomains) {
-        console.log(`\n   🗑️ Tentando remover subdomínio: ${sd.domain}...`);
+      // Tentar remover cada subdomínio correspondente
+      for (const sd of exactMatches) {
+        console.log(`\n   🗑️ Tentando remover via Addon usando subdomain: ${sd.domain}...`);
         
         try {
-          // Primeiro, tentar remover como Addon Domain usando o subdomain encontrado
           const addonFoundResponse = await axios.get(
             `${config.CPANEL_URL}/json-api/cpanel?cpanel_jsonapi_apiversion=2&cpanel_jsonapi_module=AddonDomain&cpanel_jsonapi_func=deladdondomain&domain=${domainName}&subdomain=${sd.domain}`,
             {
               headers: {
                 'Authorization': `cpanel ${config.CPANEL_USERNAME}:${config.CPANEL_API_TOKEN}`
               },
-              timeout: 30000,
+              timeout: this.defaultTimeout,
               httpsAgent: new (require('https').Agent)({ rejectUnauthorized: false })
             }
           );
@@ -359,6 +427,14 @@ class DomainDeactivationService {
           }
         } catch (e) {
           console.log(`   ⚠️ Erro: ${e.message}`);
+          
+          if (e.message.includes('timeout')) {
+            await this.delay(3000);
+            const stillExists = await this.checkDomainStillExists(domainName);
+            if (!stillExists) {
+              return { success: true, message: 'Domínio removido do cPanel com sucesso' };
+            }
+          }
         }
 
         await this.delay(500);
@@ -366,6 +442,12 @@ class DomainDeactivationService {
 
     } catch (listError) {
       console.log(`   ⚠️ Erro ao listar SubDomains: ${listError.message}`);
+    }
+
+    // Verificar se ainda existe antes de continuar
+    const existsAfterMethod3 = await this.checkDomainStillExists(domainName);
+    if (!existsAfterMethod3) {
+      return { success: true, message: 'Domínio removido do cPanel com sucesso' };
     }
 
     // ========================================
@@ -379,7 +461,7 @@ class DomainDeactivationService {
           headers: {
             'Authorization': `cpanel ${config.CPANEL_USERNAME}:${config.CPANEL_API_TOKEN}`
           },
-          timeout: 30000,
+          timeout: this.defaultTimeout,
           httpsAgent: new (require('https').Agent)({ rejectUnauthorized: false })
         }
       );
@@ -394,6 +476,20 @@ class DomainDeactivationService {
       }
     } catch (unparkError) {
       console.log(`   ⚠️ Erro no Parked Domain: ${unparkError.message}`);
+      
+      if (unparkError.message.includes('timeout')) {
+        await this.delay(3000);
+        const stillExists = await this.checkDomainStillExists(domainName);
+        if (!stillExists) {
+          return { success: true, message: 'Domínio removido do cPanel com sucesso' };
+        }
+      }
+    }
+
+    // Verificar se ainda existe antes de continuar
+    const existsAfterMethod4 = await this.checkDomainStillExists(domainName);
+    if (!existsAfterMethod4) {
+      return { success: true, message: 'Domínio removido do cPanel com sucesso' };
     }
 
     // ========================================
@@ -401,10 +497,9 @@ class DomainDeactivationService {
     // ========================================
     console.log(`\n   🔄 MÉTODO 5: Tentando remover SubDomain diretamente...`);
     
-    // Tentar formato manual primeiro
     const subdomainFormats = [
-      `${domainName}.institutoexperience.com.br`,    // formato com ponto
-      `${domainName}_institutoexperience.com.br`,    // formato com underscore
+      `${domainName}.institutoexperience.com.br`,
+      `${domainName}_institutoexperience.com.br`,
     ];
 
     for (const subFormat of subdomainFormats) {
@@ -417,7 +512,7 @@ class DomainDeactivationService {
             headers: {
               'Authorization': `cpanel ${config.CPANEL_USERNAME}:${config.CPANEL_API_TOKEN}`
             },
-            timeout: 30000,
+            timeout: this.defaultTimeout,
             httpsAgent: new (require('https').Agent)({ rejectUnauthorized: false })
           }
         );
@@ -432,9 +527,23 @@ class DomainDeactivationService {
         }
       } catch (subError) {
         console.log(`   ⚠️ Erro: ${subError.message}`);
+        
+        if (subError.message.includes('timeout')) {
+          await this.delay(3000);
+          const stillExists = await this.checkDomainStillExists(domainName);
+          if (!stillExists) {
+            return { success: true, message: 'Domínio removido do cPanel com sucesso' };
+          }
+        }
       }
       
       await this.delay(500);
+    }
+
+    // Verificação final
+    const existsFinal = await this.checkDomainStillExists(domainName);
+    if (!existsFinal) {
+      return { success: true, message: 'Domínio removido do cPanel com sucesso' };
     }
 
     // Se chegou aqui, todos os métodos falharam
@@ -516,7 +625,7 @@ class DomainDeactivationService {
             'X-Auth-Key': config.CLOUDFLARE_API_KEY,
             'Content-Type': 'application/json'
           },
-          timeout: 30000
+          timeout: this.defaultTimeout
         }
       );
 
@@ -567,7 +676,7 @@ class DomainDeactivationService {
    */
   async deactivateDomain(domainId, domainName) {
     console.log(`\n${'='.repeat(70)}`);
-    console.log(`🚨 [DEACTIVATION] INICIANDO DESATIVAÇÃO COMPLETA - V6`);
+    console.log(`🚨 [DEACTIVATION] INICIANDO DESATIVAÇÃO COMPLETA - V7`);
     console.log(`   Domain ID: ${domainId}`);
     console.log(`   Domain Name: ${domainName}`);
     console.log(`${'='.repeat(70)}`);
@@ -640,7 +749,7 @@ class DomainDeactivationService {
 
       // Log final
       console.log(`\n${'='.repeat(70)}`);
-      console.log(`📊 [DEACTIVATION] RESUMO DA DESATIVAÇÃO - V6`);
+      console.log(`📊 [DEACTIVATION] RESUMO DA DESATIVAÇÃO - V7`);
       console.log(`${'='.repeat(70)}`);
       console.log(`   WordPress: ${results.steps.wordpress.executed ? (results.steps.wordpress.success ? '✅' : '❌') : '⏭️'} ${results.steps.wordpress.message || ''}`);
       console.log(`   cPanel: ${results.steps.cpanel.executed ? (results.steps.cpanel.success ? '✅' : '❌') : '⏭️'} ${results.steps.cpanel.message || ''}`);
