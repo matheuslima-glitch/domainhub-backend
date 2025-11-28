@@ -1,3 +1,30 @@
+/**
+ * ============================================================
+ * 
+ * FUNÇÕES PRINCIPAIS:
+ * 
+ * 1. upsertDomain(domainData)
+ *    - Insere ou atualiza um domínio no banco
+ *    - Detecta mudança de status (active → suspended/expired)
+ *    - Envia alertas WhatsApp quando status muda para crítico
+ * 
+ * 2. updateDomainAlert(domainName, alertData)
+ *    - Atualiza domínios com erros/alertas (suspensos, bloqueados)
+ *    - Detecta mudança de status e envia alertas WhatsApp
+ *    - Usado quando API retorna erro de domínio suspenso
+ * 
+ * 3. isManuallyDeactivated(domainName)
+ *    - Verifica se domínio foi desativado manualmente pelo usuário
+ *    - Domínios desativados não são atualizados pela sincronização
+ * 
+ * 4. batchUpsertDomains(domains)
+ *    - Processa lote de domínios em massa
+ *    - Pula domínios protegidos (desativados manualmente)
+ *    - Roteia para upsertDomain ou updateDomainAlert conforme tipo
+ * 
+ * ============================================================
+ */
+
 const { createClient } = require('@supabase/supabase-js');
 const config = require('../../config/env');
 
@@ -46,15 +73,31 @@ class SupabaseDomainsService {
     if (previousDomain && previousDomain.status !== domainData.status) {
       const notificationService = require('../whatsapp/notifications');
       
-      // Alerta de domínio suspenso
-      if (previousDomain.status === 'active' && domainData.status === 'suspended') {
-        console.log(`🚨 [ALERT] Domínio mudou de ativo para suspenso: ${domainData.domain_name}`);
+      console.log(`📊 [STATUS] Mudança detectada: ${domainData.domain_name}`);
+      console.log(`📊 [STATUS] De: ${previousDomain.status} → Para: ${domainData.status}`);
+      
+      // Alerta de domínio suspenso (qualquer status anterior → suspenso)
+      if (domainData.status === 'suspended' && previousDomain.status !== 'suspended') {
+        console.log(`🚨 [ALERT] Domínio ficou suspenso: ${domainData.domain_name}`);
         await notificationService.sendSuspendedDomainAlert(config.SUPABASE_USER_ID, domainData.domain_name);
       }
       
-      // Alerta de domínio expirado
-      if (previousDomain.status === 'active' && domainData.status === 'expired') {
-        console.log(`🚨 [ALERT] Domínio mudou de ativo para expirado: ${domainData.domain_name}`);
+      // Alerta de domínio expirado (qualquer status anterior → expirado)
+      if (domainData.status === 'expired' && previousDomain.status !== 'expired') {
+        console.log(`🚨 [ALERT] Domínio ficou expirado: ${domainData.domain_name}`);
+        await notificationService.sendExpiredDomainAlert(config.SUPABASE_USER_ID, domainData.domain_name);
+      }
+    }
+    
+    // Alertar também para domínios novos que já chegam com status crítico
+    if (!previousDomain && (domainData.status === 'suspended' || domainData.status === 'expired')) {
+      const notificationService = require('../whatsapp/notifications');
+      
+      console.log(`🆕 [ALERT] Novo domínio com status crítico: ${domainData.domain_name} (${domainData.status})`);
+      
+      if (domainData.status === 'suspended') {
+        await notificationService.sendSuspendedDomainAlert(config.SUPABASE_USER_ID, domainData.domain_name);
+      } else if (domainData.status === 'expired') {
         await notificationService.sendExpiredDomainAlert(config.SUPABASE_USER_ID, domainData.domain_name);
       }
     }
@@ -63,6 +106,14 @@ class SupabaseDomainsService {
   }
 
   async updateDomainAlert(domainName, alertData) {
+    // Verificar status anterior do domínio antes de atualizar
+    const { data: previousDomain } = await this.client
+      .from('domains')
+      .select('status')
+      .eq('domain_name', domainName)
+      .eq('user_id', config.SUPABASE_USER_ID)
+      .maybeSingle();
+
     const { data, error } = await this.client
       .from('domains')
       .update({
@@ -76,6 +127,43 @@ class SupabaseDomainsService {
       .select();
 
     if (error) throw error;
+
+    // Detectar mudança de status e enviar alertas imediatos
+    const previousStatus = previousDomain?.status;
+    const newStatus = alertData.status;
+    
+    if (previousStatus && previousStatus !== newStatus) {
+      const notificationService = require('../whatsapp/notifications');
+      
+      console.log(`📊 [STATUS-ALERT] Mudança detectada: ${domainName}`);
+      console.log(`📊 [STATUS-ALERT] De: ${previousStatus} → Para: ${newStatus}`);
+      
+      // Alerta de domínio suspenso (qualquer status anterior → suspenso)
+      if (newStatus === 'suspended' && previousStatus !== 'suspended') {
+        console.log(`🚨 [ALERT] Domínio ficou suspenso: ${domainName}`);
+        await notificationService.sendSuspendedDomainAlert(config.SUPABASE_USER_ID, domainName);
+      }
+      
+      // Alerta de domínio expirado (qualquer status anterior → expirado)
+      if (newStatus === 'expired' && previousStatus !== 'expired') {
+        console.log(`🚨 [ALERT] Domínio ficou expirado: ${domainName}`);
+        await notificationService.sendExpiredDomainAlert(config.SUPABASE_USER_ID, domainName);
+      }
+    }
+    
+    // Alertar também se não tinha registro anterior (domínio novo com status crítico)
+    if (!previousDomain && (newStatus === 'suspended' || newStatus === 'expired')) {
+      const notificationService = require('../whatsapp/notifications');
+      
+      console.log(`🆕 [ALERT] Novo domínio com status crítico: ${domainName} (${newStatus})`);
+      
+      if (newStatus === 'suspended') {
+        await notificationService.sendSuspendedDomainAlert(config.SUPABASE_USER_ID, domainName);
+      } else if (newStatus === 'expired') {
+        await notificationService.sendExpiredDomainAlert(config.SUPABASE_USER_ID, domainName);
+      }
+    }
+
     return data;
   }
 
