@@ -180,7 +180,7 @@ class WordPressDomainPurchase {
         }
         
         // Processar todas as configurações (incluindo plataforma)
-        await this.processPostPurchase(domainManual, userId, sessionId, trafficSource, plataforma);
+        await this.processPostPurchase(domainManual, userId, sessionId, trafficSource, plataforma, true);
       } else {
         await this.updateProgress(sessionId, 'error', 'error', 
           `Erro na compra: ${purchaseResult.error}`);
@@ -276,7 +276,7 @@ class WordPressDomainPurchase {
                 // Não interrompe aqui, deixa salvar no Supabase pelo menos
               }
               
-              await this.processPostPurchase(domain, userId, sessionId, trafficSource, plataforma);
+              await this.processPostPurchase(domain, userId, sessionId, trafficSource, plataforma, false);
             } else {
               console.error(`❌ Erro na compra: ${purchaseResult.error}`);
               retries++;
@@ -577,7 +577,7 @@ class WordPressDomainPurchase {
    * PROCESSAR PÓS-COMPRA
    * 🔥 SEM INSTALAÇÃO DE WORDPRESS - APENAS CLOUDFLARE E CPANEL
    */
-  async processPostPurchase(domain, userId, sessionId, trafficSource = null, plataforma = null) {
+  async processPostPurchase(domain, userId, sessionId, trafficSource = null, plataforma = null, isManual = false) {
     try {
       console.log(`🔧 [POST-PURCHASE] Iniciando configurações para ${domain}`);
       if (trafficSource) {
@@ -668,7 +668,7 @@ class WordPressDomainPurchase {
         // ETAPA 5: LOG
         // ========================
         console.log(`📝 [LOG] Registrando atividade...`);
-        await this.saveActivityLog(savedDomain.id, userId, trafficSource);
+        await this.saveActivityLog(savedDomain.id, userId, trafficSource, isManual);
       } else {
         await this.updateProgress(sessionId, 'supabase', 'error', 
           `Erro ao salvar ${domain} no banco de dados`, domain);
@@ -1213,14 +1213,16 @@ async addDomainToCPanel(domain) {
   /**
    * REGISTRAR LOG
    */
-  async saveActivityLog(domainId, userId, trafficSource = null) {
-    try {
-      console.log(`📝 [LOG] Registrando atividade para domínio ${domainId}...`);
-      
-      let newValue = 'Domínio comprado com IA - Configurado no cPanel';
-      if (trafficSource) {
-        newValue += ` | Fonte de Tráfego: ${trafficSource}`;
-      }
+  async saveActivityLog(domainId, userId, trafficSource = null, isManual = false) {
+  try {
+    console.log(`📝 [LOG] Registrando atividade para domínio ${domainId}...`);
+    
+    let newValue = isManual 
+      ? 'Domínio comprado manualmente - WordPress' 
+      : 'Domínio comprado com IA - WordPress';
+    if (trafficSource) {
+      newValue += ` | Fonte de Tráfego: ${trafficSource}`;
+    }
       
       const { error } = await supabase
         .from('domain_activity_logs')
