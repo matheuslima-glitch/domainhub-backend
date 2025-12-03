@@ -151,7 +151,7 @@ class AtomiCatDomainPurchase {
           `Domínio ${domainManual} comprado com sucesso!`, domainManual);
         
         // Processar pós-compra com fonte de tráfego, sessionId e plataforma
-        await this.processPostPurchase(domainManual, userId, sessionId, trafficSource, plataforma);
+        await this.processPostPurchase(domainManual, userId, sessionId, trafficSource, plataforma, true);
       } else {
         await this.updateProgress(sessionId, 'error', 'error', 
           `Erro na compra: ${purchaseResult.error}`);
@@ -246,7 +246,7 @@ class AtomiCatDomainPurchase {
                 `Domínio ${generatedDomain} comprado com sucesso!`, generatedDomain);
               
               // Processar pós-compra com sessionId, trafficSource e plataforma
-              await this.processPostPurchase(domain, userId, sessionId, trafficSource, plataforma);
+              await this.processPostPurchase(domain, userId, sessionId, trafficSource, plataforma, false);
               
             } else {
               console.error(`❌ Erro na compra: ${purchaseResult.error}`);
@@ -329,7 +329,7 @@ class AtomiCatDomainPurchase {
    * - Salvar log de atividade
    * - Enviar notificação WhatsApp
    */
-  async processPostPurchase(domain, userId, sessionId = null, trafficSource = null, plataforma = null) {
+  async processPostPurchase(domain, userId, sessionId = null, trafficSource = null, plataforma = null, isManual = false) {
     try {
       console.log(`🔧 [POST-PURCHASE-ATOMICAT] Iniciando para ${domain}`);
       if (trafficSource) {
@@ -351,8 +351,8 @@ class AtomiCatDomainPurchase {
       
       // Salvar log de atividade
       if (savedDomain?.id) {
-        await this.saveActivityLog(savedDomain.id, userId, trafficSource);
-      }
+  await this.saveActivityLog(savedDomain.id, userId, trafficSource, isManual);
+  }
       
       // Enviar notificação WhatsApp
       await this.sendWhatsAppNotification(domain, 'success');
@@ -827,12 +827,14 @@ class AtomiCatDomainPurchase {
   /**
    * REGISTRAR LOG DE ATIVIDADE
    */
-  async saveActivityLog(domainId, userId, trafficSource = null) {
-    try {
-      let newValue = 'Domínio comprado com IA - AtomiCat (sem WordPress)';
-      if (trafficSource) {
-        newValue += ` | Fonte de Tráfego: ${trafficSource}`;
-      }
+  async saveActivityLog(domainId, userId, trafficSource = null, isManual = false) {
+  try {
+    let newValue = isManual 
+      ? 'Domínio comprado manualmente - AtomiCat' 
+      : 'Domínio comprado com IA - AtomiCat';
+    if (trafficSource) {
+      newValue += ` | Fonte de Tráfego: ${trafficSource}`;
+    }
       
       await supabase
         .from('domain_activity_logs')
