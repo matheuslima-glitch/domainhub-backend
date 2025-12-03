@@ -140,7 +140,7 @@ class AtomiCatDomainPurchase {
         return { success: false, error: 'Compra cancelada pelo usuário', cancelled: true };
       }
       
-      const purchaseResult = await this.purchaseDomainNamecheap(domainManual);
+      const purchaseResult = await this.purchaseDomainNamecheap(domainManual, isManual);
       
       if (purchaseResult.success) {
         domainsToRegister.push(domainManual);
@@ -231,7 +231,7 @@ class AtomiCatDomainPurchase {
             await this.updateProgress(sessionId, 'purchasing', 'in_progress', 
               `Comprando ${generatedDomain}...`);
             
-            const purchaseResult = await this.purchaseDomainNamecheap(generatedDomain);
+            const purchaseResult = await this.purchaseDomainNamecheap(generatedDomain, false);
             
             if (purchaseResult.success) {
               domain = generatedDomain;
@@ -508,7 +508,7 @@ class AtomiCatDomainPurchase {
   /**
    * COMPRAR DOMÍNIO NA NAMECHEAP
    */
-  async purchaseDomainNamecheap(domain) {
+  async purchaseDomainNamecheap(domain, isManual = false) {
     try {
       console.log(`💳 [NAMECHEAP-ATOMICAT] Comprando: ${domain}`);
       
@@ -518,16 +518,17 @@ class AtomiCatDomainPurchase {
         return { success: false, error: 'Formato de domínio inválido' };
       }
       
-      // Validar que termina com .online
-      if (!domain.endsWith('.online')) {
+      // Validar que termina com .online APENAS para compra com IA (não manual)
+      if (!isManual && !domain.endsWith('.online')) {
         console.error(`❌ [NAMECHEAP] Domínio deve terminar com .online: ${domain}`);
         return { success: false, error: 'Domínio deve terminar com .online' };
       }
       
       // Validar caracteres (apenas letras e números antes do .online)
-      const domainWithoutExt = domain.replace('.online', '');
-      if (!/^[a-z0-9]+$/i.test(domainWithoutExt)) {
-        console.error(`❌ [NAMECHEAP] Caracteres inválidos: ${domainWithoutExt}`);
+      const domainParts = domain.split('.');
+      const domainName = domainParts.slice(0, -1).join('');
+      if (!/^[a-z0-9]+$/i.test(domainName)) {
+        console.error(`❌ [NAMECHEAP] Caracteres inválidos: ${domainName  }`);
         return { success: false, error: 'Domínio com caracteres inválidos' };
       }
       

@@ -275,6 +275,25 @@ router.post('/manual', async (req, res) => {
     }
     
     // ============================================
+    // VERIFICAÇÃO DE DISPONIBILIDADE E PREÇO
+    // ============================================
+    console.log(`💰 [MANUAL] Verificando disponibilidade e preço do domínio...`);
+    
+    const WordPressDomainPurchase = require('../../purchase-domains/wordpress');
+    const domainChecker = new WordPressDomainPurchase();
+    const availabilityCheck = await domainChecker.checkDomainAvailability(domain);
+    
+    if (!availabilityCheck.available) {
+      return res.status(400).json({
+        success: false,
+        error: `Domínio ${domain} não está disponível para registro`
+      });
+    }
+    
+    const domainPrice = availabilityCheck.price || 1.00;
+    console.log(`💰 [MANUAL] Preço do domínio: $${domainPrice.toFixed(2)}`);
+    
+    // ============================================
     // VERIFICAÇÃO DE SALDO ANTES DE INICIAR
     // ============================================
     console.log(`💰 [MANUAL] Verificando saldo antes de iniciar compra...`);
@@ -285,13 +304,17 @@ router.post('/manual', async (req, res) => {
     
     console.log(`💰 [MANUAL] Saldo atual: $${currentBalance.toFixed(2)}`);
     
-    // Verificar se tem saldo mínimo (pelo menos $1 para margem de segurança)
-    if (currentBalance < 1.00) {
-      console.log(`❌ [MANUAL] Saldo insuficiente! Necessário mínimo $1.00, disponível: $${currentBalance.toFixed(2)}`);
+    // Verificar se tem saldo suficiente para o preço do domínio (com margem de $0.50)
+    const requiredBalance = domainPrice + 0.50;
+    if (currentBalance < requiredBalance) {
+      const missingAmount = (requiredBalance - currentBalance).toFixed(2);
+      console.log(`❌ [MANUAL] Saldo insuficiente! Necessário: $${requiredBalance.toFixed(2)}, disponível: $${currentBalance.toFixed(2)}`);
       return res.status(400).json({
         success: false,
-        error: `Saldo insuficiente na Namecheap. Disponível: $${currentBalance.toFixed(2)}. Adicione no mínimo $15.00 para continuar.`,
-        balance: currentBalance
+        error: `Saldo insuficiente na Namecheap. Disponível: $${currentBalance.toFixed(2)}. Necessário: $${requiredBalance.toFixed(2)} (domínio: $${domainPrice.toFixed(2)} + margem). Adicione pelo menos $${missingAmount} para continuar.`,
+        balance: currentBalance,
+        required: requiredBalance,
+        domainPrice: domainPrice
       });
     }
     
