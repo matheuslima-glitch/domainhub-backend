@@ -689,25 +689,28 @@ class WordPressDomainPurchase {
   }
 
   /**
-   * CONFIGURAR CLOUDFLARE
-   */
-  async setupCloudflare(domain) {
-    if (!config.CLOUDFLARE_EMAIL || !config.CLOUDFLARE_API_KEY) {
-      console.log('⚠️ [CLOUDFLARE] Não configurado - pulando');
-      return null;
-    }
+ * CONFIGURAR CLOUDFLARE
+ */
+async setupCloudflare(domain) {
+  if (!config.CLOUDFLARE_EMAIL || !config.CLOUDFLARE_API_KEY) {
+    console.log('⚠️ [CLOUDFLARE] Não configurado - pulando');
+    return null;
+  }
 
+  try {
+    console.log(`🌐 [CLOUDFLARE] Iniciando configuração completa para ${domain}`);
+    
+    // ETAPA 1: Criar Custom Hostname no servidor principal
+    console.log(`🏷️ [CLOUDFLARE] Criando Custom Hostname...`);
     try {
-      console.log(`🌐 [CLOUDFLARE] Iniciando configuração completa para ${domain}`);
-      
-      // ETAPA 1: Criar zona na Cloudflare
-      console.log(`📝 [CLOUDFLARE] Criando zona...`);
-      const zoneResponse = await axios.post(
-        `${this.cloudflareAPI}/zones`,
+      await axios.post(
+        `${this.cloudflareAPI}/zones/${config.CLOUDFLARE_MAIN_ZONE_ID}/custom_hostnames`,
         {
-          name: domain,
-          account: { id: config.CLOUDFLARE_ACCOUNT_ID },
-          jump_start: true
+          hostname: domain,
+          ssl: {
+            method: 'http',
+            type: 'dv'
+          }
         },
         {
           headers: {
@@ -717,279 +720,242 @@ class WordPressDomainPurchase {
           }
         }
       );
-      
-      const zoneId = zoneResponse.data.result.id;
-      const nameservers = zoneResponse.data.result.name_servers;
-      
-      console.log(`✅ [CLOUDFLARE] Zona criada - ID: ${zoneId}`);
-      console.log(`   Nameservers: ${nameservers.join(', ')}`);
-      
-      await this.delay(2000);
-      
-      // ETAPA 2: Configurar SSL Full
-      console.log(`🔒 [CLOUDFLARE] Configurando SSL Full...`);
-      try {
-        await axios.patch(
-          `${this.cloudflareAPI}/zones/${zoneId}/settings/ssl`,
-          { value: 'full' },
-          {
-            headers: {
-              'X-Auth-Email': config.CLOUDFLARE_EMAIL,
-              'X-Auth-Key': config.CLOUDFLARE_API_KEY,
-              'Content-Type': 'application/json'
-            }
-          }
-        );
-        console.log(`✅ [CLOUDFLARE] SSL Full configurado`);
-      } catch (error) {
-        console.error(`⚠️ [CLOUDFLARE] Erro SSL:`, error.message);
-      }
-      
-      await this.delay(2000);
-      
-      // ETAPA 3: Criar registro A
-      console.log(`📍 [CLOUDFLARE] Criando DNS A...`);
-      try {
-        await axios.post(
-          `${this.cloudflareAPI}/zones/${zoneId}/dns_records`,
-          {
-            type: 'A',
-            name: domain,
-            content: config.HOSTING_SERVER_IP || '69.46.11.10',
-            ttl: 1,
-            proxied: true
-          },
-          {
-            headers: {
-              'X-Auth-Email': config.CLOUDFLARE_EMAIL,
-              'X-Auth-Key': config.CLOUDFLARE_API_KEY,
-              'Content-Type': 'application/json'
-            }
-          }
-        );
-        console.log(`✅ [CLOUDFLARE] DNS A criado`);
-      } catch (error) {
-        console.error(`⚠️ [CLOUDFLARE] Erro DNS A:`, error.message);
-      }
-      
-      await this.delay(2000);
-      
-      // ETAPA 4: Criar CNAME www
-      console.log(`📍 [CLOUDFLARE] Criando CNAME www...`);
-      try {
-        await axios.post(
-          `${this.cloudflareAPI}/zones/${zoneId}/dns_records`,
-          {
-            type: 'CNAME',
-            name: 'www',
-            content: domain,
-            ttl: 1,
-            proxied: true
-          },
-          {
-            headers: {
-              'X-Auth-Email': config.CLOUDFLARE_EMAIL,
-              'X-Auth-Key': config.CLOUDFLARE_API_KEY,
-              'Content-Type': 'application/json'
-            }
-          }
-        );
-        console.log(`✅ [CLOUDFLARE] CNAME www criado`);
-      } catch (error) {
-        console.error(`⚠️ [CLOUDFLARE] Erro CNAME www:`, error.message);
-      }
-      
-      await this.delay(2000);
-      
-      // ETAPA 5: Criar CNAME track (RedTrack)
-      console.log(`📍 [CLOUDFLARE] Criando CNAME track...`);
-      try {
-        await axios.post(
-          `${this.cloudflareAPI}/zones/${zoneId}/dns_records`,
-          {
-            type: 'CNAME',
-            name: 'track',
-            content: 'khrv4.ttrk.io',
-            ttl: 1,
-            proxied: false
-          },
-          {
-            headers: {
-              'X-Auth-Email': config.CLOUDFLARE_EMAIL,
-              'X-Auth-Key': config.CLOUDFLARE_API_KEY,
-              'Content-Type': 'application/json'
-            }
-          }
-        );
-        console.log(`✅ [CLOUDFLARE] CNAME track criado`);
-      } catch (error) {
-        console.error(`⚠️ [CLOUDFLARE] Erro CNAME track:`, error.message);
-      }
-      
-      await this.delay(2000);
-      
-      // ETAPA 6: Criar Filtro WAF - Sitemap
-      console.log(`🛡️ [CLOUDFLARE] Criando filtro WAF - Sitemap...`);
-      let sitemapFilterId = null;
-      try {
-        const sitemapFilterResponse = await axios.post(
-          `${this.cloudflareAPI}/zones/${zoneId}/filters`,
-          [
-            {
-              expression: '(http.request.uri contains "sitemap" or http.request.full_uri contains "sitemap")',
-              paused: false,
-              description: 'Bloqueio (Sitemap)'
-            }
-          ],
-          {
-            headers: {
-              'X-Auth-Email': config.CLOUDFLARE_EMAIL,
-              'X-Auth-Key': config.CLOUDFLARE_API_KEY,
-              'Content-Type': 'application/json'
-            }
-          }
-        );
-        sitemapFilterId = sitemapFilterResponse.data.result[0].id;
-        console.log(`✅ [CLOUDFLARE] Filtro WAF Sitemap criado - ID: ${sitemapFilterId}`);
-      } catch (error) {
-        console.error(`⚠️ [CLOUDFLARE] Erro filtro Sitemap:`, error.message);
-      }
-      
-      await this.delay(2000);
-      
-      // ETAPA 7: Criar Regra de Bloqueio - Sitemap
-      if (sitemapFilterId) {
-        console.log(`🛡️ [CLOUDFLARE] Criando regra bloqueio - Sitemap...`);
-        try {
-          await axios.post(
-            `${this.cloudflareAPI}/zones/${zoneId}/firewall/rules`,
-            [
-              {
-                action: 'block',
-                filter: { id: sitemapFilterId },
-                description: 'Bloqueio-Sitemap'
-              }
-            ],
-            {
-              headers: {
-                'X-Auth-Email': config.CLOUDFLARE_EMAIL,
-                'X-Auth-Key': config.CLOUDFLARE_API_KEY,
-                'Content-Type': 'application/json'
-              }
-            }
-          );
-          console.log(`✅ [CLOUDFLARE] Regra bloqueio Sitemap criada`);
-        } catch (error) {
-          console.error(`⚠️ [CLOUDFLARE] Erro regra Sitemap:`, error.message);
-        }
-      }
-      
-      await this.delay(2000);
-      
-      // ETAPA 8: Criar Filtro WAF - ?s=
-      console.log(`🛡️ [CLOUDFLARE] Criando filtro WAF - ?s=...`);
-      let queryFilterId = null;
-      try {
-        const queryFilterResponse = await axios.post(
-          `${this.cloudflareAPI}/zones/${zoneId}/filters`,
-          [
-            {
-              expression: '(http.request.uri contains "?s=" or http.request.full_uri contains "?s=")',
-              paused: false,
-              description: 'Bloqueio (?s=)'
-            }
-          ],
-          {
-            headers: {
-              'X-Auth-Email': config.CLOUDFLARE_EMAIL,
-              'X-Auth-Key': config.CLOUDFLARE_API_KEY,
-              'Content-Type': 'application/json'
-            }
-          }
-        );
-        queryFilterId = queryFilterResponse.data.result[0].id;
-        console.log(`✅ [CLOUDFLARE] Filtro WAF ?s= criado - ID: ${queryFilterId}`);
-      } catch (error) {
-        console.error(`⚠️ [CLOUDFLARE] Erro filtro ?s=:`, error.message);
-      }
-      
-      await this.delay(2000);
-      
-      // ETAPA 9: Criar Regra de Bloqueio - ?s=
-      if (queryFilterId) {
-        console.log(`🛡️ [CLOUDFLARE] Criando regra bloqueio - ?s=...`);
-        try {
-          await axios.post(
-            `${this.cloudflareAPI}/zones/${zoneId}/firewall/rules`,
-            [
-              {
-                action: 'block',
-                filter: { id: queryFilterId },
-                description: 'Bloqueio-?s='
-              }
-            ],
-            {
-              headers: {
-                'X-Auth-Email': config.CLOUDFLARE_EMAIL,
-                'X-Auth-Key': config.CLOUDFLARE_API_KEY,
-                'Content-Type': 'application/json'
-              }
-            }
-          );
-          console.log(`✅ [CLOUDFLARE] Regra bloqueio ?s= criada`);
-        } catch (error) {
-          console.error(`⚠️ [CLOUDFLARE] Erro regra ?s=:`, error.message);
-        }
-      }
-      
-      console.log(`🎉 [CLOUDFLARE] Configuração completa finalizada!`);
-      console.log(`   Zone ID: ${zoneId}`);
-      console.log(`   DNS: A, CNAME www, CNAME track`);
-      console.log(`   SSL: Full`);
-      console.log(`   WAF: 2 filtros + 2 regras de bloqueio (sitemap, ?s=)`);
-      
-      return { zoneId: zoneId, nameservers: nameservers };
-      
+      console.log(`✅ [CLOUDFLARE] Custom Hostname criado`);
     } catch (error) {
-      console.error('❌ [CLOUDFLARE] Erro geral:', error.message);
-      return null;
+      console.error(`⚠️ [CLOUDFLARE] Erro Custom Hostname:`, error.message);
     }
-  }
-
-  /**
-   * ALTERAR NAMESERVERS
-   */
-  async setNameservers(domain, nameservers) {
+    
+    await this.delay(2000);
+    
+    // ETAPA 2: Criar zona na Cloudflare
+    console.log(`📝 [CLOUDFLARE] Criando zona...`);
+    const zoneResponse = await axios.post(
+      `${this.cloudflareAPI}/zones`,
+      {
+        name: domain,
+        account: { id: config.CLOUDFLARE_ACCOUNT_ID },
+        jump_start: true
+      },
+      {
+        headers: {
+          'X-Auth-Email': config.CLOUDFLARE_EMAIL,
+          'X-Auth-Key': config.CLOUDFLARE_API_KEY,
+          'Content-Type': 'application/json'
+        }
+      }
+    );
+    
+    const zoneId = zoneResponse.data.result.id;
+    const nameservers = zoneResponse.data.result.name_servers;
+    
+    console.log(`✅ [CLOUDFLARE] Zona criada - ID: ${zoneId}`);
+    console.log(`   Nameservers: ${nameservers.join(', ')}`);
+    
+    await this.delay(2000);
+    
+    // ETAPA 3: Configurar SSL Full
+    console.log(`🔒 [CLOUDFLARE] Configurando SSL Full...`);
     try {
-      const domainParts = domain.split('.');
-      const tld = domainParts.pop();
-      const sld = domainParts.join('.');
-      
-      const params = {
-        ApiUser: config.NAMECHEAP_API_USER,
-        ApiKey: config.NAMECHEAP_API_KEY,
-        UserName: config.NAMECHEAP_API_USER,
-        Command: 'namecheap.domains.dns.setCustom',
-        ClientIp: config.NAMECHEAP_CLIENT_IP,
-        SLD: sld,
-        TLD: tld,
-        Nameservers: nameservers.join(',')
-      };
-      
-      const response = await axios.get(this.namecheapAPI, { params, timeout: 30000 });
-      
-      if (response.data.includes('Status="OK"')) {
-        console.log(`✅ [NAMESERVERS] Alterados com sucesso`);
-        return true;
-      }
-      
-      return false;
-      
+      await axios.patch(
+        `${this.cloudflareAPI}/zones/${zoneId}/settings/ssl`,
+        { value: 'full' },
+        {
+          headers: {
+            'X-Auth-Email': config.CLOUDFLARE_EMAIL,
+            'X-Auth-Key': config.CLOUDFLARE_API_KEY,
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+      console.log(`✅ [CLOUDFLARE] SSL Full configurado`);
     } catch (error) {
-      console.error('❌ [NAMESERVERS] Erro:', error.message);
-      return false;
+      console.error(`⚠️ [CLOUDFLARE] Erro SSL:`, error.message);
     }
+    
+    await this.delay(2000);
+    
+    // ETAPA 4: Criar registro CNAME
+    console.log(`📍 [CLOUDFLARE] Criando DNS CNAME...`);
+    try {
+      await axios.post(
+        `${this.cloudflareAPI}/zones/${zoneId}/dns_records`,
+        {
+          type: 'CNAME',
+          name: domain,
+          content: config.HOSTING_SERVER_HOSTNAME || 'servidor.institutoexperience.com.br',
+          ttl: 1,
+          proxied: false
+        },
+        {
+          headers: {
+            'X-Auth-Email': config.CLOUDFLARE_EMAIL,
+            'X-Auth-Key': config.CLOUDFLARE_API_KEY,
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+      console.log(`✅ [CLOUDFLARE] DNS CNAME criado`);
+    } catch (error) {
+      console.error(`⚠️ [CLOUDFLARE] Erro DNS CNAME:`, error.message);
+    }
+
+    await this.delay(2000);
+
+    // ETAPA 5: Criar CNAME track (RedTrack)
+    console.log(`📍 [CLOUDFLARE] Criando CNAME track...`);
+    try {
+      await axios.post(
+        `${this.cloudflareAPI}/zones/${zoneId}/dns_records`,
+        {
+          type: 'CNAME',
+          name: 'track',
+          content: 'khrv4.ttrk.io',
+          ttl: 1,
+          proxied: false
+        },
+        {
+          headers: {
+            'X-Auth-Email': config.CLOUDFLARE_EMAIL,
+            'X-Auth-Key': config.CLOUDFLARE_API_KEY,
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+      console.log(`✅ [CLOUDFLARE] CNAME track criado`);
+    } catch (error) {
+      console.error(`⚠️ [CLOUDFLARE] Erro CNAME track:`, error.message);
+    }
+    
+    await this.delay(2000);
+    
+    // ETAPA 6: Criar Filtro WAF - Sitemap
+    console.log(`🛡️ [CLOUDFLARE] Criando filtro WAF - Sitemap...`);
+    let sitemapFilterId = null;
+    try {
+      const sitemapFilterResponse = await axios.post(
+        `${this.cloudflareAPI}/zones/${zoneId}/filters`,
+        [
+          {
+            expression: '(http.request.uri contains "sitemap" or http.request.full_uri contains "sitemap")',
+            paused: false,
+            description: 'Bloqueio (Sitemap)'
+          }
+        ],
+        {
+          headers: {
+            'X-Auth-Email': config.CLOUDFLARE_EMAIL,
+            'X-Auth-Key': config.CLOUDFLARE_API_KEY,
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+      sitemapFilterId = sitemapFilterResponse.data.result[0].id;
+      console.log(`✅ [CLOUDFLARE] Filtro WAF Sitemap criado - ID: ${sitemapFilterId}`);
+    } catch (error) {
+      console.error(`⚠️ [CLOUDFLARE] Erro filtro Sitemap:`, error.message);
+    }
+    
+    await this.delay(2000);
+    
+    // ETAPA 7: Criar Regra de Bloqueio - Sitemap
+    if (sitemapFilterId) {
+      console.log(`🛡️ [CLOUDFLARE] Criando regra bloqueio - Sitemap...`);
+      try {
+        await axios.post(
+          `${this.cloudflareAPI}/zones/${zoneId}/firewall/rules`,
+          [
+            {
+              action: 'block',
+              filter: { id: sitemapFilterId },
+              description: 'Bloqueio-Sitemap'
+            }
+          ],
+          {
+            headers: {
+              'X-Auth-Email': config.CLOUDFLARE_EMAIL,
+              'X-Auth-Key': config.CLOUDFLARE_API_KEY,
+              'Content-Type': 'application/json'
+            }
+          }
+        );
+        console.log(`✅ [CLOUDFLARE] Regra bloqueio Sitemap criada`);
+      } catch (error) {
+        console.error(`⚠️ [CLOUDFLARE] Erro regra Sitemap:`, error.message);
+      }
+    }
+    
+    await this.delay(2000);
+    
+    // ETAPA 8: Criar Filtro WAF - ?s=
+    console.log(`🛡️ [CLOUDFLARE] Criando filtro WAF - ?s=...`);
+    let queryFilterId = null;
+    try {
+      const queryFilterResponse = await axios.post(
+        `${this.cloudflareAPI}/zones/${zoneId}/filters`,
+        [
+          {
+            expression: '(http.request.uri contains "?s=" or http.request.full_uri contains "?s=")',
+            paused: false,
+            description: 'Bloqueio (?s=)'
+          }
+        ],
+        {
+          headers: {
+            'X-Auth-Email': config.CLOUDFLARE_EMAIL,
+            'X-Auth-Key': config.CLOUDFLARE_API_KEY,
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+      queryFilterId = queryFilterResponse.data.result[0].id;
+      console.log(`✅ [CLOUDFLARE] Filtro WAF ?s= criado - ID: ${queryFilterId}`);
+    } catch (error) {
+      console.error(`⚠️ [CLOUDFLARE] Erro filtro ?s=:`, error.message);
+    }
+    
+    await this.delay(2000);
+    
+    // ETAPA 9: Criar Regra de Bloqueio - ?s=
+    if (queryFilterId) {
+      console.log(`🛡️ [CLOUDFLARE] Criando regra bloqueio - ?s=...`);
+      try {
+        await axios.post(
+          `${this.cloudflareAPI}/zones/${zoneId}/firewall/rules`,
+          [
+            {
+              action: 'block',
+              filter: { id: queryFilterId },
+              description: 'Bloqueio-?s='
+            }
+          ],
+          {
+            headers: {
+              'X-Auth-Email': config.CLOUDFLARE_EMAIL,
+              'X-Auth-Key': config.CLOUDFLARE_API_KEY,
+              'Content-Type': 'application/json'
+            }
+          }
+        );
+        console.log(`✅ [CLOUDFLARE] Regra bloqueio ?s= criada`);
+      } catch (error) {
+        console.error(`⚠️ [CLOUDFLARE] Erro regra ?s=:`, error.message);
+      }
+    }
+    
+    console.log(`🎉 [CLOUDFLARE] Configuração completa finalizada!`);
+    console.log(`   Zone ID: ${zoneId}`);
+    console.log(`   Custom Hostname: ${domain}`);
+    console.log(`   DNS: CNAME raiz, CNAME track`);
+    console.log(`   SSL: Full`);
+    console.log(`   WAF: 2 filtros + 2 regras de bloqueio (sitemap, ?s=)`);
+    
+    return { zoneId: zoneId, nameservers: nameservers };
+    
+  } catch (error) {
+    console.error('❌ [CLOUDFLARE] Erro geral:', error.message);
+    return null;
   }
+}
 
  /**
  * ADICIONAR DOMÍNIO AO CPANEL
