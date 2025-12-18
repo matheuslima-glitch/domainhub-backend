@@ -101,6 +101,7 @@ module.exports = {
   CLOUDFLARE_EMAIL: process.env.CLOUDFLARE_EMAIL,
   CLOUDFLARE_API_KEY: process.env.CLOUDFLARE_API_KEY,
   CLOUDFLARE_ACCOUNT_ID: process.env.CLOUDFLARE_ACCOUNT_ID,
+  CLOUDFLARE_MAIN_ZONE_ID: process.env.CLOUDFLARE_MAIN_ZONE_ID,
 
   // cPanel/Softaculous (WordPress)
   CPANEL_URL: process.env.CPANEL_URL || 'https://nexus.servidor.net.br:2083',
