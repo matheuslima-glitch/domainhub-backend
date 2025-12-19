@@ -139,7 +139,7 @@ async function createWHMAccount(domain) {
   console.log('📦 [ETAPA 1] CRIANDO CONTA NO WHM');
   console.log('='.repeat(70));
   console.log('   Domain:', domain);
-  console.log('   Username: gexhub');
+  console.log('   Username:', config.WHM_ACCOUNT_USERNAME);
   
   const params = new URLSearchParams({
     api_token_style: '1',
@@ -200,7 +200,7 @@ async function installWordPress(domain) {
   console.log('🌐 [ETAPA 2] INSTALANDO WORDPRESS');
   console.log('='.repeat(70));
   console.log('   Domain:', domain);
-  console.log('   Username: love9365');
+  console.log('   Username:', config.WORDPRESS_DEFAULT_USER);
   
   // Buscar senha do Passbolt
   const wpPassword = await getPasswordFromPassbolt();
@@ -212,11 +212,11 @@ async function installWordPress(domain) {
     softproto: 'https',
     softdomain: domain,
     softdirectory: '',
-    admin_username: 'love9365',
+    admin_username: config.WORDPRESS_DEFAULT_USER,
     admin_pass: wpPassword,
     admin_email: config.WORDPRESS_ADMIN_EMAIL || 'admin@gexcorp.com',
     site_name: domain.replace(/\./g, ' '),
-    site_desc: 'Site WordPress',
+    // site_desc: 'Site WordPress', // NOME DO SITE PEGANDO O NOME DO DOMÍNIO -> 
     language: 'pt_BR'
   });
   
@@ -225,7 +225,7 @@ async function installWordPress(domain) {
   try {
     // Usar API do cPanel/Softaculous para instalar
     const response = await axios.get(
-      `${config.WHM_URL}/json-api/cpanel?cpanel_jsonapi_user=gexhub&cpanel_jsonapi_apiversion=2&cpanel_jsonapi_module=Softaculous&cpanel_jsonapi_func=install&soft=26&${softaculousParams.toString()}`,
+      `${config.WHM_URL}/json-api/cpanel?cpanel_jsonapi_user=${config.WHM_ACCOUNT_USERNAME}&cpanel_jsonapi_apiversion=2&cpanel_jsonapi_module=Softaculous&cpanel_jsonapi_func=install&soft=26&${softaculousParams.toString()}`,
       {
         headers: {
           'Authorization': `whm ${config.WHM_USERNAME}:${config.WHM_API_TOKEN}`
@@ -323,6 +323,22 @@ router.post('/whm-only', async (req, res) => {
   
   try {
     const result = await createWHMAccount(domain);
+    res.json({ domain, ...result });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Teste só WordPress (sem criar conta WHM)
+router.post('/wp-only', async (req, res) => {
+  const { domain } = req.body;
+  
+  if (!domain) {
+    return res.status(400).json({ error: 'Domínio não informado' });
+  }
+  
+  try {
+    const result = await installWordPress(domain);
     res.json({ domain, ...result });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
