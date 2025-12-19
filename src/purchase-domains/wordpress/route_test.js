@@ -242,7 +242,7 @@ async function installWordPress(domain) {
           messages: [
             {
               role: 'system',
-              content: 'Extraia as 2 primeiras palavras de um domínio concatenado. Responda APENAS com as 2 palavras capitalizadas separadas por espaço, sem pontuação. Me entregue apenas o solicitado, sem comentários ou explicações.'
+              content: 'Extraia as 2 primeiras palavras de um domínio concatenado. Responda APENAS com as 2 palavras separadas por espaço onde cada palavra começa com letra maiúscula, sem pontuação. Me entregue apenas o solicitado, sem comentários ou explicações.'
             },
             {
               role: 'user',
