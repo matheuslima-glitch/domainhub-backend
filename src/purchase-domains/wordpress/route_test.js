@@ -230,36 +230,39 @@ async function installWordPress(domain) {
     
     console.log('✅ Sessão criada, token:', cpSecurityToken);
     
-   // Formatar nome do site (detecta 2 palavras por transição vogal→consoante)
-    const raw = domain.split('.')[0].toLowerCase();
-    const vogais = /[aeiou]/;
-    const palavras = [];
-    let inicio = 0;
+    // Formatar nome do site usando OpenAI
+    const raw = domain.split('.')[0];
+    let siteName = raw.charAt(0).toUpperCase() + raw.slice(1);
     
-    for (let i = 1; i < raw.length; i++) {
-      // Corta quando vogal é seguida de consoante (início de nova palavra)
-      if (vogais.test(raw[i - 1]) && !vogais.test(raw[i])) {
-        // Só corta se já tem pelo menos 3 letras na palavra atual
-        if (i - inicio >= 3) {
-          palavras.push(raw.slice(inicio, i));
-          inicio = i;
-          if (palavras.length >= 2) break;
+    try {
+      const openaiResponse = await axios.post(
+        'https://api.openai.com/v1/chat/completions',
+        {
+          model: 'gpt-4o-mini',
+          messages: [
+            {
+              role: 'system',
+              content: 'Extraia as 2 primeiras palavras de um domínio concatenado. Responda APENAS com as 2 palavras capitalizadas separadas por espaço, sem pontuação. Me entregue apenas o solicitado, sem comentários ou explicações.'
+            },
+            {
+              role: 'user',
+              content: raw
+            }
+          ],
+          max_tokens: 20,
+          temperature: 0
+        },
+        {
+          headers: {
+            'Authorization': `Bearer ${config.OPENAI_API_KEY}`,
+            'Content-Type': 'application/json'
+          },
+          timeout: 10000
         }
-      }
-    }
-    
-    // Adiciona o resto se ainda não tem 2 palavras
-    if (palavras.length < 2 && inicio < raw.length) {
-      palavras.push(raw.slice(inicio));
-    }
-    
-    // Capitaliza e junta (máximo 2 palavras)
-    const siteName = palavras
-      .slice(0, 2)
-      .map(w => w.charAt(0).toUpperCase() + w.slice(1))
-      .join(' ');
-    
-    console.log('📝 Nome do site:', siteName);
+      );
+      siteName = openaiResponse.data.choices[0].message.content.trim();
+    } catch (err) {
+      console.log('⚠️ OpenAI falhou, usando nome original:', err.message);
     
     // Montar URL correta - act, soft e api vão na URL
     const baseUrl = config.WHM_URL.replace(':2087', ':2083').replace(/\/$/, '');
