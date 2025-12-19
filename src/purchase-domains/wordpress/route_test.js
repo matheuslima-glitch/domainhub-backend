@@ -144,8 +144,8 @@ async function createWHMAccount(domain) {
   const params = new URLSearchParams({
     api_token_style: '1',
     domain: domain,
-    username: 'gexhub',
-    password: 'MnFvzVtRj3KinQks',
+    username: config.WHM_ACCOUNT_USERNAME,
+    password: config.WHM_ACCOUNT_PASSWORD,
     plan: config.WHM_ACCOUNT_PACKAGE,
     savepkg: '0',
     featurelist: 'default',
