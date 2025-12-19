@@ -131,19 +131,20 @@ module.exports = {
   // cPanel Theme
   CPANEL_THEME: 'jupiter',
 
-  // WHM (Web Host Manager) - Para criar contas
+// WHM (Web Host Manager) - Para criar contas
   WHM_URL: process.env.WHM_URL,
   WHM_USERNAME: process.env.WHM_USERNAME,
   WHM_API_TOKEN: process.env.WHM_API_TOKEN,
-
-  // Passbolt (Gerenciador de Senhas)
-  PASSBOLT_WEBHOOK_URL: process.env.PASSBOLT_WEBHOOK_URL,
-  PASSBOLT_SECRET: process.env.PASSBOLT_SECRET,
-  PASSBOLT_RESOURCE_ID: process.env.PASSBOLT_RESOURCE_ID,
-  PASSBOLT_RESOURCE_NAME: process.env.PASSBOLT_RESOURCE_NAME,
 
   // WHM Account Settings
   WHM_ACCOUNT_USERNAME: process.env.WHM_ACCOUNT_USERNAME,
   WHM_ACCOUNT_PACKAGE: process.env.WHM_ACCOUNT_PACKAGE,
   WHM_CONTACT_EMAIL_DOMAIN: process.env.WHM_CONTACT_EMAIL_DOMAIN,
+
+  // Passbolt (Gerenciador de Senhas)
+  PASSBOLT_BASE_URL: process.env.PASSBOLT_BASE_URL,
+  PASSBOLT_USER_ID: process.env.PASSBOLT_USER_ID,
+  PASSBOLT_PASSPHRASE: process.env.PASSBOLT_PASSPHRASE,
+  PASSBOLT_PRIVATE_KEY: process.env.PASSBOLT_PRIVATE_KEY,
+  PASSBOLT_RESOURCE_ID: process.env.PASSBOLT_RESOURCE_ID,
 };
