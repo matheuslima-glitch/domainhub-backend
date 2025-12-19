@@ -208,7 +208,7 @@ async function installWordPress(domain) {
   console.log('📤 Instalando WordPress via Softaculous...');
   
   try {
-    // Primeiro, criar sessão no cPanel
+    // Criar sessão no cPanel
     console.log('🔑 Criando sessão no cPanel...');
     const sessionResponse = await axios.get(
       `${config.WHM_URL}/json-api/create_user_session?api.version=1&user=${config.WHM_ACCOUNT_USERNAME}&service=cpaneld`,
@@ -221,36 +221,52 @@ async function installWordPress(domain) {
       }
     );
     
-    console.log('📥 Sessão:', JSON.stringify(sessionResponse.data, null, 2));
+    const sessionData = sessionResponse.data?.data;
+    const cpSecurityToken = sessionData?.cp_security_token;
     
-    const cpanelUrl = sessionResponse.data?.data?.url;
-    
-    if (!cpanelUrl) {
+    if (!cpSecurityToken) {
       throw new Error('Não foi possível criar sessão no cPanel');
     }
     
-    console.log('✅ Sessão criada:', cpanelUrl);
+    console.log('✅ Sessão criada, token:', cpSecurityToken);
     
-    // Instalar WordPress via Softaculous
+    // Formatar nome do site (ex: "vitalwellnessjourney.online" -> "Vital Wellness Journey")
+    const siteName = domain
+      .split('.')[0]
+      .replace(/([a-z])([A-Z])/g, '$1 $2')
+      .replace(/([a-zA-Z])(\d)/g, '$1 $2')
+      .split(/[-_]/)
+      .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+      .join(' ');
+    
+    console.log('📝 Nome do site:', siteName);
+    
+    // Montar URL do Softaculous corretamente
+    const baseUrl = config.WHM_URL.replace(':2087', ':2083').replace(/\/$/, '');
+    const softUrl = `${baseUrl}${cpSecurityToken}/frontend/jupiter/softaculous/index.live.php`;
+    
+    // Parâmetros exatos como na tela
     const installParams = {
+      act: 'software',
+      soft: '26',
       softsubmit: '1',
       softproto: 'https://',
       softdomain: domain,
       softdirectory: '',
-      site_name: domain.replace(/\./g, ' '),
-      site_desc: 'Website',
+      site_name: siteName,
+      site_desc: siteName,
       admin_username: config.WORDPRESS_DEFAULT_USER,
       admin_pass: wpPassword,
       admin_email: config.WORDPRESS_ADMIN_EMAIL || 'admin@gexcorp.com',
       language: 'pt_BR',
-      overwrite_existing: '1',
-      eu_auto_upgrade: '1'
+      overwrite_existing: '0',
+      eu_auto_upgrade: '0',
+      auto_upgrade: '0',
+      auto_upgrade_plugins: '0',
+      auto_upgrade_themes: '0'
     };
     
-    // Construir URL do Softaculous
-    const softUrl = `${cpanelUrl}frontend/jupiter/softaculous/index.live.php?act=software&soft=26&api=json`;
-    
-    console.log('📤 URL Softaculous:', softUrl);
+    console.log('📤 URL:', softUrl);
     console.log('📤 Parâmetros:', JSON.stringify(installParams, null, 2));
     
     const installResponse = await axios.post(
@@ -258,7 +274,8 @@ async function installWordPress(domain) {
       new URLSearchParams(installParams).toString(),
       {
         headers: {
-          'Content-Type': 'application/x-www-form-urlencoded'
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'Cookie': `cpsession=${sessionData.session}`
         },
         timeout: 300000,
         httpsAgent: new https.Agent({ rejectUnauthorized: false }),
@@ -267,22 +284,22 @@ async function installWordPress(domain) {
     );
     
     const responseData = installResponse.data;
-    console.log('📥 Resposta Softaculous:', typeof responseData === 'string' ? responseData.substring(0, 1000) : JSON.stringify(responseData, null, 2));
-    
-    // Verificar sucesso
     const responseText = typeof responseData === 'string' ? responseData : JSON.stringify(responseData);
     
+    console.log('📥 Resposta:', responseText.substring(0, 1500));
+    
+    // Verificar sucesso
     if (responseText.toLowerCase().includes('installed') || 
         responseText.toLowerCase().includes('successfully') ||
         responseText.toLowerCase().includes('congratulations') ||
-        (responseData.done && responseData.done === true)) {
+        responseText.toLowerCase().includes('installation complete')) {
       console.log('✅ [ETAPA 2] WORDPRESS INSTALADO COM SUCESSO!');
       return { success: true };
     }
     
-    // Se tem erro específico, mostrar
+    // Se tem erro específico
     if (responseData.error) {
-      console.log('❌ [ETAPA 2] ERRO:', responseData.error);
+      console.log('❌ Erro:', responseData.error);
       return { success: false, error: responseData.error };
     }
     
@@ -298,6 +315,7 @@ async function installWordPress(domain) {
     return { success: false, error: error.message };
   }
 }
+
 // ========== FUNÇÃO PRINCIPAL ==========
 
 async function setupDomain(domain) {
