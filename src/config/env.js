@@ -101,6 +101,7 @@ module.exports = {
   CLOUDFLARE_EMAIL: process.env.CLOUDFLARE_EMAIL,
   CLOUDFLARE_API_KEY: process.env.CLOUDFLARE_API_KEY,
   CLOUDFLARE_ACCOUNT_ID: process.env.CLOUDFLARE_ACCOUNT_ID,
+  CLOUDFLARE_MAIN_ZONE_ID: process.env.CLOUDFLARE_MAIN_ZONE_ID,
 
   // cPanel/Softaculous (WordPress)
   CPANEL_URL: process.env.CPANEL_URL || 'https://nexus.servidor.net.br:2083',
@@ -129,4 +130,21 @@ module.exports = {
 
   // cPanel Theme
   CPANEL_THEME: 'jupiter',
+
+// WHM (Web Host Manager) - Para criar contas
+  WHM_URL: process.env.WHM_URL,
+  WHM_USERNAME: process.env.WHM_USERNAME,
+  WHM_API_TOKEN: process.env.WHM_API_TOKEN,
+
+  // WHM Account Settings
+  WHM_ACCOUNT_USERNAME: process.env.WHM_ACCOUNT_USERNAME,
+  WHM_ACCOUNT_PACKAGE: process.env.WHM_ACCOUNT_PACKAGE,
+  WHM_CONTACT_EMAIL_DOMAIN: process.env.WHM_CONTACT_EMAIL_DOMAIN,
+
+  // Passbolt (Gerenciador de Senhas)
+  PASSBOLT_BASE_URL: process.env.PASSBOLT_BASE_URL,
+  PASSBOLT_USER_ID: process.env.PASSBOLT_USER_ID,
+  PASSBOLT_PASSPHRASE: process.env.PASSBOLT_PASSPHRASE,
+  PASSBOLT_PRIVATE_KEY: process.env.PASSBOLT_PRIVATE_KEY,
+  PASSBOLT_RESOURCE_ID: process.env.PASSBOLT_RESOURCE_ID,
 };
