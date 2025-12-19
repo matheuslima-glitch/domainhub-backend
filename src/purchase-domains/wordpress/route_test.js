@@ -205,53 +205,81 @@ async function installWordPress(domain) {
   // Buscar senha do Passbolt
   const wpPassword = await getPasswordFromPassbolt();
   
-  // Softaculous API para instalar WordPress
-  const softaculousParams = new URLSearchParams({
-    api_token_style: '1',
-    // Parâmetros do Softaculous
-    softproto: 'https',
-    softdomain: domain,
-    softdirectory: '',
-    admin_username: config.WORDPRESS_DEFAULT_USER,
-    admin_pass: wpPassword,
-    admin_email: config.WORDPRESS_ADMIN_EMAIL || 'admin@gexcorp.com',
-    site_name: domain.replace(/\./g, ' '),
-    // site_desc: 'Site WordPress', // NOME DO SITE PEGANDO O NOME DO DOMÍNIO -> 
-    language: 'pt_BR'
-  });
-  
   console.log('📤 Instalando WordPress via Softaculous...');
   
   try {
-    // Usar API do cPanel/Softaculous para instalar
-    const response = await axios.get(
-      `${config.WHM_URL}/json-api/cpanel?cpanel_jsonapi_user=${config.WHM_ACCOUNT_USERNAME}&cpanel_jsonapi_apiversion=2&cpanel_jsonapi_module=Softaculous&cpanel_jsonapi_func=install&soft=26&${softaculousParams.toString()}`,
+    // Criar sessão no cPanel da conta
+    const loginResponse = await axios.post(
+      `${config.WHM_URL}/json-api/create_user_session?api.version=1&user=${config.WHM_ACCOUNT_USERNAME}&service=cpaneld`,
+      {},
       {
         headers: {
           'Authorization': `whm ${config.WHM_USERNAME}:${config.WHM_API_TOKEN}`
+        },
+        timeout: 30000,
+        httpsAgent: new https.Agent({ rejectUnauthorized: false })
+      }
+    );
+    
+    console.log('📥 Sessão criada:', JSON.stringify(loginResponse.data, null, 2));
+    
+    const sessionToken = loginResponse.data?.data?.cp_security_token;
+    
+    if (!sessionToken) {
+      throw new Error('Não foi possível criar sessão no cPanel');
+    }
+    
+    // Instalar WordPress usando a API do Softaculous
+    const baseUrl = config.WHM_URL.replace(':2087', ':2083');
+    const installUrl = `${baseUrl}${sessionToken}/frontend/jupiter/softaculous/index.live.php`;
+    
+    const installParams = new URLSearchParams({
+      act: 'install',
+      soft: '26',
+      softsubmit: '1',
+      softproto: 'https://',
+      softdomain: domain,
+      softdirectory: '',
+      site_name: domain.replace(/\./g, ' '),
+      site_desc: 'Website',
+      admin_username: config.WORDPRESS_DEFAULT_USER,
+      admin_pass: wpPassword,
+      admin_email: config.WORDPRESS_ADMIN_EMAIL || 'admin@gexcorp.com',
+      language: 'pt_BR',
+      overwrite_existing: '1',
+      eu_auto_upgrade: '1'
+    });
+    
+    const installResponse = await axios.post(
+      installUrl,
+      installParams.toString(),
+      {
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded'
         },
         timeout: 180000,
         httpsAgent: new https.Agent({ rejectUnauthorized: false })
       }
     );
     
-    console.log('📥 Resposta Softaculous:', JSON.stringify(response.data, null, 2));
+    const responseText = typeof installResponse.data === 'string' ? installResponse.data : JSON.stringify(installResponse.data);
+    console.log('📥 Resposta instalação:', responseText.substring(0, 500));
     
-    if (response.data?.cpanelresult?.data?.[0]?.result === 1 || 
-        JSON.stringify(response.data).toLowerCase().includes('success')) {
+    if (responseText.toLowerCase().includes('successfully') || 
+        responseText.toLowerCase().includes('installed') ||
+        responseText.toLowerCase().includes('congratulations')) {
       console.log('✅ [ETAPA 2] WORDPRESS INSTALADO COM SUCESSO!');
       return { success: true };
     }
     
     console.log('❌ [ETAPA 2] FALHA AO INSTALAR WORDPRESS');
-    return { success: false, error: response.data };
+    return { success: false, error: responseText.substring(0, 500) };
     
   } catch (error) {
     console.error('❌ [ETAPA 2] ERRO:', error.message);
     return { success: false, error: error.message };
   }
 }
-
 // ========== FUNÇÃO PRINCIPAL ==========
 
 async function setupDomain(domain) {
