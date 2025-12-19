@@ -208,10 +208,10 @@ async function installWordPress(domain) {
   console.log('📤 Instalando WordPress via Softaculous...');
   
   try {
-    // Criar sessão no cPanel da conta
-    const loginResponse = await axios.post(
+    // Primeiro, criar sessão no cPanel
+    console.log('🔑 Criando sessão no cPanel...');
+    const sessionResponse = await axios.get(
       `${config.WHM_URL}/json-api/create_user_session?api.version=1&user=${config.WHM_ACCOUNT_USERNAME}&service=cpaneld`,
-      {},
       {
         headers: {
           'Authorization': `whm ${config.WHM_USERNAME}:${config.WHM_API_TOKEN}`
@@ -221,21 +221,18 @@ async function installWordPress(domain) {
       }
     );
     
-    console.log('📥 Sessão criada:', JSON.stringify(loginResponse.data, null, 2));
+    console.log('📥 Sessão:', JSON.stringify(sessionResponse.data, null, 2));
     
-    const sessionToken = loginResponse.data?.data?.cp_security_token;
+    const cpanelUrl = sessionResponse.data?.data?.url;
     
-    if (!sessionToken) {
+    if (!cpanelUrl) {
       throw new Error('Não foi possível criar sessão no cPanel');
     }
     
-    // Instalar WordPress usando a API do Softaculous
-    const baseUrl = config.WHM_URL.replace(':2087', ':2083');
-    const installUrl = `${baseUrl}${sessionToken}/frontend/jupiter/softaculous/index.live.php`;
+    console.log('✅ Sessão criada:', cpanelUrl);
     
-    const installParams = new URLSearchParams({
-      act: 'install',
-      soft: '26',
+    // Instalar WordPress via Softaculous
+    const installParams = {
       softsubmit: '1',
       softproto: 'https://',
       softdomain: domain,
@@ -248,28 +245,45 @@ async function installWordPress(domain) {
       language: 'pt_BR',
       overwrite_existing: '1',
       eu_auto_upgrade: '1'
-    });
+    };
+    
+    // Construir URL do Softaculous
+    const softUrl = `${cpanelUrl}frontend/jupiter/softaculous/index.live.php?act=software&soft=26&api=json`;
+    
+    console.log('📤 URL Softaculous:', softUrl);
+    console.log('📤 Parâmetros:', JSON.stringify(installParams, null, 2));
     
     const installResponse = await axios.post(
-      installUrl,
-      installParams.toString(),
+      softUrl,
+      new URLSearchParams(installParams).toString(),
       {
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded'
         },
-        timeout: 180000,
-        httpsAgent: new https.Agent({ rejectUnauthorized: false })
+        timeout: 300000,
+        httpsAgent: new https.Agent({ rejectUnauthorized: false }),
+        maxRedirects: 5
       }
     );
     
-    const responseText = typeof installResponse.data === 'string' ? installResponse.data : JSON.stringify(installResponse.data);
-    console.log('📥 Resposta instalação:', responseText.substring(0, 500));
+    const responseData = installResponse.data;
+    console.log('📥 Resposta Softaculous:', typeof responseData === 'string' ? responseData.substring(0, 1000) : JSON.stringify(responseData, null, 2));
     
-    if (responseText.toLowerCase().includes('successfully') || 
-        responseText.toLowerCase().includes('installed') ||
-        responseText.toLowerCase().includes('congratulations')) {
+    // Verificar sucesso
+    const responseText = typeof responseData === 'string' ? responseData : JSON.stringify(responseData);
+    
+    if (responseText.toLowerCase().includes('installed') || 
+        responseText.toLowerCase().includes('successfully') ||
+        responseText.toLowerCase().includes('congratulations') ||
+        (responseData.done && responseData.done === true)) {
       console.log('✅ [ETAPA 2] WORDPRESS INSTALADO COM SUCESSO!');
       return { success: true };
+    }
+    
+    // Se tem erro específico, mostrar
+    if (responseData.error) {
+      console.log('❌ [ETAPA 2] ERRO:', responseData.error);
+      return { success: false, error: responseData.error };
     }
     
     console.log('❌ [ETAPA 2] FALHA AO INSTALAR WORDPRESS');
@@ -277,6 +291,10 @@ async function installWordPress(domain) {
     
   } catch (error) {
     console.error('❌ [ETAPA 2] ERRO:', error.message);
+    if (error.response) {
+      console.error('   Status:', error.response.status);
+      console.error('   Data:', typeof error.response.data === 'string' ? error.response.data.substring(0, 500) : JSON.stringify(error.response.data, null, 2));
+    }
     return { success: false, error: error.message };
   }
 }
