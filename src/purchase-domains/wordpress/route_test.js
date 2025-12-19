@@ -263,6 +263,7 @@ async function installWordPress(domain) {
       siteName = openaiResponse.data.choices[0].message.content.trim();
     } catch (err) {
       console.log('⚠️ OpenAI falhou, usando nome original:', err.message);
+    }
     
     // Montar URL correta - act, soft e api vão na URL
     const baseUrl = config.WHM_URL.replace(':2087', ':2083').replace(/\/$/, '');
