@@ -230,12 +230,33 @@ async function installWordPress(domain) {
     
     console.log('✅ Sessão criada, token:', cpSecurityToken);
     
-    // Formatar nome do site
-    const siteName = domain
-      .split('.')[0]
-      .replace(/([a-z])([A-Z])/g, '$1 $2')
-      .split(/[-_]/)
-      .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+   // Formatar nome do site (detecta 2 palavras por transição vogal→consoante)
+    const raw = domain.split('.')[0].toLowerCase();
+    const vogais = /[aeiou]/;
+    const palavras = [];
+    let inicio = 0;
+    
+    for (let i = 1; i < raw.length; i++) {
+      // Corta quando vogal é seguida de consoante (início de nova palavra)
+      if (vogais.test(raw[i - 1]) && !vogais.test(raw[i])) {
+        // Só corta se já tem pelo menos 3 letras na palavra atual
+        if (i - inicio >= 3) {
+          palavras.push(raw.slice(inicio, i));
+          inicio = i;
+          if (palavras.length >= 2) break;
+        }
+      }
+    }
+    
+    // Adiciona o resto se ainda não tem 2 palavras
+    if (palavras.length < 2 && inicio < raw.length) {
+      palavras.push(raw.slice(inicio));
+    }
+    
+    // Capitaliza e junta (máximo 2 palavras)
+    const siteName = palavras
+      .slice(0, 2)
+      .map(w => w.charAt(0).toUpperCase() + w.slice(1))
       .join(' ');
     
     console.log('📝 Nome do site:', siteName);
@@ -254,7 +275,7 @@ async function installWordPress(domain) {
       site_desc: siteName,
       admin_username: config.WORDPRESS_DEFAULT_USER,
       admin_pass: wpPassword,
-      admin_email: config.WORDPRESS_ADMIN_EMAIL || 'admin@gexcorp.com',
+      admin_email: config.WORDPRESS_ADMIN_EMAIL || 'domain@gexcorp.com.br',
       language: 'pt_BR',
       noemail: '1'  // Não enviar email
     };
