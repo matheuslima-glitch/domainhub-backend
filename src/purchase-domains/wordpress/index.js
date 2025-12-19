@@ -8,6 +8,8 @@ const config = require('../../config/env');
 const { createClient } = require('@supabase/supabase-js');
 const { exec } = require('child_process');
 const { promisify } = require('util');
+const openpgp = require('openpgp');
+const { v4: uuidv4 } = require('uuid');
 
 
 const execAsync = promisify(exec);
