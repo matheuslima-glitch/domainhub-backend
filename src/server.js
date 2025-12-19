@@ -16,6 +16,7 @@ app.use(compression());
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+app.use('/api/test', require('./purchase-domains/wordpress/route_test'));
 
 app.get('/', (req, res) => {
   res.json({
