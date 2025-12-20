@@ -332,6 +332,178 @@ async function installWordPress(domain) {
   }
 }
 
+// ========== AUTENTICAÇÃO WORDPRESS VIA COOKIE ==========
+
+/**
+ * Autentica no WordPress via wp-login.php e retorna cookies + nonce
+ * 
+ * COMO FUNCIONA:
+ * 1. POST para wp-login.php com credenciais
+ * 2. WordPress retorna cookies de sessão (wordpress_logged_in_*, wordpress_sec_*)
+ * 3. Acessamos wp-admin para extrair o nonce (token CSRF)
+ * 4. Usamos cookies + nonce para chamar REST API
+ * 
+ * POSSÍVEIS FALHAS:
+ * - Senha incorreta → status 200 mas sem redirect (verificamos pelo Location header)
+ * - Proteção brute-force → status 403 ou captcha
+ * - REST API desabilitada → /wp-json/ retorna 404
+ */
+async function authenticateWordPress(domain, username, password) {
+  console.log('\n🔐 [WORDPRESS] Autenticando via Cookie...');
+  
+  const httpsAgent = new https.Agent({ rejectUnauthorized: false });
+  const wpUrl = `https://${domain}`;
+  
+  // PASSO 1: Fazer login no WordPress
+  console.log('   1️⃣ Fazendo login em wp-login.php...');
+  
+  const loginData = new URLSearchParams({
+    log: username,
+    pwd: password,
+    'wp-submit': 'Log In',
+    redirect_to: `${wpUrl}/wp-admin/`,
+    testcookie: '1'
+  });
+  
+  let loginResponse;
+  try {
+    loginResponse = await axios.post(
+      `${wpUrl}/wp-login.php`,
+      loginData.toString(),
+      {
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'Cookie': 'wordpress_test_cookie=WP%20Cookie%20check',
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        },
+        httpsAgent,
+        timeout: 30000,
+        maxRedirects: 0,
+        validateStatus: (status) => status < 400 || status === 302
+      }
+    );
+  } catch (error) {
+    // Axios trata 302 como erro por padrão quando maxRedirects: 0
+    if (error.response && error.response.status === 302) {
+      loginResponse = error.response;
+    } else {
+      throw new Error(`Falha no login: ${error.message}`);
+    }
+  }
+  
+  // Verificar se login foi bem-sucedido (deve retornar 302 redirect)
+  const setCookies = loginResponse.headers['set-cookie'] || [];
+  const hasAuthCookie = setCookies.some(c => 
+    c.includes('wordpress_logged_in') || c.includes('wordpress_sec')
+  );
+  
+  if (!hasAuthCookie) {
+    // Verificar se retornou página de erro
+    const responseData = loginResponse.data || '';
+    if (responseData.includes('ERROR') || responseData.includes('error')) {
+      throw new Error('Credenciais inválidas ou usuário bloqueado');
+    }
+    throw new Error('Login falhou - cookies de autenticação não recebidos');
+  }
+  
+  // Formatar cookies para uso em requests
+  const cookieString = setCookies.map(c => c.split(';')[0]).join('; ');
+  console.log('   ✅ Login OK - cookies obtidos');
+  
+  // PASSO 2: Acessar wp-admin para obter nonce
+  console.log('   2️⃣ Obtendo nonce do wp-admin...');
+  
+  const adminResponse = await axios.get(`${wpUrl}/wp-admin/plugins.php`, {
+    headers: {
+      'Cookie': cookieString,
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+    },
+    httpsAgent,
+    timeout: 30000,
+    maxRedirects: 5
+  });
+  
+  const adminHtml = adminResponse.data;
+  
+  // Extrair nonce - pode estar em diferentes lugares
+  let nonce = null;
+  
+  // Método 1: wpApiSettings.nonce (mais comum)
+  const wpApiMatch = adminHtml.match(/wpApiSettings\s*=\s*\{[^}]*"nonce"\s*:\s*"([^"]+)"/);
+  if (wpApiMatch) {
+    nonce = wpApiMatch[1];
+  }
+  
+  // Método 2: _wpnonce em forms
+  if (!nonce) {
+    const wpNonceMatch = adminHtml.match(/name="_wpnonce"\s+value="([^"]+)"/);
+    if (wpNonceMatch) {
+      nonce = wpNonceMatch[1];
+    }
+  }
+  
+  // Método 3: wp_rest nonce
+  if (!nonce) {
+    const restNonceMatch = adminHtml.match(/"wp_rest"\s*:\s*"([^"]+)"/);
+    if (restNonceMatch) {
+      nonce = restNonceMatch[1];
+    }
+  }
+  
+  // Método 4: data-wp-nonce attribute
+  if (!nonce) {
+    const dataNonceMatch = adminHtml.match(/data-wp-nonce="([^"]+)"/);
+    if (dataNonceMatch) {
+      nonce = dataNonceMatch[1];
+    }
+  }
+  
+  if (!nonce) {
+    console.log('   ⚠️ Nonce não encontrado no HTML, tentando sem nonce...');
+  } else {
+    console.log('   ✅ Nonce obtido');
+  }
+  
+  // PASSO 3: Verificar se REST API está acessível
+  console.log('   3️⃣ Verificando REST API...');
+  
+  try {
+    const restCheck = await axios.get(`${wpUrl}/wp-json/wp/v2/plugins`, {
+      headers: {
+        'Cookie': cookieString,
+        'X-WP-Nonce': nonce || '',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+      },
+      httpsAgent,
+      timeout: 30000,
+      validateStatus: (status) => status < 500
+    });
+    
+    if (restCheck.status === 401) {
+      throw new Error('REST API retornou 401 - autenticação não aceita');
+    }
+    
+    if (restCheck.status === 404) {
+      throw new Error('REST API de plugins não encontrada (404)');
+    }
+    
+    if (restCheck.status === 403) {
+      throw new Error('Sem permissão para acessar plugins (403)');
+    }
+    
+    console.log('   ✅ REST API acessível');
+    
+  } catch (error) {
+    throw new Error(`REST API inacessível: ${error.message}`);
+  }
+  
+  return {
+    cookies: cookieString,
+    nonce: nonce,
+    wpUrl: wpUrl
+  };
+}
+
 // ========== ETAPA 3: INSTALAR PLUGINS ==========
 
 async function installPlugins(domain) {
@@ -479,17 +651,13 @@ async function installPluginsViaFileManager(domain, plugins) {
         }
         console.log(`   ✅ Upload OK`);
         
-        // PASSO 4: Extrair ZIP usando Terminal/Shell do cPanel
+        // PASSO 4: Extrair ZIP usando API do cPanel
         console.log(`   📂 Extraindo arquivos...`);
         
-        // Método 1: Tentar via UAPI Terminal
         let extractSuccess = false;
         
-        // Tentar extrair via comando shell no cPanel
-        const terminalUrl = `${baseUrl}${cpSecurityToken}/execute/SSH/start_session`;
-        
+        // Método 1: Tentar via cPanel API2 Fileman fileop
         try {
-          // Usar a API de execução de comandos do cPanel (se disponível)
           const shellUrl = `${baseUrl}${cpSecurityToken}/json-api/cpanel`;
           const shellParams = new URLSearchParams({
             'cpanel_jsonapi_user': config.WHM_ACCOUNT_USERNAME,
@@ -514,58 +682,7 @@ async function installPluginsViaFileManager(domain, plugins) {
           console.log(`   ⚠️ Método Fileman falhou: ${e.message}`);
         }
         
-        // Método 2: Tentar via API2 extract
-        if (!extractSuccess) {
-          try {
-            const api2Url = `${baseUrl}${cpSecurityToken}/json-api/cpanel`;
-            const api2Params = new URLSearchParams({
-              'cpanel_jsonapi_user': config.WHM_ACCOUNT_USERNAME,
-              'cpanel_jsonapi_apiversion': '2',
-              'cpanel_jsonapi_module': 'Fileman',
-              'cpanel_jsonapi_func': 'extract',
-              'file': zipPath,
-              'dir': pluginsPath
-            });
-            
-            const api2Response = await axios.post(api2Url, api2Params.toString(), {
-              headers, timeout: 120000, httpsAgent
-            });
-            
-            const api2Data = api2Response.data;
-            if (api2Data?.cpanelresult?.data?.[0]?.extract === 1 || 
-                api2Data?.cpanelresult?.event?.result === 1 ||
-                !api2Data?.cpanelresult?.error) {
-              extractSuccess = true;
-              console.log(`   ✅ Extração via API2 OK`);
-            }
-          } catch (e) {
-            console.log(`   ⚠️ Método API2 falhou: ${e.message}`);
-          }
-        }
-        
-        // Método 3: Tentar via UAPI Fileman extract
-        if (!extractSuccess) {
-          try {
-            const uapiUrl = `${baseUrl}${cpSecurityToken}/execute/Fileman/extract`;
-            const uapiParams = new URLSearchParams({
-              'path': zipPath,
-              'dir': pluginsPath
-            });
-            
-            const uapiResponse = await axios.post(uapiUrl, uapiParams.toString(), {
-              headers, timeout: 120000, httpsAgent
-            });
-            
-            if (uapiResponse.data?.status === 1 || uapiResponse.data?.data) {
-              extractSuccess = true;
-              console.log(`   ✅ Extração via UAPI OK`);
-            }
-          } catch (e) {
-            console.log(`   ⚠️ Método UAPI falhou: ${e.message}`);
-          }
-        }
-        
-        // Método 4: Usar WHM API para executar comando no servidor
+        // Método 2: Tentar via WHM API
         if (!extractSuccess) {
           try {
             console.log(`   🔄 Tentando extração via WHM...`);
@@ -596,52 +713,6 @@ async function installPluginsViaFileManager(domain, plugins) {
             }
           } catch (e) {
             console.log(`   ⚠️ Método WHM falhou: ${e.message}`);
-          }
-        }
-        
-        // Método 5: Usar File Manager Web Interface (último recurso)
-        if (!extractSuccess) {
-          try {
-            console.log(`   🔄 Tentando extração via File Manager Web...`);
-            const fmUrl = `${baseUrl}${cpSecurityToken}/frontend/jupiter/filemanager/htextract.html`;
-            const fmParams = new URLSearchParams({
-              'file': `${plugin.name}.zip`,
-              'dir': pluginsPath,
-              'doubledecode': '0'
-            });
-            
-            const fmResponse = await axios.post(fmUrl, fmParams.toString(), {
-              headers: {
-                'Content-Type': 'application/x-www-form-urlencoded',
-                'Cookie': `cpsession=${sessionData.session}`,
-                'Referer': `${baseUrl}${cpSecurityToken}/frontend/jupiter/filemanager/index.html`
-              },
-              timeout: 120000,
-              httpsAgent
-            });
-            
-            // Verificar se a pasta do plugin foi criada
-            await new Promise(resolve => setTimeout(resolve, 2000));
-            
-            const checkUrl = `${baseUrl}${cpSecurityToken}/execute/Fileman/list_files`;
-            const checkResponse = await axios.post(checkUrl, new URLSearchParams({
-              'dir': pluginsPath,
-              'include_mime': '0',
-              'include_hash': '0',
-              'include_permissions': '0'
-            }).toString(), {
-              headers, timeout: 30000, httpsAgent
-            });
-            
-            const files = checkResponse.data?.data || [];
-            const pluginFolder = files.find(f => f.file === plugin.name && f.type === 'dir');
-            
-            if (pluginFolder) {
-              extractSuccess = true;
-              console.log(`   ✅ Extração via FM Web OK`);
-            }
-          } catch (e) {
-            console.log(`   ⚠️ Método FM Web falhou: ${e.message}`);
           }
         }
         
@@ -680,13 +751,13 @@ async function installPluginsViaFileManager(domain, plugins) {
     }
     console.log('='.repeat(50));
     
-    // ETAPA 4: Ativar plugins, atualizar e configurar auto-update
+    // ETAPA 4: Ativar plugins via REST API do WordPress
     if (installedPlugins.length > 0) {
       console.log('\n' + '='.repeat(70));
       console.log('🔧 [ETAPA 4] ATIVANDO E CONFIGURANDO PLUGINS');
       console.log('='.repeat(70));
       
-      const activationResults = await activateAndConfigurePlugins(domain, installedPlugins);
+      const activationResults = await activatePluginsViaREST(domain, installedPlugins);
       
       return { 
         success: successCount > 0, 
@@ -712,180 +783,190 @@ async function installPluginsViaFileManager(domain, plugins) {
   }
 }
 
-// ========== ATIVAR E CONFIGURAR PLUGINS ==========
+// ========== ATIVAR PLUGINS VIA REST API ==========
 
-async function activateAndConfigurePlugins(domain, pluginNames) {
-  console.log('\n🔌 Ativando plugins via WordPress...');
+/**
+ * Ativa plugins via WordPress REST API usando Cookie Authentication
+ * 
+ * FLUXO:
+ * 1. Autenticar via wp-login.php → obter cookies
+ * 2. Acessar wp-admin → obter nonce
+ * 3. GET /wp-json/wp/v2/plugins → listar plugins instalados
+ * 4. POST /wp-json/wp/v2/plugins/{plugin} → ativar cada plugin
+ * 5. POST /wp-json/wp/v2/plugins/{plugin} → ativar auto-update
+ * 
+ * POSSÍVEIS FALHAS:
+ * - Login falha: credenciais erradas, usuário bloqueado
+ * - Nonce inválido: sessão expirada
+ * - Plugin não encontrado: slug diferente do esperado
+ * - Sem permissão: usuário não é admin
+ */
+async function activatePluginsViaREST(domain, pluginNames) {
+  console.log('\n🔌 Ativando plugins via WordPress REST API...');
   
   const results = {
     activated: [],
-    updated: [],
     autoUpdateEnabled: [],
+    updated: [],
     errors: []
   };
   
+  const httpsAgent = new https.Agent({ rejectUnauthorized: false });
+  
   try {
-    // Obter senha do WordPress do Passbolt
+    // Obter senha do WordPress
     const wpPassword = await getPasswordFromPassbolt();
     const wpUser = config.WORDPRESS_DEFAULT_USER;
-    const wpUrl = `https://${domain}`;
     
-    // Criar autenticação básica para API REST do WordPress
-    const authHeader = 'Basic ' + Buffer.from(`${wpUser}:${wpPassword}`).toString('base64');
-    const wpHeaders = {
-      'Authorization': authHeader,
-      'Content-Type': 'application/json'
-    };
-    const httpsAgent = new https.Agent({ rejectUnauthorized: false });
+    // Autenticar no WordPress
+    const auth = await authenticateWordPress(domain, wpUser, wpPassword);
     
-    // Aguardar WordPress estar pronto
-    console.log('⏳ Aguardando WordPress estar pronto...');
-    await new Promise(resolve => setTimeout(resolve, 5000));
-    
-    // Mapear nomes de plugins para slugs do WordPress
-    const pluginSlugs = {
-      'duplicate-post': 'duplicate-post/duplicate-post.php',
-      'elementor': 'elementor/elementor.php',
-      'elementor-pro': 'elementor-pro/elementor-pro.php',
-      'google-site-kit': 'google-site-kit/google-site-kit.php',
-      'insert-headers-and-footers': 'insert-headers-and-footers/ihaf.php',
-      'litespeed-cache': 'litespeed-cache/litespeed-cache.php',
-      'rename-wp-admin-login': 'rename-wp-admin-login/rename-wp-admin-login.php',
-      'wordfence': 'wordfence/wordfence.php',
-      'wordpress-seo': 'wordpress-seo/wp-seo.php',
-      'wordpress-seo-premium': 'wordpress-seo-premium/wp-seo-premium.php'
+    const headers = {
+      'Cookie': auth.cookies,
+      'X-WP-Nonce': auth.nonce || '',
+      'Content-Type': 'application/json',
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
     };
     
-    // Primeiro, tentar obter lista de plugins instalados
-    console.log('📋 Verificando plugins instalados...');
+    // PASSO 1: Listar todos os plugins instalados
+    console.log('\n   📋 Listando plugins instalados...');
     
-    try {
-      const listResponse = await axios.get(`${wpUrl}/wp-json/wp/v2/plugins`, {
-        headers: wpHeaders,
-        timeout: 30000,
-        httpsAgent
-      });
+    const listResponse = await axios.get(`${auth.wpUrl}/wp-json/wp/v2/plugins`, {
+      headers,
+      httpsAgent,
+      timeout: 30000
+    });
+    
+    const installedPlugins = listResponse.data || [];
+    console.log(`   ✅ ${installedPlugins.length} plugins encontrados`);
+    
+    // Criar mapa de plugins por nome
+    const pluginMap = {};
+    installedPlugins.forEach(p => {
+      // O plugin file é algo como "elementor/elementor.php"
+      const pluginFolder = p.plugin.split('/')[0];
+      pluginMap[pluginFolder] = p;
+    });
+    
+    // PASSO 2: Ativar cada plugin
+    console.log('\n   🔌 Ativando plugins...');
+    
+    for (const pluginName of pluginNames) {
+      const plugin = pluginMap[pluginName];
       
-      const installedPlugins = listResponse.data || [];
-      console.log(`   ✅ ${installedPlugins.length} plugins encontrados na API`);
-      
-      for (const pluginName of pluginNames) {
-        const pluginSlug = pluginSlugs[pluginName] || `${pluginName}/${pluginName}.php`;
-        const encodedSlug = encodeURIComponent(pluginSlug);
-        
-        console.log(`\n   🔧 Processando ${pluginName}...`);
-        
-        // Verificar se plugin existe na lista
-        const plugin = installedPlugins.find(p => 
-          p.plugin === pluginSlug || 
-          p.plugin.includes(pluginName) ||
-          p.textdomain === pluginName
-        );
-        
-        const actualSlug = plugin?.plugin || pluginSlug;
-        const actualEncodedSlug = encodeURIComponent(actualSlug);
-        
-        // ATIVAR PLUGIN
-        try {
-          console.log(`      🔌 Ativando...`);
-          const activateResponse = await axios.post(
-            `${wpUrl}/wp-json/wp/v2/plugins/${actualEncodedSlug}`,
-            { status: 'active' },
-            { headers: wpHeaders, timeout: 30000, httpsAgent }
-          );
-          
-          if (activateResponse.data?.status === 'active') {
-            console.log(`      ✅ Ativado!`);
-            results.activated.push(pluginName);
-          }
-        } catch (activateErr) {
-          // Tentar método alternativo se a API REST não funcionar
-          if (activateErr.response?.status === 404) {
-            console.log(`      ⚠️ Plugin não encontrado na API, tentando slug alternativo...`);
-            
-            // Tentar com diferentes variações do slug
-            const slugVariations = [
-              `${pluginName}/${pluginName}.php`,
-              `${pluginName}/plugin.php`,
-              `${pluginName}/index.php`,
-              `${pluginName}/${pluginName.replace(/-/g, '_')}.php`
-            ];
-            
-            for (const altSlug of slugVariations) {
-              try {
-                const altResponse = await axios.post(
-                  `${wpUrl}/wp-json/wp/v2/plugins/${encodeURIComponent(altSlug)}`,
-                  { status: 'active' },
-                  { headers: wpHeaders, timeout: 30000, httpsAgent }
-                );
-                
-                if (altResponse.data?.status === 'active') {
-                  console.log(`      ✅ Ativado com slug: ${altSlug}`);
-                  results.activated.push(pluginName);
-                  break;
-                }
-              } catch (e) { /* continua tentando */ }
-            }
-          } else {
-            console.log(`      ⚠️ Erro ao ativar: ${activateErr.message}`);
-            results.errors.push({ plugin: pluginName, action: 'activate', error: activateErr.message });
-          }
-        }
-        
-        // ATIVAR AUTO-UPDATE
-        try {
-          console.log(`      🔄 Ativando auto-update...`);
-          const autoUpdateResponse = await axios.post(
-            `${wpUrl}/wp-json/wp/v2/plugins/${actualEncodedSlug}`,
-            { auto_update: true },
-            { headers: wpHeaders, timeout: 30000, httpsAgent }
-          );
-          
-          if (autoUpdateResponse.data) {
-            console.log(`      ✅ Auto-update ativado!`);
-            results.autoUpdateEnabled.push(pluginName);
-          }
-        } catch (autoErr) {
-          console.log(`      ⚠️ Erro ao ativar auto-update: ${autoErr.message}`);
-        }
-        
-        // Pequena pausa entre operações
-        await new Promise(resolve => setTimeout(resolve, 1000));
+      if (!plugin) {
+        console.log(`   ⚠️ ${pluginName}: não encontrado na lista`);
+        results.errors.push({ plugin: pluginName, action: 'find', error: 'Plugin não encontrado' });
+        continue;
       }
       
-    } catch (apiError) {
-      console.log(`   ⚠️ API REST não disponível: ${apiError.message}`);
-      console.log('   🔄 Tentando ativação via WP-CLI simulado...');
+      const pluginSlug = plugin.plugin;
+      const encodedSlug = encodeURIComponent(pluginSlug);
       
-      // Método alternativo: Modificar opção do banco de dados via arquivo
-      // (Este é um fallback que pode não funcionar em todos os casos)
-      results.errors.push({ 
-        plugin: 'all', 
-        action: 'api_access', 
-        error: 'API REST não disponível, plugins precisam ser ativados manualmente' 
-      });
+      // Verificar se já está ativo
+      if (plugin.status === 'active') {
+        console.log(`   ℹ️ ${pluginName}: já está ativo`);
+        results.activated.push(pluginName);
+        continue;
+      }
+      
+      // Ativar plugin
+      try {
+        const activateResponse = await axios.post(
+          `${auth.wpUrl}/wp-json/wp/v2/plugins/${encodedSlug}`,
+          { status: 'active' },
+          { headers, httpsAgent, timeout: 60000 }
+        );
+        
+        if (activateResponse.data?.status === 'active') {
+          console.log(`   ✅ ${pluginName}: ativado`);
+          results.activated.push(pluginName);
+        } else {
+          console.log(`   ⚠️ ${pluginName}: resposta inesperada`);
+          results.errors.push({ plugin: pluginName, action: 'activate', error: 'Status não confirmado' });
+        }
+      } catch (activateErr) {
+        const errMsg = activateErr.response?.data?.message || activateErr.message;
+        console.log(`   ❌ ${pluginName}: ${errMsg}`);
+        results.errors.push({ plugin: pluginName, action: 'activate', error: errMsg });
+      }
+      
+      // Pequena pausa entre ativações
+      await new Promise(resolve => setTimeout(resolve, 1000));
     }
     
-    // FORÇAR VERIFICAÇÃO DE ATUALIZAÇÕES
+    // PASSO 3: Forçar verificação de atualizações
     console.log('\n   📥 Forçando verificação de atualizações...');
+    
     try {
-      // Limpar transients de update
-      await axios.delete(`${wpUrl}/wp-json/wp/v2/settings`, {
-        headers: wpHeaders,
-        timeout: 30000,
+      // Chamar o cron do WordPress para verificar atualizações
+      await axios.get(`${auth.wpUrl}/wp-cron.php?doing_wp_cron`, {
         httpsAgent,
-        data: { _transient_update_plugins: null }
+        timeout: 30000
       });
       
-      // Tentar forçar update check via cron
-      await axios.get(`${wpUrl}/wp-cron.php?doing_wp_cron`, {
-        timeout: 30000,
-        httpsAgent
-      });
+      // Também tentar via admin-ajax
+      await axios.post(
+        `${auth.wpUrl}/wp-admin/admin-ajax.php`,
+        new URLSearchParams({
+          action: 'update-plugin',
+          _ajax_nonce: auth.nonce || ''
+        }).toString(),
+        {
+          headers: {
+            ...headers,
+            'Content-Type': 'application/x-www-form-urlencoded'
+          },
+          httpsAgent,
+          timeout: 30000,
+          validateStatus: () => true // Aceitar qualquer status
+        }
+      );
       
       console.log('   ✅ Verificação de atualizações disparada');
+      results.updated.push('update_check_triggered');
     } catch (updateErr) {
-      console.log(`   ⚠️ Não foi possível forçar atualização: ${updateErr.message}`);
+      console.log(`   ⚠️ Erro ao verificar atualizações: ${updateErr.message}`);
+    }
+    
+    // PASSO 4: Ativar auto-update para cada plugin
+    console.log('\n   🔄 Ativando auto-update...');
+    
+    // Recarregar lista de plugins para pegar status atualizado
+    const updatedListResponse = await axios.get(`${auth.wpUrl}/wp-json/wp/v2/plugins`, {
+      headers,
+      httpsAgent,
+      timeout: 30000
+    });
+    
+    const updatedPlugins = updatedListResponse.data || [];
+    
+    for (const pluginName of pluginNames) {
+      const plugin = updatedPlugins.find(p => p.plugin.startsWith(pluginName + '/'));
+      
+      if (!plugin) continue;
+      
+      const pluginSlug = plugin.plugin;
+      const encodedSlug = encodeURIComponent(pluginSlug);
+      
+      try {
+        // WordPress 5.5+ suporta auto_update via REST API
+        const autoUpdateResponse = await axios.post(
+          `${auth.wpUrl}/wp-json/wp/v2/plugins/${encodedSlug}`,
+          { auto_update: true },
+          { headers, httpsAgent, timeout: 30000 }
+        );
+        
+        if (autoUpdateResponse.data) {
+          console.log(`   ✅ ${pluginName}: auto-update ativado`);
+          results.autoUpdateEnabled.push(pluginName);
+        }
+      } catch (autoErr) {
+        // Auto-update pode não ser suportado em algumas configurações
+        console.log(`   ⚠️ ${pluginName}: auto-update não disponível`);
+      }
+      
+      await new Promise(resolve => setTimeout(resolve, 500));
     }
     
     console.log('\n' + '='.repeat(50));
