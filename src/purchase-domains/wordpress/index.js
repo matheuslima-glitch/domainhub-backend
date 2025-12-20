@@ -788,7 +788,7 @@ class WordPressDomainPurchase {
             name: domain,
             content: config.HOSTING_SERVER_HOSTNAME || '192.211.60.58',
             ttl: 1,
-            proxied: false
+            proxied: true
           },
           {
             headers: {
