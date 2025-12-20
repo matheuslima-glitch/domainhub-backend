@@ -619,6 +619,8 @@ async function activatePluginsViaDirectPHP(domain, pluginNames, sessionData, cpS
   const results = {
     activated: [],
     autoUpdateEnabled: [],
+    autoUpdateCount: 0,
+    autoUpdateSaved: false,
     updated: [],
     errors: []
   };
@@ -703,6 +705,9 @@ header('Content-Type: application/json; charset=utf-8');
     'activated' => [],
     'already_active' => [],
     'auto_update_enabled' => [],
+    'auto_update_count' => 0,
+    'auto_update_total_plugins' => 0,
+    'auto_update_saved' => false,
     'update_check' => false,
     'errors' => [],
     'file_deleted' => false
@@ -769,27 +774,35 @@ try {
     ];
 }
 
-// ========== PASSO 3: ATIVAR AUTO-UPDATE ==========
-\$auto_updates = (array) get_site_option('auto_update_plugins', []);
-\$all_plugins = get_plugins(); // Recarregar
+// ========== PASSO 3: ATIVAR AUTO-UPDATE PARA TODOS OS PLUGINS ==========
+// Obter lista atual de auto-updates
+\$auto_updates = [];
 
+// Recarregar lista de plugins
+\$all_plugins = get_plugins();
+
+// Ativar auto-update para TODOS os plugins instalados (não só os da lista)
 foreach (\$all_plugins as \$plugin_file => \$plugin_data) {
+    \$auto_updates[] = \$plugin_file;
     \$plugin_folder = explode('/', \$plugin_file)[0];
-    
-    foreach (\$plugins_to_activate as \$plugin_name) {
-        if (\$plugin_folder === \$plugin_name || 
-            strpos(\$plugin_file, \$plugin_name . '/') === 0) {
-            
-            if (!in_array(\$plugin_file, \$auto_updates)) {
-                \$auto_updates[] = \$plugin_file;
-                \$results['auto_update_enabled'][] = \$plugin_name;
-            }
-            break;
-        }
-    }
+    \$results['auto_update_enabled'][] = \$plugin_folder;
 }
 
+// Remover duplicatas
+\$auto_updates = array_unique(\$auto_updates);
+
+// Salvar configuração de auto-update (usar AMBOS os métodos para garantir)
 update_site_option('auto_update_plugins', \$auto_updates);
+update_option('auto_update_plugins', \$auto_updates);
+
+// Verificar se salvou corretamente
+\$saved_auto_updates = get_option('auto_update_plugins', []);
+if (empty(\$saved_auto_updates)) {
+    \$saved_auto_updates = get_site_option('auto_update_plugins', []);
+}
+\$results['auto_update_count'] = count(\$saved_auto_updates);
+\$results['auto_update_total_plugins'] = count(\$all_plugins);
+\$results['auto_update_saved'] = (count(\$saved_auto_updates) === count(\$all_plugins));
 
 // ========== PASSO 4: AUTO-DELETAR ESTE ARQUIVO ==========
 \$this_file = __FILE__;
@@ -932,16 +945,19 @@ exit;
     // Processar resultados
     results.activated = [...(phpResults.activated || []), ...(phpResults.already_active || [])];
     results.autoUpdateEnabled = phpResults.auto_update_enabled || [];
+    results.autoUpdateCount = phpResults.auto_update_count || 0;
+    results.autoUpdateSaved = phpResults.auto_update_saved || false;
     results.updated = phpResults.update_check ? ['update_check_ok'] : [];
     results.errors = phpResults.errors || [];
     
     // Log dos resultados
     console.log(`\n   📊 RESULTADOS:`);
-    console.log(`   ✅ Ativados: ${phpResults.activated?.length || 0}`);
-    console.log(`   ℹ️ Já ativos: ${phpResults.already_active?.length || 0}`);
-    console.log(`   🔄 Auto-update: ${phpResults.auto_update_enabled?.length || 0}`);
-    console.log(`   📥 Update check: ${phpResults.update_check ? 'OK' : 'Falhou'}`);
-    console.log(`   🗑️ Auto-deletado: ${phpResults.file_deleted ? 'SIM ✓' : 'NÃO ✗'}`);
+    console.log(`   ✅ Plugins ativados: ${phpResults.activated?.length || 0}`);
+    console.log(`   ℹ️ Já estavam ativos: ${phpResults.already_active?.length || 0}`);
+    console.log(`   📥 Verificação de updates: ${phpResults.update_check ? 'OK ✓' : 'Falhou ✗'}`);
+    console.log(`   🔄 Auto-update habilitado: ${phpResults.auto_update_count || 0} plugins`);
+    console.log(`   💾 Auto-update salvo: ${phpResults.auto_update_saved ? 'SIM ✓' : 'NÃO ✗'}`);
+    console.log(`   🗑️ Script auto-deletado: ${phpResults.file_deleted ? 'SIM ✓' : 'NÃO ✗'}`);
     
     // Se não foi auto-deletado, deletar via cPanel
     if (!phpResults.file_deleted) {
@@ -968,9 +984,10 @@ exit;
     }
     
     console.log('\n' + '='.repeat(50));
-    console.log('📊 RESULTADO ATIVAÇÃO:');
-    console.log(`   ✅ Ativados: ${results.activated.length}`);
-    console.log(`   🔄 Auto-update: ${results.autoUpdateEnabled.length}`);
+    console.log('📊 RESUMO FINAL:');
+    console.log(`   ✅ Plugins ativados: ${results.activated.length}`);
+    console.log(`   🔄 Auto-update: ${results.autoUpdateCount} plugins configurados`);
+    console.log(`   📥 Updates verificados: ${results.updated.length > 0 ? 'SIM' : 'NÃO'}`);
     console.log(`   ❌ Erros: ${results.errors.length}`);
     console.log('='.repeat(50));
     
