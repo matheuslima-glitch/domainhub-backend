@@ -514,7 +514,7 @@ async function installPluginsViaFileManager(domain, plugins) {
         console.log(`   📤 Upload response:`, JSON.stringify(uploadResponse.data).substring(0, 200));
         
         // Extrair o ZIP
-        const extractUrl = `${baseUrl}${cpSecurityToken}/execute/Fileman/extract_archive`;
+        const extractUrl = `${baseUrl}${cpSecurityToken}/execute/Archive/extract`;
         
         const extractResponse = await axios.post(extractUrl, 
           new URLSearchParams({
