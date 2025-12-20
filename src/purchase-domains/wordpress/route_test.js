@@ -1,6 +1,6 @@
 /**
  * ROTA DE TESTE - WHM + WORDPRESS + PASSBOLT
- * Fluxo: 1. Criar conta WHM → 2. Instalar WordPress (com senha do Passbolt)
+ * Fluxo: 1. Criar conta WHM → 2. Instalar WordPress (com senha do Passbolt) → 3. Instalar Plugins
  */
 
 const express = require('express');
@@ -34,19 +34,16 @@ async function authenticatePassbolt() {
   console.log('   URL:', baseUrl);
   console.log('   User ID:', userId);
   
-  // 1. Buscar chave do servidor
   console.log('1️⃣ Buscando chave do servidor...');
   const verifyRes = await axios.get(`${baseUrl}/auth/verify.json`, { timeout: 30000 });
   const serverKey = await openpgp.readKey({ armoredKey: verifyRes.data.body.keydata });
   console.log('   ✅ OK');
   
-  // 2. Preparar chave do usuário
   console.log('2️⃣ Descriptografando chave privada...');
   const privateKey = await openpgp.readPrivateKey({ armoredKey: privateKeyArmored });
   const userKey = await openpgp.decryptKey({ privateKey, passphrase });
   console.log('   ✅ OK');
   
-  // 3. Criar challenge
   console.log('3️⃣ Criando challenge...');
   const verifyToken = uuidv4();
   const challengeData = {
@@ -63,7 +60,6 @@ async function authenticatePassbolt() {
   });
   console.log('   ✅ OK');
   
-  // 4. Login
   console.log('4️⃣ Enviando login...');
   const loginRes = await axios.post(
     `${baseUrl}/auth/jwt/login.json`,
@@ -72,7 +68,6 @@ async function authenticatePassbolt() {
   );
   console.log('   ✅ OK');
   
-  // 5. Validar resposta
   console.log('5️⃣ Validando resposta...');
   const decryptedMsg = await openpgp.decrypt({
     message: await openpgp.readMessage({ armoredMessage: loginRes.data.body.challenge }),
@@ -202,13 +197,11 @@ async function installWordPress(domain) {
   console.log('   Domain:', domain);
   console.log('   Username:', config.WORDPRESS_DEFAULT_USER);
   
-  // Buscar senha do Passbolt
   const wpPassword = await getPasswordFromPassbolt();
   
   console.log('📤 Instalando WordPress via Softaculous...');
   
   try {
-    // Criar sessão no cPanel
     console.log('🔑 Criando sessão no cPanel...');
     const sessionResponse = await axios.get(
       `${config.WHM_URL}/json-api/create_user_session?api.version=1&user=${config.WHM_ACCOUNT_USERNAME}&service=cpaneld`,
@@ -230,7 +223,6 @@ async function installWordPress(domain) {
     
     console.log('✅ Sessão criada, token:', cpSecurityToken);
     
-    // Formatar nome do site usando OpenAI
     const raw = domain.split('.')[0];
     let siteName = raw.charAt(0).toUpperCase() + raw.slice(1);
     
@@ -265,23 +257,23 @@ async function installWordPress(domain) {
       console.log('⚠️ OpenAI falhou, usando nome original:', err.message);
     }
     
-    // Montar URL correta - act, soft e api vão na URL
+    console.log('📝 Nome do site:', siteName);
+    
     const baseUrl = config.WHM_URL.replace(':2087', ':2083').replace(/\/$/, '');
     const softUrl = `${baseUrl}${cpSecurityToken}/frontend/jupiter/softaculous/index.live.php?act=software&soft=26&api=json`;
     
-    // Parâmetros vão no POST (conforme documentação Softaculous)
     const postData = {
       softsubmit: '1',
-      softproto: '3',  // 3 = https://
+      softproto: '3',
       softdomain: domain,
-      softdirectory: '',  // Raiz do domínio
+      softdirectory: '',
       site_name: siteName,
       site_desc: siteName,
       admin_username: config.WORDPRESS_DEFAULT_USER,
       admin_pass: wpPassword,
       admin_email: config.WORDPRESS_ADMIN_EMAIL || 'domain@gexcorp.com.br',
       language: 'pt_BR',
-      noemail: '1'  // Não enviar email
+      noemail: '1'
     };
     
     console.log('📤 URL:', softUrl);
@@ -304,7 +296,6 @@ async function installWordPress(domain) {
     const responseData = installResponse.data;
     console.log('📥 Resposta:', JSON.stringify(responseData, null, 2).substring(0, 2000));
     
-    // Verificar sucesso - API retorna { done: true/1 } em caso de sucesso
     if (responseData.done || responseData.done === 1 || responseData.done === '1') {
       console.log('✅ [ETAPA 2] WORDPRESS INSTALADO COM SUCESSO!');
       return { 
@@ -314,14 +305,12 @@ async function installWordPress(domain) {
       };
     }
     
-    // Se tem erro específico
     if (responseData.error) {
       const errorMsg = Array.isArray(responseData.error) ? responseData.error.join(', ') : JSON.stringify(responseData.error);
       console.log('❌ Erro:', errorMsg);
       return { success: false, error: errorMsg };
     }
     
-    // Se resposta é HTML (não deveria mais acontecer)
     const responseText = typeof responseData === 'string' ? responseData : JSON.stringify(responseData);
     if (responseText.includes('<!DOCTYPE') || responseText.includes('<html')) {
       console.log('❌ Resposta HTML inesperada');
@@ -342,6 +331,113 @@ async function installWordPress(domain) {
   }
 }
 
+// ========== ETAPA 3: INSTALAR PLUGINS ==========
+
+async function installPlugins(domain) {
+  console.log('\n' + '='.repeat(70));
+  console.log('🔌 [ETAPA 3] INSTALANDO PLUGINS');
+  console.log('='.repeat(70));
+  
+  const results = [];
+  
+  try {
+    console.log('📋 Buscando lista de plugins do GitHub...');
+    const githubApiUrl = 'https://api.github.com/repos/matheuslima-glitch/wordpress-plugins/contents/';
+    
+    const githubResponse = await axios.get(githubApiUrl, {
+      headers: { 'Accept': 'application/vnd.github.v3+json' },
+      timeout: 30000
+    });
+    
+    const plugins = githubResponse.data
+      .filter(file => file.name.endsWith('.zip'))
+      .map(file => ({
+        name: file.name.replace('.zip', ''),
+        downloadUrl: file.download_url
+      }));
+    
+    console.log(`✅ Encontrados ${plugins.length} plugins: ${plugins.map(p => p.name).join(', ')}`);
+    
+    if (plugins.length === 0) {
+      return { success: false, error: 'Nenhum plugin encontrado no repositório' };
+    }
+    
+    console.log('🔑 Criando sessão no cPanel...');
+    const sessionResponse = await axios.get(
+      `${config.WHM_URL}/json-api/create_user_session?api.version=1&user=${config.WHM_ACCOUNT_USERNAME}&service=cpaneld`,
+      {
+        headers: {
+          'Authorization': `whm ${config.WHM_USERNAME}:${config.WHM_API_TOKEN}`
+        },
+        timeout: 30000,
+        httpsAgent: new https.Agent({ rejectUnauthorized: false })
+      }
+    );
+    
+    const sessionData = sessionResponse.data?.data;
+    const cpSecurityToken = sessionData?.cp_security_token;
+    
+    if (!cpSecurityToken) {
+      throw new Error('Não foi possível criar sessão no cPanel');
+    }
+    
+    console.log('✅ Sessão criada');
+    
+    for (const plugin of plugins) {
+      console.log(`\n📦 Instalando ${plugin.name}...`);
+      
+      try {
+        const baseUrl = config.WHM_URL.replace(':2087', ':2083').replace(/\/$/, '');
+        const installUrl = `${baseUrl}${cpSecurityToken}/execute/WordPress/install_plugin`;
+        
+        const response = await axios.post(
+          installUrl,
+          new URLSearchParams({
+            url: plugin.downloadUrl,
+            domain: domain
+          }).toString(),
+          {
+            headers: {
+              'Content-Type': 'application/x-www-form-urlencoded',
+              'Cookie': `cpsession=${sessionData.session}`
+            },
+            timeout: 120000,
+            httpsAgent: new https.Agent({ rejectUnauthorized: false })
+          }
+        );
+        
+        if (response.data?.status === 1 || response.data?.result === 1) {
+          console.log(`   ✅ ${plugin.name} instalado`);
+          results.push({ plugin: plugin.name, success: true });
+        } else {
+          console.log(`   ⚠️ ${plugin.name}: ${JSON.stringify(response.data)}`);
+          results.push({ plugin: plugin.name, success: false, error: response.data });
+        }
+        
+      } catch (err) {
+        console.log(`   ❌ ${plugin.name}: ${err.message}`);
+        results.push({ plugin: plugin.name, success: false, error: err.message });
+      }
+      
+      await new Promise(resolve => setTimeout(resolve, 2000));
+    }
+    
+    const successCount = results.filter(r => r.success).length;
+    console.log(`\n📊 Resultado: ${successCount}/${plugins.length} plugins instalados`);
+    
+    return { 
+      success: successCount > 0, 
+      total: plugins.length,
+      installed: successCount,
+      results 
+    };
+    
+  } catch (error) {
+    console.error('❌ [ETAPA 3] ERRO:', error.message);
+    return { success: false, error: error.message };
+  }
+}
+
 // ========== FUNÇÃO PRINCIPAL ==========
 
 async function setupDomain(domain) {
@@ -349,10 +445,10 @@ async function setupDomain(domain) {
     domain: domain,
     etapa1_whm: null,
     etapa2_wordpress: null,
+    etapa3_plugins: null,
     success: false
   };
   
-  // ETAPA 1: Criar conta WHM
   result.etapa1_whm = await createWHMAccount(domain);
   
   if (!result.etapa1_whm.success) {
@@ -360,12 +456,20 @@ async function setupDomain(domain) {
     return result;
   }
   
-  // Aguardar propagação da conta
   console.log('\n⏳ Aguardando 10 segundos para propagação da conta...');
   await new Promise(resolve => setTimeout(resolve, 10000));
   
-  // ETAPA 2: Instalar WordPress
   result.etapa2_wordpress = await installWordPress(domain);
+  
+  if (!result.etapa2_wordpress.success) {
+    console.log('\n❌ PROCESSO INTERROMPIDO - Falha na Etapa 2');
+    return result;
+  }
+  
+  console.log('\n⏳ Aguardando 5 segundos para WordPress inicializar...');
+  await new Promise(resolve => setTimeout(resolve, 5000));
+  
+  result.etapa3_plugins = await installPlugins(domain);
   
   result.success = result.etapa1_whm.success && result.etapa2_wordpress.success;
   
@@ -378,7 +482,6 @@ async function setupDomain(domain) {
 
 // ========== ROTAS DE TESTE ==========
 
-// Teste completo (WHM + WordPress)
 router.post('/whm-test', async (req, res) => {
   const { domain } = req.body;
   
@@ -403,7 +506,6 @@ router.post('/whm-test', async (req, res) => {
   }
 });
 
-// Teste só WHM (sem WordPress)
 router.post('/whm-only', async (req, res) => {
   const { domain } = req.body;
   
@@ -419,7 +521,6 @@ router.post('/whm-only', async (req, res) => {
   }
 });
 
-// Teste só WordPress (sem criar conta WHM)
 router.post('/wp-only', async (req, res) => {
   const { domain } = req.body;
   
@@ -435,7 +536,21 @@ router.post('/wp-only', async (req, res) => {
   }
 });
 
-// Teste só Passbolt (verificar conexão)
+router.post('/plugins-only', async (req, res) => {
+  const { domain } = req.body;
+  
+  if (!domain) {
+    return res.status(400).json({ error: 'Domínio não informado' });
+  }
+  
+  try {
+    const result = await installPlugins(domain);
+    res.json({ domain, ...result });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 router.get('/passbolt-test', async (req, res) => {
   try {
     const password = await getPasswordFromPassbolt();
