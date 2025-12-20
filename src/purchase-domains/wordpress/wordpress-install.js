@@ -220,16 +220,19 @@ async function createWHMAccount(domain) {
   
   console.log('📥 Resposta WHM:', JSON.stringify(response.data, null, 2));
   
-  const result = response.data?.metadata?.result || response.data?.result;
-  const statusmsg = response.data?.result?.[0]?.statusmsg || '';
-  
-  if (result === 1 || result === '1' || statusmsg.toLowerCase().includes('successfully')) {
-    console.log('✅ [ETAPA 1] CONTA WHM CRIADA COM SUCESSO!');
-    return { success: true, username: username };
-  }
-  
-  console.log('❌ [ETAPA 1] FALHA AO CRIAR CONTA WHM');
-  return { success: false, error: statusmsg };
+const resultData = response.data?.result?.[0];
+const status = resultData?.status ?? response.data?.metadata?.result;
+const statusmsg = resultData?.statusmsg || '';
+
+if (status === 1 || status === '1' || 
+    statusmsg.toLowerCase().includes('successfully') || 
+    statusmsg.toLowerCase().includes('account creation ok')) {
+  console.log('✅ [ETAPA 1] CONTA WHM CRIADA COM SUCESSO!');
+  return { success: true, username: username };
+}
+
+console.log('❌ [ETAPA 1] FALHA AO CRIAR CONTA WHM');
+return { success: false, error: statusmsg || 'Erro desconhecido' };
 }
 
 // ========== ETAPA 2: INSTALAR WORDPRESS ==========
