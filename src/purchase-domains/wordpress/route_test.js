@@ -9,6 +9,7 @@ const openpgp = require('openpgp');
 const { v4: uuidv4 } = require('uuid');
 const https = require('https');
 const config = require('../../config/env');
+const FormData = require('form-data');
 
 const router = express.Router();
 
@@ -341,6 +342,7 @@ async function installPlugins(domain) {
   const results = [];
   
   try {
+    // Buscar lista de plugins do GitHub
     console.log('📋 Buscando lista de plugins do GitHub...');
     const githubApiUrl = 'https://api.github.com/repos/matheuslima-glitch/wordpress-plugins/contents/';
     
@@ -362,56 +364,64 @@ async function installPlugins(domain) {
       return { success: false, error: 'Nenhum plugin encontrado no repositório' };
     }
     
-    console.log('🔑 Criando sessão no cPanel...');
-    const sessionResponse = await axios.get(
-      `${config.WHM_URL}/json-api/create_user_session?api.version=1&user=${config.WHM_ACCOUNT_USERNAME}&service=cpaneld`,
-      {
-        headers: {
-          'Authorization': `whm ${config.WHM_USERNAME}:${config.WHM_API_TOKEN}`
-        },
-        timeout: 30000,
-        httpsAgent: new https.Agent({ rejectUnauthorized: false })
-      }
-    );
+    // Obter credenciais WordPress
+    const wpUser = config.WORDPRESS_DEFAULT_USER;
+    const wpPass = await getPasswordFromPassbolt();
+    const wpUrl = `https://${domain}/wp-json/wp/v2`;
     
-    const sessionData = sessionResponse.data?.data;
-    const cpSecurityToken = sessionData?.cp_security_token;
+    // Criar header de autenticação
+    const authHeader = 'Basic ' + Buffer.from(`${wpUser}:${wpPass}`).toString('base64');
     
-    if (!cpSecurityToken) {
-      throw new Error('Não foi possível criar sessão no cPanel');
+    // Testar conexão com WordPress
+    console.log('🔗 Testando conexão com WordPress REST API...');
+    try {
+      await axios.get(`${wpUrl}/users/me`, {
+        headers: { 'Authorization': authHeader },
+        timeout: 30000
+      });
+      console.log('✅ Conexão OK');
+    } catch (err) {
+      console.log('⚠️ REST API não disponível, tentando via cPanel File Manager...');
+      return await installPluginsViaFileManager(domain, plugins);
     }
     
-    console.log('✅ Sessão criada');
-    
+    // Instalar cada plugin via WordPress
     for (const plugin of plugins) {
       console.log(`\n📦 Instalando ${plugin.name}...`);
       
       try {
-        const baseUrl = config.WHM_URL.replace(':2087', ':2083').replace(/\/$/, '');
-        const installUrl = `${baseUrl}${cpSecurityToken}/execute/WordPress/install_plugin`;
+        // Baixar o ZIP
+        const zipResponse = await axios.get(plugin.downloadUrl, {
+          responseType: 'arraybuffer',
+          timeout: 120000
+        });
         
-        const response = await axios.post(
-          installUrl,
-          new URLSearchParams({
-            url: plugin.downloadUrl,
-            domain: domain
-          }).toString(),
+        // Enviar para WordPress
+
+        const form = new FormData();
+        form.append('file', Buffer.from(zipResponse.data), {
+          filename: `${plugin.name}.zip`,
+          contentType: 'application/zip'
+        });
+        
+        const installResponse = await axios.post(
+          `https://${domain}/wp-admin/plugin-install.php?tab=upload`,
+          form,
           {
             headers: {
-              'Content-Type': 'application/x-www-form-urlencoded',
-              'Cookie': `cpsession=${sessionData.session}`
+              ...form.getHeaders(),
+              'Authorization': authHeader
             },
-            timeout: 120000,
-            httpsAgent: new https.Agent({ rejectUnauthorized: false })
+            timeout: 120000
           }
         );
         
-        if (response.data?.status === 1 || response.data?.result === 1) {
+        if (installResponse.status === 200) {
           console.log(`   ✅ ${plugin.name} instalado`);
           results.push({ plugin: plugin.name, success: true });
         } else {
-          console.log(`   ⚠️ ${plugin.name}: ${JSON.stringify(response.data)}`);
-          results.push({ plugin: plugin.name, success: false, error: response.data });
+          console.log(`   ⚠️ ${plugin.name}: Status ${installResponse.status}`);
+          results.push({ plugin: plugin.name, success: false, error: `Status ${installResponse.status}` });
         }
         
       } catch (err) {
@@ -438,6 +448,128 @@ async function installPlugins(domain) {
   }
 }
 
+// Instalar plugins via File Manager do cPanel (fallback)
+async function installPluginsViaFileManager(domain, plugins) {
+  console.log('\n📁 Instalando plugins via cPanel File Manager...');
+  
+  const results = [];
+  
+  try {
+    // Criar sessão no cPanel
+    const sessionResponse = await axios.get(
+      `${config.WHM_URL}/json-api/create_user_session?api.version=1&user=${config.WHM_ACCOUNT_USERNAME}&service=cpaneld`,
+      {
+        headers: {
+          'Authorization': `whm ${config.WHM_USERNAME}:${config.WHM_API_TOKEN}`
+        },
+        timeout: 30000,
+        httpsAgent: new https.Agent({ rejectUnauthorized: false })
+      }
+    );
+    
+    const sessionData = sessionResponse.data?.data;
+    const cpSecurityToken = sessionData?.cp_security_token;
+    
+    if (!cpSecurityToken) {
+      throw new Error('Não foi possível criar sessão no cPanel');
+    }
+    
+    const baseUrl = config.WHM_URL.replace(':2087', ':2083').replace(/\/$/, '');
+    
+    for (const plugin of plugins) {
+      console.log(`\n📦 Instalando ${plugin.name}...`);
+      
+      try {
+        // Baixar o ZIP do GitHub
+        console.log(`   ⬇️ Baixando de ${plugin.downloadUrl}...`);
+        const zipResponse = await axios.get(plugin.downloadUrl, {
+          responseType: 'arraybuffer',
+          timeout: 120000
+        });
+        
+        // Upload para pasta temporária via cPanel
+        const uploadUrl = `${baseUrl}${cpSecurityToken}/execute/Fileman/upload_files`;
+        
+        const form = new FormData();
+        form.append('dir', '/home/' + config.WHM_ACCOUNT_USERNAME + '/public_html/wp-content/plugins');
+        form.append('file-0', Buffer.from(zipResponse.data), {
+          filename: `${plugin.name}.zip`,
+          contentType: 'application/zip'
+        });
+        
+        const uploadResponse = await axios.post(uploadUrl, form, {
+          headers: {
+            ...form.getHeaders(),
+            'Cookie': `cpsession=${sessionData.session}`
+          },
+          timeout: 120000,
+          httpsAgent: new https.Agent({ rejectUnauthorized: false })
+        });
+        
+        console.log(`   📤 Upload response:`, JSON.stringify(uploadResponse.data).substring(0, 200));
+        
+        // Extrair o ZIP
+        const extractUrl = `${baseUrl}${cpSecurityToken}/execute/Fileman/extract_archive`;
+        
+        const extractResponse = await axios.post(extractUrl, 
+          new URLSearchParams({
+            path: `/home/${config.WHM_ACCOUNT_USERNAME}/public_html/wp-content/plugins/${plugin.name}.zip`,
+            extract_to: `/home/${config.WHM_ACCOUNT_USERNAME}/public_html/wp-content/plugins`
+          }).toString(),
+          {
+            headers: {
+              'Content-Type': 'application/x-www-form-urlencoded',
+              'Cookie': `cpsession=${sessionData.session}`
+            },
+            timeout: 60000,
+            httpsAgent: new https.Agent({ rejectUnauthorized: false })
+          }
+        );
+        
+        console.log(`   📂 Extract response:`, JSON.stringify(extractResponse.data).substring(0, 200));
+        
+        // Deletar o ZIP após extrair
+        const deleteUrl = `${baseUrl}${cpSecurityToken}/execute/Fileman/delete_files`;
+        await axios.post(deleteUrl,
+          new URLSearchParams({
+            files: `/home/${config.WHM_ACCOUNT_USERNAME}/public_html/wp-content/plugins/${plugin.name}.zip`
+          }).toString(),
+          {
+            headers: {
+              'Content-Type': 'application/x-www-form-urlencoded',
+              'Cookie': `cpsession=${sessionData.session}`
+            },
+            timeout: 30000,
+            httpsAgent: new https.Agent({ rejectUnauthorized: false })
+          }
+        );
+        
+        console.log(`   ✅ ${plugin.name} instalado`);
+        results.push({ plugin: plugin.name, success: true });
+        
+      } catch (err) {
+        console.log(`   ❌ ${plugin.name}: ${err.message}`);
+        results.push({ plugin: plugin.name, success: false, error: err.message });
+      }
+      
+      await new Promise(resolve => setTimeout(resolve, 2000));
+    }
+    
+    const successCount = results.filter(r => r.success).length;
+    console.log(`\n📊 Resultado: ${successCount}/${plugins.length} plugins instalados`);
+    
+    return { 
+      success: successCount > 0, 
+      total: plugins.length,
+      installed: successCount,
+      results 
+    };
+    
+  } catch (error) {
+    console.error('❌ Erro no File Manager:', error.message);
+    return { success: false, error: error.message };
+  }
+}
 // ========== FUNÇÃO PRINCIPAL ==========
 
 async function setupDomain(domain) {
