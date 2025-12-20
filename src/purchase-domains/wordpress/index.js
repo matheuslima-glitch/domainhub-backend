@@ -777,15 +777,15 @@ class WordPressDomainPurchase {
       
       await this.delay(2000);
       
-      // ETAPA 4: Criar registro CNAME (raiz)
-      console.log(`📍 [CLOUDFLARE] Criando DNS CNAME...`);
+      // ETAPA 4: Criar registro A (raiz)
+      console.log(`📍 [CLOUDFLARE] Criando DNS A...`);
       try {
         await axios.post(
           `${this.cloudflareAPI}/zones/${zoneId}/dns_records`,
           {
-            type: 'CNAME',
+            type: 'A',
             name: domain,
-            content: config.HOSTING_SERVER_HOSTNAME || 'servidor.institutoexperience.com.br',
+            content: config.HOSTING_SERVER_HOSTNAME || '192.211.60.58',
             ttl: 1,
             proxied: false
           },
@@ -797,9 +797,9 @@ class WordPressDomainPurchase {
             }
           }
         );
-        console.log(`✅ [CLOUDFLARE] DNS CNAME criado`);
+        console.log(`✅ [CLOUDFLARE] DNS A criado`);
       } catch (error) {
-        console.error(`⚠️ [CLOUDFLARE] Erro DNS CNAME:`, error.message);
+        console.error(`⚠️ [CLOUDFLARE] Erro DNS A:`, error.message);
       }
       
       await this.delay(2000);
@@ -948,7 +948,7 @@ class WordPressDomainPurchase {
       console.log(`🎉 [CLOUDFLARE] Configuração completa finalizada!`);
       console.log(`   Zone ID: ${zoneId}`);
       console.log(`   Custom Hostname: ${domain}`);
-      console.log(`   DNS: CNAME raiz, CNAME track`);
+      console.log(`   DNS: A raiz, CNAME track`);
       console.log(`   SSL: Full`);
       console.log(`   WAF: 2 filtros + 2 regras de bloqueio (sitemap, ?s=)`);
       
