@@ -1,9 +1,6 @@
 /**
  * INSTALAÇÃO AUTOMÁTICA WORDPRESS
- * Fluxo: 1. Criar conta WHM 
- * → 2. Instalar WordPress 
- * → 3. Instalar Plugins 
- * → 4. Ativar + Configurar
+ * Fluxo: 1. Criar conta WHM → 2. Instalar WordPress → 3. Instalar Plugins → 4. Ativar + Configurar
  */
 
 const express = require('express');
@@ -13,8 +10,40 @@ const { v4: uuidv4 } = require('uuid');
 const https = require('https');
 const config = require('../../config/env');
 const FormData = require('form-data');
+const { createClient } = require('@supabase/supabase-js');
 
 const router = express.Router();
+
+// Inicializar Supabase para atualizações de progresso
+const supabase = createClient(
+  config.SUPABASE_URL,
+  config.SUPABASE_SERVICE_KEY
+);
+
+/**
+ * ATUALIZAR PROGRESSO NO SUPABASE
+ */
+async function updateProgress(sessionId, step, status, message, domainName = null) {
+  if (!sessionId) return;
+  
+  try {
+    await supabase
+      .from('domain_purchase_progress')
+      .upsert({
+        session_id: sessionId,
+        step: step,
+        status: status,
+        message: message,
+        domain_name: domainName,
+        updated_at: new Date().toISOString()
+      }, { onConflict: 'session_id' });
+    
+    console.log(`📊 [WP-PROGRESS] ${step} - ${status} - ${message}`);
+    
+  } catch (error) {
+    console.error('❌ [WP-PROGRESS] Erro:', error.message);
+  }
+}
 
 // ========== FUNÇÕES PASSBOLT ==========
 
@@ -1270,10 +1299,11 @@ exit;
 
 // ========== FUNÇÃO PRINCIPAL - EXPORTADA ==========
 
-async function setupWordPress(domain) {
+async function setupWordPress(domain, sessionId = null) {
   console.log('\n' + '='.repeat(70));
   console.log('🚀 [WORDPRESS] INICIANDO SETUP COMPLETO');
   console.log('   Domínio:', domain);
+  console.log('   SessionId:', sessionId || 'N/A');
   console.log('='.repeat(70));
   
   const result = {
@@ -1285,29 +1315,67 @@ async function setupWordPress(domain) {
   };
   
   // ETAPA 1: Criar conta WHM
+  await updateProgress(sessionId, 'wordpress_whm', 'in_progress', 
+    `Criando conta no servidor para ${domain}...`, domain);
+  
   result.etapa1_whm = await createWHMAccount(domain);
   
   if (!result.etapa1_whm.success) {
     console.log('\n❌ PROCESSO INTERROMPIDO - Falha na Etapa 1 (WHM)');
+    await updateProgress(sessionId, 'wordpress_whm', 'error', 
+      `Erro ao criar conta: ${result.etapa1_whm.error || 'Erro desconhecido'}`, domain);
     return result;
   }
+  
+  await updateProgress(sessionId, 'wordpress_whm', 'completed', 
+    `Conta criada com sucesso!`, domain);
   
   console.log('\n⏳ Aguardando 10 segundos para propagação da conta...');
   await new Promise(resolve => setTimeout(resolve, 10000));
   
   // ETAPA 2: Instalar WordPress
+  await updateProgress(sessionId, 'wordpress_install', 'in_progress', 
+    `Instalando WordPress em ${domain}...`, domain);
+  
   result.etapa2_wordpress = await installWordPress(domain);
   
   if (!result.etapa2_wordpress.success) {
     console.log('\n❌ PROCESSO INTERROMPIDO - Falha na Etapa 2 (WordPress)');
+    await updateProgress(sessionId, 'wordpress_install', 'error', 
+      `Erro ao instalar WordPress: ${result.etapa2_wordpress.error || 'Erro desconhecido'}`, domain);
     return result;
   }
+  
+  await updateProgress(sessionId, 'wordpress_install', 'completed', 
+    `WordPress instalado com sucesso!`, domain);
   
   console.log('\n⏳ Aguardando 5 segundos para WordPress inicializar...');
   await new Promise(resolve => setTimeout(resolve, 5000));
   
-  // ETAPA 3: Instalar e ativar plugins
+  // ETAPA 3: Instalar plugins
+  await updateProgress(sessionId, 'wordpress_plugins', 'in_progress', 
+    `Instalando plugins em ${domain}...`, domain);
+  
   result.etapa3_plugins = await installPlugins(domain);
+  
+  if (result.etapa3_plugins?.success) {
+    await updateProgress(sessionId, 'wordpress_plugins', 'completed', 
+      `${result.etapa3_plugins.installed || 0} plugins instalados!`, domain);
+  } else {
+    await updateProgress(sessionId, 'wordpress_plugins', 'error', 
+      `Erro ao instalar plugins`, domain);
+  }
+  
+  // ETAPA 4: Ativação e auto-update (já acontece dentro de installPlugins)
+  if (result.etapa3_plugins?.activation) {
+    await updateProgress(sessionId, 'wordpress_activate', 'in_progress', 
+      `Ativando plugins e configurando atualizações...`, domain);
+    
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    
+    await updateProgress(sessionId, 'wordpress_activate', 'completed', 
+      `Plugins ativados! Auto-update: ${result.etapa3_plugins.activation.autoUpdateCount || 0} plugins`, domain);
+  }
   
   result.success = result.etapa1_whm.success && result.etapa2_wordpress.success;
   
@@ -1321,17 +1389,17 @@ async function setupWordPress(domain) {
 // ========== ROTA ÚNICA ==========
 
 router.post('/setup', async (req, res) => {
-  const { domain } = req.body;
+  const { domain, sessionId } = req.body;
   
   if (!domain) {
     return res.status(400).json({ 
       error: 'Domínio não informado',
-      uso: 'POST /api/wordpress/setup com body: { "domain": "exemplo.com" }'
+      uso: 'POST /api/wordpress/setup com body: { "domain": "exemplo.com", "sessionId": "opcional" }'
     });
   }
   
   try {
-    const result = await setupWordPress(domain);
+    const result = await setupWordPress(domain, sessionId);
     res.json(result);
   } catch (error) {
     console.error('❌ ERRO FATAL:', error.message);

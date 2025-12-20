@@ -37,6 +37,12 @@ class WordPressDomainPurchase {
     this.maxRetries = 10;
     this.priceLimit = 1.00;
     
+    // 🔥 CAMINHO CORRETO - SEMPRE /home/USERNAME
+    this.basePath = `/home/${config.CPANEL_USERNAME}`;
+    
+    // Site modelo para copiar plugins
+    this.modelSitePath = `${this.basePath}/mynervify.com`;
+    
     // Dados de contato para registro
     this.registrantInfo = {
       FirstName: 'Gabriel',
@@ -655,24 +661,19 @@ class WordPressDomainPurchase {
       
       if (!isCancelled) {
         console.log(`🌐 [WORDPRESS] Iniciando instalação do WordPress...`);
-        await this.updateProgress(sessionId, 'wordpress', 'in_progress', 
-          `Instalando WordPress em ${domain}...`, domain);
         
         try {
-          const wpResult = await setupWordPress(domain);
+          // Passar sessionId para que o wordpress-install emita updates de progresso
+          const wpResult = await setupWordPress(domain, sessionId);
           
           if (wpResult.success) {
-            await this.updateProgress(sessionId, 'wordpress', 'completed', 
-              `WordPress instalado com sucesso em ${domain}!`, domain);
             console.log(`✅ [WORDPRESS] Instalação concluída com sucesso`);
           } else {
-            await this.updateProgress(sessionId, 'wordpress', 'error', 
-              `Erro ao instalar WordPress: ${wpResult.etapa1_whm?.error || wpResult.etapa2_wordpress?.error || 'Erro desconhecido'}`, domain);
             console.log(`❌ [WORDPRESS] Falha na instalação`);
           }
         } catch (wpError) {
           console.error(`❌ [WORDPRESS] Erro:`, wpError.message);
-          await this.updateProgress(sessionId, 'wordpress', 'error', 
+          await this.updateProgress(sessionId, 'wordpress_install', 'error', 
             `Erro ao instalar WordPress: ${wpError.message}`, domain);
         }
       }
