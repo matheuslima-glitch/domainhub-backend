@@ -1,6 +1,9 @@
 /**
- * ROTA DE TESTE - WHM + WORDPRESS + PASSBOLT
- * Fluxo: 1. Criar conta WHM → 2. Instalar WordPress (com senha do Passbolt) → 3. Instalar Plugins
+ * INSTALAÇÃO AUTOMÁTICA WORDPRESS
+ * Fluxo: 1. Criar conta WHM 
+ * → 2. Instalar WordPress 
+ * → 3. Instalar Plugins 
+ * → 4. Ativar + Configurar
  */
 
 const express = require('express');
@@ -371,7 +374,8 @@ async function installPlugins(domain) {
   }
 }
 
-// Função para deletar arquivo ZIP de plugin - usa múltiplos métodos
+// ========== FUNÇÕES AUXILIARES DE ARQUIVO ==========
+
 async function deletePluginZip(baseUrl, cpSecurityToken, sessionData, zipPath, httpsAgent) {
   const fileName = zipPath.split('/').pop();
   const dirPath = zipPath.substring(0, zipPath.lastIndexOf('/'));
@@ -458,7 +462,6 @@ async function deletePluginZip(baseUrl, cpSecurityToken, sessionData, zipPath, h
   return false;
 }
 
-// Função para limpar TODOS os ZIPs da pasta plugins
 async function cleanupPluginZips(baseUrl, cpSecurityToken, sessionData, pluginsPath, httpsAgent) {
   const headers = {
     'Content-Type': 'application/x-www-form-urlencoded',
@@ -466,7 +469,6 @@ async function cleanupPluginZips(baseUrl, cpSecurityToken, sessionData, pluginsP
   };
   
   try {
-    // Listar todos os arquivos na pasta plugins
     const listUrl = `${baseUrl}${cpSecurityToken}/execute/Fileman/list_files`;
     const listResponse = await axios.post(listUrl, new URLSearchParams({
       dir: pluginsPath,
@@ -483,7 +485,6 @@ async function cleanupPluginZips(baseUrl, cpSecurityToken, sessionData, pluginsP
     let deletedCount = 0;
     let failedCount = 0;
     
-    // Encontrar e deletar todos os arquivos .zip
     for (const file of files) {
       if (file.file && file.file.endsWith('.zip')) {
         const zipPath = `${pluginsPath}/${file.file}`;
@@ -514,7 +515,167 @@ async function cleanupPluginZips(baseUrl, cpSecurityToken, sessionData, pluginsP
   }
 }
 
-// Instalar plugins via File Manager do cPanel
+async function deleteFileViaCpanel(baseUrl, cpSecurityToken, sessionData, filePath, httpsAgent) {
+  const fileName = filePath.split('/').pop();
+  const dirPath = filePath.substring(0, filePath.lastIndexOf('/'));
+  
+  console.log(`   🗑️ Tentando deletar: ${fileName}`);
+  
+  // Método 1: UAPI Fileman/delete_files
+  try {
+    const deleteUrl = `${baseUrl}${cpSecurityToken}/execute/Fileman/delete_files`;
+    const response = await axios.post(deleteUrl, new URLSearchParams({ 
+      dir: dirPath,
+      'files-0': fileName
+    }).toString(), {
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Cookie': `cpsession=${sessionData.session}`
+      },
+      timeout: 15000,
+      httpsAgent
+    });
+    
+    if (response.data?.status === 1 || response.data?.data) {
+      return true;
+    }
+  } catch (e) { /* continua */ }
+  
+  // Método 2: API2 Fileman fileop delete
+  try {
+    const api2Url = `${baseUrl}${cpSecurityToken}/json-api/cpanel`;
+    const response = await axios.post(api2Url, new URLSearchParams({
+      'cpanel_jsonapi_user': config.WHM_ACCOUNT_USERNAME,
+      'cpanel_jsonapi_apiversion': '2',
+      'cpanel_jsonapi_module': 'Fileman',
+      'cpanel_jsonapi_func': 'fileop',
+      'op': 'unlink',
+      'sourcefiles': filePath,
+      'doubledecode': '0'
+    }).toString(), {
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Cookie': `cpsession=${sessionData.session}`
+      },
+      timeout: 15000,
+      httpsAgent
+    });
+    
+    if (response.data?.cpanelresult?.data?.[0]?.result === 1) {
+      return true;
+    }
+  } catch (e) { /* continua */ }
+  
+  // Método 3: WHM API direto
+  try {
+    const whmUrl = `${config.WHM_URL}/json-api/cpanel`;
+    const response = await axios.post(whmUrl, new URLSearchParams({
+      'cpanel_jsonapi_user': config.WHM_ACCOUNT_USERNAME,
+      'cpanel_jsonapi_apiversion': '2',
+      'cpanel_jsonapi_module': 'Fileman',
+      'cpanel_jsonapi_func': 'fileop',
+      'op': 'unlink',
+      'sourcefiles': filePath
+    }).toString(), {
+      headers: {
+        'Authorization': `whm ${config.WHM_USERNAME}:${config.WHM_API_TOKEN}`,
+        'Content-Type': 'application/x-www-form-urlencoded'
+      },
+      timeout: 15000,
+      httpsAgent
+    });
+    
+    if (response.data?.cpanelresult?.data?.[0]?.result === 1 ||
+        response.data?.cpanelresult?.event?.result === 1) {
+      return true;
+    }
+  } catch (e) { /* continua */ }
+  
+  // Método 4: Fileman/trash
+  try {
+    const trashUrl = `${baseUrl}${cpSecurityToken}/execute/Fileman/trash`;
+    const response = await axios.post(trashUrl, new URLSearchParams({ 
+      path: filePath 
+    }).toString(), {
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Cookie': `cpsession=${sessionData.session}`
+      },
+      timeout: 15000,
+      httpsAgent
+    });
+    
+    if (response.data?.status === 1) {
+      return true;
+    }
+  } catch (e) { /* continua */ }
+  
+  return false;
+}
+
+async function cleanupOldActivationFiles(baseUrl, cpSecurityToken, sessionData, httpsAgent, publicHtmlPath, muPluginsPath) {
+  const headers = {
+    'Content-Type': 'application/x-www-form-urlencoded',
+    'Cookie': `cpsession=${sessionData.session}`
+  };
+  
+  // Limpar public_html
+  try {
+    const listUrl = `${baseUrl}${cpSecurityToken}/execute/Fileman/list_files`;
+    const listResponse = await axios.post(listUrl, new URLSearchParams({
+      dir: publicHtmlPath,
+      include_mime: '0',
+      include_hash: '0',
+      include_permissions: '0'
+    }).toString(), {
+      headers,
+      timeout: 15000,
+      httpsAgent
+    });
+    
+    const files = listResponse.data?.data || [];
+    
+    for (const file of files) {
+      if (file.file && file.file.startsWith('dh-activate-') && file.file.endsWith('.php')) {
+        console.log(`   🗑️ Removendo arquivo antigo: ${file.file}`);
+        await deleteFileViaCpanel(baseUrl, cpSecurityToken, sessionData, 
+          `${publicHtmlPath}/${file.file}`, httpsAgent);
+      }
+    }
+  } catch (e) {
+    console.log(`   ⚠️ Erro ao listar public_html: ${e.message}`);
+  }
+  
+  // Limpar mu-plugins
+  try {
+    const listUrl = `${baseUrl}${cpSecurityToken}/execute/Fileman/list_files`;
+    const listResponse = await axios.post(listUrl, new URLSearchParams({
+      dir: muPluginsPath,
+      include_mime: '0',
+      include_hash: '0',
+      include_permissions: '0'
+    }).toString(), {
+      headers,
+      timeout: 15000,
+      httpsAgent
+    });
+    
+    const files = listResponse.data?.data || [];
+    
+    for (const file of files) {
+      if (file.file && file.file.startsWith('activate-plugins-') && file.file.endsWith('.php')) {
+        console.log(`   🗑️ Removendo mu-plugin antigo: ${file.file}`);
+        await deleteFileViaCpanel(baseUrl, cpSecurityToken, sessionData, 
+          `${muPluginsPath}/${file.file}`, httpsAgent);
+      }
+    }
+  } catch (e) {
+    console.log(`   ⚠️ Erro ao listar mu-plugins: ${e.message}`);
+  }
+}
+
+// ========== INSTALAR PLUGINS VIA FILE MANAGER ==========
+
 async function installPluginsViaFileManager(domain, plugins) {
   console.log('\n📁 Instalando plugins via cPanel File Manager...');
   
@@ -615,6 +776,7 @@ async function installPluginsViaFileManager(domain, plugins) {
         
         let extractSuccess = false;
         
+        // Método 1: API2 Fileman
         try {
           const shellUrl = `${baseUrl}${cpSecurityToken}/json-api/cpanel`;
           const shellParams = new URLSearchParams({
@@ -640,6 +802,7 @@ async function installPluginsViaFileManager(domain, plugins) {
           console.log(`   ⚠️ Método Fileman falhou: ${e.message}`);
         }
         
+        // Método 2: WHM API
         if (!extractSuccess) {
           try {
             const whmExtractUrl = `${config.WHM_URL}/json-api/cpanel`;
@@ -706,11 +869,11 @@ async function installPluginsViaFileManager(domain, plugins) {
     }
     console.log('='.repeat(50));
     
-    // LIMPEZA FINAL: Remover todos os ZIPs restantes
+    // Limpeza final
     console.log('\n🧹 Limpando arquivos ZIP restantes...');
     await cleanupPluginZips(baseUrl, cpSecurityToken, sessionData, pluginsPath, httpsAgent);
     
-    // ETAPA 4: Ativar plugins
+    // Ativar plugins
     if (installedPlugins.length > 0) {
       console.log('\n' + '='.repeat(70));
       console.log('🔧 [ETAPA 4] ATIVANDO E CONFIGURANDO PLUGINS');
@@ -749,18 +912,6 @@ async function installPluginsViaFileManager(domain, plugins) {
 
 // ========== ATIVAR PLUGINS VIA SCRIPT PHP DIRETO ==========
 
-/**
- * Ativa plugins via arquivo PHP direto na public_html
- * 
- * DIFERENÇA DO MU-PLUGIN:
- * - MU-Plugin: WordPress carrega automaticamente, mas pode ter problemas de timing
- * - PHP Direto: Nós carregamos o WordPress manualmente, controle total
- * 
- * FLUXO:
- * 1. Upload de arquivo PHP para public_html (ex: dh-activate-abc123.php)
- * 2. Acessar diretamente: https://dominio.com/dh-activate-abc123.php
- * 3. O script carrega wp-load.php, executa tudo e se auto-deleta
- */
 async function activatePluginsViaDirectPHP(domain, pluginNames, sessionData, cpSecurityToken) {
   console.log('\n🔌 Ativando plugins via Script PHP Direto...');
   
@@ -778,44 +929,37 @@ async function activatePluginsViaDirectPHP(domain, pluginNames, sessionData, cpS
   const publicHtmlPath = `/home/${config.WHM_ACCOUNT_USERNAME}/public_html`;
   const muPluginsPath = `/home/${config.WHM_ACCOUNT_USERNAME}/public_html/wp-content/mu-plugins`;
   
-  // Gerar nome único para o arquivo
   const uniqueId = uuidv4().replace(/-/g, '').substring(0, 16);
   const phpFileName = `dh-activate-${uniqueId}.php`;
   const phpFilePath = `${publicHtmlPath}/${phpFileName}`;
   
   try {
-    // PASSO 0: Limpar arquivos antigos (mu-plugins e scripts anteriores)
+    // Limpar arquivos antigos
     console.log('   0️⃣ Limpando arquivos antigos...');
     await cleanupOldActivationFiles(baseUrl, cpSecurityToken, sessionData, httpsAgent, publicHtmlPath, muPluginsPath);
-    // PASSO 1: Gerar o código PHP
+    
+    // Gerar código PHP
     console.log('   1️⃣ Gerando script PHP...');
     
     const pluginsArrayPhp = JSON.stringify(pluginNames);
     
-    // Script PHP que será executado diretamente
     const phpCode = `<?php
 /**
  * Script temporário para ativação de plugins WordPress
  * ID: ${uniqueId}
  * Gerado em: ${new Date().toISOString()}
- * 
- * IMPORTANTE: Este arquivo se AUTO-DELETA após execução
  */
 
-// Desabilitar qualquer cache
 header('Cache-Control: no-cache, no-store, must-revalidate');
 header('Pragma: no-cache');
 header('Expires: 0');
 
-// Definir que é uma requisição AJAX/API para evitar redirects
 define('DOING_AJAX', true);
 define('WP_ADMIN', true);
 
-// Capturar erros
 error_reporting(E_ALL);
 ini_set('display_errors', 0);
 
-// Caminho para wp-load.php
 \$wp_load_path = __DIR__ . '/wp-load.php';
 
 if (!file_exists(\$wp_load_path)) {
@@ -824,7 +968,6 @@ if (!file_exists(\$wp_load_path)) {
     exit;
 }
 
-// Carregar WordPress
 try {
     require_once(\$wp_load_path);
 } catch (Exception \$e) {
@@ -833,20 +976,16 @@ try {
     exit;
 }
 
-// Carregar funções administrativas necessárias
 require_once(ABSPATH . 'wp-admin/includes/plugin.php');
 require_once(ABSPATH . 'wp-admin/includes/file.php');
 require_once(ABSPATH . 'wp-admin/includes/update.php');
 
-// Limpar output buffer
 while (ob_get_level()) {
     ob_end_clean();
 }
 
-// Definir header JSON
 header('Content-Type: application/json; charset=utf-8');
 
-// Resultados
 \$results = [
     'success' => true,
     'script_id' => '${uniqueId}',
@@ -861,13 +1000,10 @@ header('Content-Type: application/json; charset=utf-8');
     'file_deleted' => false
 ];
 
-// Lista de plugins
 \$plugins_to_activate = ${pluginsArrayPhp};
-
-// Obter todos os plugins instalados
 \$all_plugins = get_plugins();
 
-// ========== PASSO 1: ATIVAR PLUGINS ==========
+// PASSO 1: Ativar plugins
 foreach (\$plugins_to_activate as \$plugin_name) {
     \$found = false;
     
@@ -908,7 +1044,7 @@ foreach (\$plugins_to_activate as \$plugin_name) {
     }
 }
 
-// ========== PASSO 2: FORÇAR VERIFICAÇÃO DE ATUALIZAÇÕES ==========
+// PASSO 2: Verificação de atualizações
 try {
     wp_clean_plugins_cache(true);
     delete_site_transient('update_plugins');
@@ -922,28 +1058,21 @@ try {
     ];
 }
 
-// ========== PASSO 3: ATIVAR AUTO-UPDATE PARA TODOS OS PLUGINS ==========
-// Obter lista atual de auto-updates
+// PASSO 3: Ativar auto-update
 \$auto_updates = [];
-
-// Recarregar lista de plugins
 \$all_plugins = get_plugins();
 
-// Ativar auto-update para TODOS os plugins instalados (não só os da lista)
 foreach (\$all_plugins as \$plugin_file => \$plugin_data) {
     \$auto_updates[] = \$plugin_file;
     \$plugin_folder = explode('/', \$plugin_file)[0];
     \$results['auto_update_enabled'][] = \$plugin_folder;
 }
 
-// Remover duplicatas
 \$auto_updates = array_unique(\$auto_updates);
 
-// Salvar configuração de auto-update (usar AMBOS os métodos para garantir)
 update_site_option('auto_update_plugins', \$auto_updates);
 update_option('auto_update_plugins', \$auto_updates);
 
-// Verificar se salvou corretamente
 \$saved_auto_updates = get_option('auto_update_plugins', []);
 if (empty(\$saved_auto_updates)) {
     \$saved_auto_updates = get_site_option('auto_update_plugins', []);
@@ -952,10 +1081,9 @@ if (empty(\$saved_auto_updates)) {
 \$results['auto_update_total_plugins'] = count(\$all_plugins);
 \$results['auto_update_saved'] = (count(\$saved_auto_updates) === count(\$all_plugins));
 
-// ========== PASSO 4: LIMPAR ARQUIVOS ZIP DA PASTA PLUGINS ==========
+// PASSO 4: Limpar ZIPs
 \$plugins_dir = WP_CONTENT_DIR . '/plugins';
 \$zip_files_deleted = [];
-\$zip_files_failed = [];
 
 if (is_dir(\$plugins_dir)) {
     \$files = scandir(\$plugins_dir);
@@ -965,66 +1093,33 @@ if (is_dir(\$plugins_dir)) {
             if (@unlink(\$zip_path)) {
                 \$zip_files_deleted[] = \$file;
             } else {
-                // Tentar com chmod
                 @chmod(\$zip_path, 0777);
-                if (@unlink(\$zip_path)) {
-                    \$zip_files_deleted[] = \$file;
-                } else {
-                    \$zip_files_failed[] = \$file;
-                }
+                @unlink(\$zip_path);
             }
         }
     }
 }
 
 \$results['zip_files_deleted'] = \$zip_files_deleted;
-\$results['zip_files_failed'] = \$zip_files_failed;
 \$results['zip_cleanup_count'] = count(\$zip_files_deleted);
 
-// ========== PASSO 5: AUTO-DELETAR ESTE ARQUIVO ==========
+// PASSO 5: Auto-deletar
 \$this_file = __FILE__;
-\$delete_success = false;
+\$delete_success = @unlink(\$this_file);
 
-// Método 1: unlink direto
-if (file_exists(\$this_file)) {
-    \$delete_success = @unlink(\$this_file);
-}
-
-// Método 2: chmod + unlink
-if (!$delete_success && file_exists(\$this_file)) {
+if (!\$delete_success && file_exists(\$this_file)) {
     @chmod(\$this_file, 0777);
     \$delete_success = @unlink(\$this_file);
 }
 
-// Método 3: rename + unlink (às vezes funciona quando unlink falha)
-if (!$delete_success && file_exists(\$this_file)) {
-    \$temp_name = \$this_file . '.delete';
-    if (@rename(\$this_file, \$temp_name)) {
-        \$delete_success = @unlink(\$temp_name);
-    }
-}
-
 \$results['file_deleted'] = !file_exists(\$this_file);
-
-// Verificar se realmente deletou
-if (file_exists(\$this_file)) {
-    \$results['errors'][] = [
-        'plugin' => 'system',
-        'action' => 'self_delete',
-        'error' => 'Arquivo não foi deletado automaticamente',
-        'file_path' => \$this_file
-    ];
-}
-
-// Calcular sucesso
 \$results['success'] = (count(\$results['activated']) > 0 || count(\$results['already_active']) > 0);
 
-// Output JSON
 echo json_encode(\$results, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
 exit;
 `;
 
-    // PASSO 2: Upload do arquivo PHP
+    // Upload do script
     console.log('   2️⃣ Fazendo upload do script...');
     
     const uploadUrl = `${baseUrl}${cpSecurityToken}/execute/Fileman/upload_files`;
@@ -1053,11 +1148,11 @@ exit;
     
     console.log(`   ✅ Script enviado: ${phpFileName}`);
     
-    // PASSO 3: Aguardar arquivo estar disponível
+    // Aguardar
     console.log('   3️⃣ Aguardando arquivo...');
     await new Promise(resolve => setTimeout(resolve, 2000));
     
-    // PASSO 4: Executar o script via HTTP
+    // Executar
     console.log('   4️⃣ Executando script...');
     
     const scriptUrl = `https://${domain}/${phpFileName}`;
@@ -1080,19 +1175,16 @@ exit;
     
     console.log(`   📊 Status HTTP: ${phpResponse.status}`);
     
-    // PASSO 5: Processar resposta
+    // Processar resposta
     console.log('   5️⃣ Processando resposta...');
     
     let phpResults;
     const responseData = phpResponse.data;
     
-    // Tentar parsear JSON
     try {
       if (typeof responseData === 'string') {
-        // Remover possível BOM ou espaços
         let cleanData = responseData.trim();
         
-        // Se começa com HTML, tentar extrair JSON
         if (cleanData.startsWith('<!') || cleanData.startsWith('<html') || cleanData.startsWith('<br')) {
           const jsonMatch = cleanData.match(/\{[\s\S]*\}/);
           if (jsonMatch) {
@@ -1110,12 +1202,7 @@ exit;
       }
     } catch (parseError) {
       console.log('   ⚠️ Erro ao parsear resposta');
-      console.log('   📄 Resposta (primeiros 1000 chars):');
-      console.log('   ', String(responseData).substring(0, 1000));
-      
-      // Tentar deletar arquivo manualmente
       await deleteFileViaCpanel(baseUrl, cpSecurityToken, sessionData, phpFilePath, httpsAgent);
-      
       throw new Error(`Resposta inválida: ${parseError.message}`);
     }
     
@@ -1127,7 +1214,7 @@ exit;
     results.updated = phpResults.update_check ? ['update_check_ok'] : [];
     results.errors = phpResults.errors || [];
     
-    // Log dos resultados
+    // Log
     console.log(`\n   📊 RESULTADOS:`);
     console.log(`   ✅ Plugins ativados: ${phpResults.activated?.length || 0}`);
     console.log(`   ℹ️ Já estavam ativos: ${phpResults.already_active?.length || 0}`);
@@ -1136,7 +1223,7 @@ exit;
     console.log(`   💾 Auto-update salvo: ${phpResults.auto_update_saved ? 'SIM ✓' : 'NÃO ✗'}`);
     console.log(`   🗑️ Script auto-deletado: ${phpResults.file_deleted ? 'SIM ✓' : 'NÃO ✗'}`);
     
-    // Se não foi auto-deletado, deletar via cPanel
+    // Cleanup se não auto-deletou
     if (!phpResults.file_deleted) {
       console.log('\n   ⚠️ Arquivo não foi auto-deletado, removendo via cPanel...');
       const deleted = await deleteFileViaCpanel(baseUrl, cpSecurityToken, sessionData, phpFilePath, httpsAgent);
@@ -1152,7 +1239,6 @@ exit;
       }
     }
     
-    // Erros encontrados
     if (results.errors.length > 0) {
       console.log('\n   ⚠️ Erros:');
       results.errors.forEach(err => {
@@ -1173,7 +1259,6 @@ exit;
   } catch (error) {
     console.error(`   ❌ Erro: ${error.message}`);
     
-    // Tentar deletar arquivo em caso de erro
     try {
       await deleteFileViaCpanel(baseUrl, cpSecurityToken, sessionData, phpFilePath, httpsAgent);
     } catch (e) { /* ignora */ }
@@ -1183,190 +1268,14 @@ exit;
   }
 }
 
-// Função para limpar arquivos de ativação antigos
-async function cleanupOldActivationFiles(baseUrl, cpSecurityToken, sessionData, httpsAgent, publicHtmlPath, muPluginsPath) {
-  const headers = {
-    'Content-Type': 'application/x-www-form-urlencoded',
-    'Cookie': `cpsession=${sessionData.session}`
-  };
-  
-  // Listar arquivos na public_html
-  try {
-    const listUrl = `${baseUrl}${cpSecurityToken}/execute/Fileman/list_files`;
-    const listResponse = await axios.post(listUrl, new URLSearchParams({
-      dir: publicHtmlPath,
-      include_mime: '0',
-      include_hash: '0',
-      include_permissions: '0'
-    }).toString(), {
-      headers,
-      timeout: 15000,
-      httpsAgent
-    });
-    
-    const files = listResponse.data?.data || [];
-    
-    // Encontrar arquivos dh-activate-*.php
-    for (const file of files) {
-      if (file.file && file.file.startsWith('dh-activate-') && file.file.endsWith('.php')) {
-        console.log(`   🗑️ Removendo arquivo antigo: ${file.file}`);
-        await deleteFileViaCpanel(baseUrl, cpSecurityToken, sessionData, 
-          `${publicHtmlPath}/${file.file}`, httpsAgent);
-      }
-    }
-  } catch (e) {
-    console.log(`   ⚠️ Erro ao listar public_html: ${e.message}`);
-  }
-  
-  // Listar arquivos em mu-plugins
-  try {
-    const listUrl = `${baseUrl}${cpSecurityToken}/execute/Fileman/list_files`;
-    const listResponse = await axios.post(listUrl, new URLSearchParams({
-      dir: muPluginsPath,
-      include_mime: '0',
-      include_hash: '0',
-      include_permissions: '0'
-    }).toString(), {
-      headers,
-      timeout: 15000,
-      httpsAgent
-    });
-    
-    const files = listResponse.data?.data || [];
-    
-    // Encontrar arquivos activate-plugins-*.php
-    for (const file of files) {
-      if (file.file && file.file.startsWith('activate-plugins-') && file.file.endsWith('.php')) {
-        console.log(`   🗑️ Removendo mu-plugin antigo: ${file.file}`);
-        await deleteFileViaCpanel(baseUrl, cpSecurityToken, sessionData, 
-          `${muPluginsPath}/${file.file}`, httpsAgent);
-      }
-    }
-  } catch (e) {
-    console.log(`   ⚠️ Erro ao listar mu-plugins: ${e.message}`);
-  }
-}
+// ========== FUNÇÃO PRINCIPAL - EXPORTADA ==========
 
-// Função auxiliar para deletar arquivo via cPanel - MÚLTIPLOS MÉTODOS
-async function deleteFileViaCpanel(baseUrl, cpSecurityToken, sessionData, filePath, httpsAgent) {
-  const fileName = filePath.split('/').pop();
-  const dirPath = filePath.substring(0, filePath.lastIndexOf('/'));
+async function setupWordPress(domain) {
+  console.log('\n' + '='.repeat(70));
+  console.log('🚀 [WORDPRESS] INICIANDO SETUP COMPLETO');
+  console.log('   Domínio:', domain);
+  console.log('='.repeat(70));
   
-  console.log(`   🗑️ Tentando deletar: ${fileName}`);
-  console.log(`   📁 Diretório: ${dirPath}`);
-  
-  // Método 1: UAPI Fileman/delete_files (mais confiável)
-  try {
-    console.log('   → Tentando UAPI delete_files...');
-    const deleteUrl = `${baseUrl}${cpSecurityToken}/execute/Fileman/delete_files`;
-    const response = await axios.post(deleteUrl, new URLSearchParams({ 
-      dir: dirPath,
-      'files-0': fileName
-    }).toString(), {
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'Cookie': `cpsession=${sessionData.session}`
-      },
-      timeout: 15000,
-      httpsAgent
-    });
-    
-    if (response.data?.status === 1 || response.data?.data) {
-      console.log('   ✅ Deletado via UAPI delete_files');
-      return true;
-    }
-  } catch (e1) {
-    console.log(`   ⚠️ UAPI delete_files falhou: ${e1.message}`);
-  }
-  
-  // Método 2: API2 Fileman fileop delete
-  try {
-    console.log('   → Tentando API2 fileop delete...');
-    const api2Url = `${baseUrl}${cpSecurityToken}/json-api/cpanel`;
-    const response = await axios.post(api2Url, new URLSearchParams({
-      'cpanel_jsonapi_user': config.WHM_ACCOUNT_USERNAME,
-      'cpanel_jsonapi_apiversion': '2',
-      'cpanel_jsonapi_module': 'Fileman',
-      'cpanel_jsonapi_func': 'fileop',
-      'op': 'unlink',
-      'sourcefiles': filePath,
-      'doubledecode': '0'
-    }).toString(), {
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'Cookie': `cpsession=${sessionData.session}`
-      },
-      timeout: 15000,
-      httpsAgent
-    });
-    
-    if (response.data?.cpanelresult?.data?.[0]?.result === 1) {
-      console.log('   ✅ Deletado via API2 fileop unlink');
-      return true;
-    }
-  } catch (e2) {
-    console.log(`   ⚠️ API2 fileop falhou: ${e2.message}`);
-  }
-  
-  // Método 3: WHM API direto
-  try {
-    console.log('   → Tentando WHM API...');
-    const whmUrl = `${config.WHM_URL}/json-api/cpanel`;
-    const response = await axios.post(whmUrl, new URLSearchParams({
-      'cpanel_jsonapi_user': config.WHM_ACCOUNT_USERNAME,
-      'cpanel_jsonapi_apiversion': '2',
-      'cpanel_jsonapi_module': 'Fileman',
-      'cpanel_jsonapi_func': 'fileop',
-      'op': 'unlink',
-      'sourcefiles': filePath
-    }).toString(), {
-      headers: {
-        'Authorization': `whm ${config.WHM_USERNAME}:${config.WHM_API_TOKEN}`,
-        'Content-Type': 'application/x-www-form-urlencoded'
-      },
-      timeout: 15000,
-      httpsAgent
-    });
-    
-    if (response.data?.cpanelresult?.data?.[0]?.result === 1 ||
-        response.data?.cpanelresult?.event?.result === 1) {
-      console.log('   ✅ Deletado via WHM API');
-      return true;
-    }
-  } catch (e3) {
-    console.log(`   ⚠️ WHM API falhou: ${e3.message}`);
-  }
-  
-  // Método 4: Fileman/trash como último recurso
-  try {
-    console.log('   → Tentando Fileman/trash...');
-    const trashUrl = `${baseUrl}${cpSecurityToken}/execute/Fileman/trash`;
-    const response = await axios.post(trashUrl, new URLSearchParams({ 
-      path: filePath 
-    }).toString(), {
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'Cookie': `cpsession=${sessionData.session}`
-      },
-      timeout: 15000,
-      httpsAgent
-    });
-    
-    if (response.data?.status === 1) {
-      console.log('   ✅ Movido para lixeira via trash');
-      return true;
-    }
-  } catch (e4) {
-    console.log(`   ⚠️ Fileman/trash falhou: ${e4.message}`);
-  }
-  
-  console.log('   ❌ TODOS OS MÉTODOS DE DELEÇÃO FALHARAM');
-  return false;
-}
-
-// ========== FUNÇÃO PRINCIPAL ==========
-
-async function setupDomain(domain) {
   const result = {
     domain: domain,
     etapa1_whm: null,
@@ -1375,56 +1284,54 @@ async function setupDomain(domain) {
     success: false
   };
   
+  // ETAPA 1: Criar conta WHM
   result.etapa1_whm = await createWHMAccount(domain);
   
   if (!result.etapa1_whm.success) {
-    console.log('\n❌ PROCESSO INTERROMPIDO - Falha na Etapa 1');
+    console.log('\n❌ PROCESSO INTERROMPIDO - Falha na Etapa 1 (WHM)');
     return result;
   }
   
   console.log('\n⏳ Aguardando 10 segundos para propagação da conta...');
   await new Promise(resolve => setTimeout(resolve, 10000));
   
+  // ETAPA 2: Instalar WordPress
   result.etapa2_wordpress = await installWordPress(domain);
   
   if (!result.etapa2_wordpress.success) {
-    console.log('\n❌ PROCESSO INTERROMPIDO - Falha na Etapa 2');
+    console.log('\n❌ PROCESSO INTERROMPIDO - Falha na Etapa 2 (WordPress)');
     return result;
   }
   
   console.log('\n⏳ Aguardando 5 segundos para WordPress inicializar...');
   await new Promise(resolve => setTimeout(resolve, 5000));
   
+  // ETAPA 3: Instalar e ativar plugins
   result.etapa3_plugins = await installPlugins(domain);
   
   result.success = result.etapa1_whm.success && result.etapa2_wordpress.success;
   
   console.log('\n' + '='.repeat(70));
-  console.log(result.success ? '🎉 PROCESSO COMPLETO COM SUCESSO!' : '⚠️ PROCESSO FINALIZADO COM ERROS');
+  console.log(result.success ? '🎉 [WORDPRESS] SETUP COMPLETO COM SUCESSO!' : '⚠️ [WORDPRESS] SETUP FINALIZADO COM ERROS');
   console.log('='.repeat(70));
   
   return result;
 }
 
-// ========== ROTAS ==========
+// ========== ROTA ÚNICA ==========
 
-router.post('/whm-test', async (req, res) => {
+router.post('/setup', async (req, res) => {
   const { domain } = req.body;
   
   if (!domain) {
     return res.status(400).json({ 
       error: 'Domínio não informado',
-      uso: 'POST /api/test/whm-test com body: { "domain": "exemplo.com" }'
+      uso: 'POST /api/wordpress/setup com body: { "domain": "exemplo.com" }'
     });
   }
   
-  console.log('\n' + '='.repeat(70));
-  console.log('🧪 [TESTE] INICIANDO SETUP COMPLETO');
-  console.log('   Domínio:', domain);
-  console.log('='.repeat(70));
-  
   try {
-    const result = await setupDomain(domain);
+    const result = await setupWordPress(domain);
     res.json(result);
   } catch (error) {
     console.error('❌ ERRO FATAL:', error.message);
@@ -1432,114 +1339,6 @@ router.post('/whm-test', async (req, res) => {
   }
 });
 
-router.post('/whm-only', async (req, res) => {
-  const { domain } = req.body;
-  
-  if (!domain) {
-    return res.status(400).json({ error: 'Domínio não informado' });
-  }
-  
-  try {
-    const result = await createWHMAccount(domain);
-    res.json({ domain, ...result });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-router.post('/wp-only', async (req, res) => {
-  const { domain } = req.body;
-  
-  if (!domain) {
-    return res.status(400).json({ error: 'Domínio não informado' });
-  }
-  
-  try {
-    const result = await installWordPress(domain);
-    res.json({ domain, ...result });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-router.post('/plugins-only', async (req, res) => {
-  const { domain } = req.body;
-  
-  if (!domain) {
-    return res.status(400).json({ error: 'Domínio não informado' });
-  }
-  
-  try {
-    const result = await installPlugins(domain);
-    res.json({ domain, ...result });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-router.post('/activate-only', async (req, res) => {
-  const { domain } = req.body;
-  
-  if (!domain) {
-    return res.status(400).json({ error: 'Domínio não informado' });
-  }
-  
-  console.log('\n' + '='.repeat(70));
-  console.log('🔧 [TESTE] ATIVAÇÃO DE PLUGINS');
-  console.log('   Domínio:', domain);
-  console.log('='.repeat(70));
-  
-  try {
-    // Criar sessão no cPanel
-    console.log('🔑 Criando sessão no cPanel...');
-    const sessionResponse = await axios.get(
-      `${config.WHM_URL}/json-api/create_user_session?api.version=1&user=${config.WHM_ACCOUNT_USERNAME}&service=cpaneld`,
-      {
-        headers: {
-          'Authorization': `whm ${config.WHM_USERNAME}:${config.WHM_API_TOKEN}`
-        },
-        timeout: 30000,
-        httpsAgent: new https.Agent({ rejectUnauthorized: false })
-      }
-    );
-    
-    const sessionData = sessionResponse.data?.data;
-    const cpSecurityToken = sessionData?.cp_security_token;
-    
-    if (!cpSecurityToken) {
-      throw new Error('Não foi possível criar sessão no cPanel');
-    }
-    
-    console.log('✅ Sessão cPanel criada');
-    
-    const pluginNames = [
-      'duplicate-post',
-      'elementor',
-      'elementor-pro',
-      'google-site-kit',
-      'insert-headers-and-footers',
-      'litespeed-cache',
-      'rename-wp-admin-login',
-      'wordfence',
-      'wordpress-seo',
-      'wordpress-seo-premium'
-    ];
-    
-    const result = await activatePluginsViaDirectPHP(domain, pluginNames, sessionData, cpSecurityToken);
-    res.json({ domain, ...result });
-  } catch (error) {
-    console.error('❌ ERRO:', error.message);
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-router.get('/passbolt-test', async (req, res) => {
-  try {
-    const password = await getPasswordFromPassbolt();
-    res.json({ success: true, passwordLength: password.length });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
+// Exportar função e router
 module.exports = router;
+module.exports.setupWordPress = setupWordPress;

@@ -11,6 +11,8 @@ const { promisify } = require('util');
 const openpgp = require('openpgp');
 const { v4: uuidv4 } = require('uuid');
 
+// Importar função de setup do WordPress
+const { setupWordPress } = require('./wordpress-install');
 
 const execAsync = promisify(exec);
 
@@ -577,7 +579,7 @@ class WordPressDomainPurchase {
 
   /**
    * PROCESSAR PÓS-COMPRA
-   * 🔥 SEM INSTALAÇÃO DE WORDPRESS - APENAS CLOUDFLARE E CPANEL
+   * 🔥 CLOUDFLARE + SUPABASE + WORDPRESS + WHATSAPP
    */
   async processPostPurchase(domain, userId, sessionId, trafficSource = null, plataforma = null, isManual = false) {
     try {
@@ -621,39 +623,11 @@ class WordPressDomainPurchase {
           }
         }
         
-        console.log(`✅ [CLOUDFLARE] Configuração concluída - prosseguindo para cPanel`);
-      }
-      
-      // ⚠️ CHECKPOINT: Verificar cancelamento antes do cPanel
-      if (!isCancelled && await this.isSessionCancelled(sessionId)) {
-        console.log(`🛑 [CANCEL] Processo cancelado antes do cPanel`);
-        isCancelled = true;
+        console.log(`✅ [CLOUDFLARE] Configuração concluída`);
       }
       
       // ========================
-      // ETAPA 3: CPANEL (só se não cancelado)
-      // ========================
-      if (!isCancelled) {
-        console.log(`🖥️ [CPANEL] Adicionando domínio ao cPanel...`);
-        await this.updateProgress(sessionId, 'cpanel', 'in_progress', 
-          `Adicionando ${domain} ao cPanel...`, domain);
-        
-        const cpanelSuccess = await this.addDomainToCPanel(domain);
-        
-        if (!cpanelSuccess) {
-          console.error(`❌ [CPANEL] Falha ao adicionar domínio`);
-          await this.updateProgress(sessionId, 'cpanel', 'error', 
-            `Erro ao adicionar ${domain} ao cPanel`, domain);
-          // Continua para salvar no Supabase mesmo assim
-        } else {
-          await this.updateProgress(sessionId, 'cpanel', 'completed', 
-            `Domínio ${domain} adicionado ao cPanel com sucesso!`, domain);
-          console.log(`✅ [CPANEL] Domínio adicionado com sucesso`);
-        }
-      }
-      
-      // ========================
-      // ETAPA 4: SUPABASE (SEMPRE EXECUTA - mesmo se cancelado)
+      // ETAPA 3: SUPABASE (SEMPRE EXECUTA - mesmo se cancelado)
       // O domínio foi comprado, precisa estar no banco!
       // ========================
       console.log(`💾 [SUPABASE] Salvando domínio no banco de dados...`);
@@ -667,13 +641,46 @@ class WordPressDomainPurchase {
           `Domínio ${domain} salvo no banco de dados!`, domain);
         
         // ========================
-        // ETAPA 5: LOG
+        // ETAPA 4: LOG
         // ========================
         console.log(`📝 [LOG] Registrando atividade...`);
         await this.saveActivityLog(savedDomain.id, userId, trafficSource, isManual);
       } else {
         await this.updateProgress(sessionId, 'supabase', 'error', 
           `Erro ao salvar ${domain} no banco de dados`, domain);
+      }
+      
+      // ========================
+      // ETAPA 5: WORDPRESS (WHM + Softaculous + Plugins)
+      // ========================
+      // Verificar cancelamento antes do WordPress
+      if (!isCancelled && await this.isSessionCancelled(sessionId)) {
+        console.log(`🛑 [CANCEL] Processo cancelado antes do WordPress`);
+        isCancelled = true;
+      }
+      
+      if (!isCancelled) {
+        console.log(`🌐 [WORDPRESS] Iniciando instalação do WordPress...`);
+        await this.updateProgress(sessionId, 'wordpress', 'in_progress', 
+          `Instalando WordPress em ${domain}...`, domain);
+        
+        try {
+          const wpResult = await setupWordPress(domain);
+          
+          if (wpResult.success) {
+            await this.updateProgress(sessionId, 'wordpress', 'completed', 
+              `WordPress instalado com sucesso em ${domain}!`, domain);
+            console.log(`✅ [WORDPRESS] Instalação concluída com sucesso`);
+          } else {
+            await this.updateProgress(sessionId, 'wordpress', 'error', 
+              `Erro ao instalar WordPress: ${wpResult.etapa1_whm?.error || wpResult.etapa2_wordpress?.error || 'Erro desconhecido'}`, domain);
+            console.log(`❌ [WORDPRESS] Falha na instalação`);
+          }
+        } catch (wpError) {
+          console.error(`❌ [WORDPRESS] Erro:`, wpError.message);
+          await this.updateProgress(sessionId, 'wordpress', 'error', 
+            `Erro ao instalar WordPress: ${wpError.message}`, domain);
+        }
       }
       
       // ========================
@@ -994,118 +1001,6 @@ class WordPressDomainPurchase {
     }
   }
 
- /**
- * ADICIONAR DOMÍNIO AO CPANEL
- * CORRIGIDO: Usando API 2 (json-api) que funciona neste cPanel
- */
-async addDomainToCPanel(domain) {
-  console.log(`\n${'='.repeat(70)}`);
-  console.log(`🖥️ [CPANEL] ADICIONANDO DOMÍNIO AO CPANEL`);
-  console.log(`   Domain: ${domain}`);
-  console.log(`${'='.repeat(70)}`);
-  
-  try {
-    // Configurações do domínio
-    const domainParts = domain.split('.');
-    const subdomain = domainParts[0];
-    const dir = domain.replace(/\./g, '_');
-    
-    console.log(`📋 [CPANEL] Configuração:`);
-    console.log(`   Domain completo: ${domain}`);
-    console.log(`   Subdomain: ${subdomain}`);
-    console.log(`   Diretório: ${dir}`);
-    
-    // Tentativas com retry
-    for (let attempt = 1; attempt <= 5; attempt++) {
-      console.log(`\n🔄 [CPANEL] Tentativa ${attempt}/5`);
-      
-      try {
-        // API 2 - Formato correto para este cPanel
-        const params = new URLSearchParams({
-          cpanel_jsonapi_apiversion: '2',
-          cpanel_jsonapi_module: 'AddonDomain',
-          cpanel_jsonapi_func: 'addaddondomain',
-          dir: dir,
-          newdomain: domain,
-          subdomain: subdomain
-        });
-        
-        const apiUrl = `${config.CPANEL_URL}/json-api/cpanel?${params.toString()}`;
-        
-        console.log(`📤 [CPANEL] Requisição:`);
-        console.log(`   URL: ${apiUrl}`);
-        console.log(`   Method: GET`);
-        
-        const response = await axios.get(apiUrl, {
-          headers: {
-            'Authorization': `cpanel ${config.CPANEL_USERNAME}:${config.CPANEL_API_TOKEN}`
-          },
-          timeout: 60000,
-          httpsAgent: new (require('https').Agent)({
-            rejectUnauthorized: false
-          })
-        });
-        
-        console.log(`📥 [CPANEL] Resposta recebida:`);
-        console.log(`   Status HTTP: ${response.status}`);
-        console.log(`   Data:`, JSON.stringify(response.data, null, 2));
-        
-        // Verificar sucesso na resposta API 2
-        const result = response.data?.cpanelresult?.data?.[0];
-        
-        if (result?.result === 1) {
-          console.log(`✅ [CPANEL] Domínio ${domain} adicionado com sucesso!`);
-          console.log(`   Motivo: ${result.reason || 'Sucesso'}`);
-          await this.delay(5000);
-          return true;
-        }
-        
-        // Verificar se domínio já existe
-        const reason = result?.reason || '';
-        if (reason.toLowerCase().includes('already') || 
-            reason.toLowerCase().includes('existe') ||
-            reason.toLowerCase().includes('exist') ||
-            reason.toLowerCase().includes('já')) {
-          console.log(`✅ [CPANEL] Domínio já existe - considerando sucesso`);
-          await this.delay(5000);
-          return true;
-        }
-        
-        console.error(`❌ [CPANEL] Tentativa ${attempt} falhou`);
-        console.error(`   Reason: ${reason}`);
-        
-        if (attempt < 5) {
-          const waitTime = attempt * 6000;
-          console.log(`⏳ [CPANEL] Aguardando ${waitTime/1000}s...`);
-          await this.delay(waitTime);
-        }
-        
-      } catch (error) {
-        console.error(`❌ [CPANEL] Erro na tentativa ${attempt}:`);
-        console.error(`   Mensagem: ${error.message}`);
-        console.error(`   Code: ${error.code || 'N/A'}`);
-        
-        if (error.response) {
-          console.error(`   Status: ${error.response.status}`);
-          console.error(`   Data:`, JSON.stringify(error.response.data, null, 2));
-        }
-        
-        if (attempt < 5) {
-          const waitTime = attempt * 6000;
-          console.log(`⏳ [CPANEL] Aguardando ${waitTime/1000}s...`);
-          await this.delay(waitTime);
-        }
-      }
-    }
-    
-    console.error(`\n❌ [CPANEL] FALHA TOTAL após 5 tentativas - Domínio: ${domain}`);
-    return false;
-    
-  } catch (error) {
-    console.error(`❌ [CPANEL] Erro fatal:`, error.message);
-    return false;
-  }
-}
   /**
    * SALVAR NO SUPABASE
    */
