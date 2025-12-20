@@ -45,6 +45,14 @@ async function updateProgress(sessionId, step, status, message, domainName = nul
   }
 }
 
+// ========== GERAR USERNAME ÚNICO PARA WHM ==========
+
+function generateWHMUsername() {
+  // Gera 3 números aleatórios (000-999)
+  const randomNum = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
+  return `gex${randomNum}`;
+}
+
 // ========== FUNÇÕES PASSBOLT ==========
 
 async function authenticatePassbolt() {
@@ -167,12 +175,15 @@ async function createWHMAccount(domain) {
   console.log('📦 [ETAPA 1] CRIANDO CONTA NO WHM');
   console.log('='.repeat(70));
   console.log('   Domain:', domain);
-  console.log('   Username:', config.WHM_ACCOUNT_USERNAME);
+  
+  // Gerar username único
+  const username = generateWHMUsername();
+  console.log('   Username:', username);
   
   const params = new URLSearchParams({
     api_token_style: '1',
     domain: domain,
-    username: config.WHM_ACCOUNT_USERNAME,
+    username: username,
     password: config.WHM_ACCOUNT_PASSWORD,
     plan: config.WHM_ACCOUNT_PACKAGE,
     savepkg: '0',
@@ -214,7 +225,7 @@ async function createWHMAccount(domain) {
   
   if (result === 1 || result === '1' || statusmsg.toLowerCase().includes('successfully')) {
     console.log('✅ [ETAPA 1] CONTA WHM CRIADA COM SUCESSO!');
-    return { success: true };
+    return { success: true, username: username };
   }
   
   console.log('❌ [ETAPA 1] FALHA AO CRIAR CONTA WHM');
@@ -223,12 +234,13 @@ async function createWHMAccount(domain) {
 
 // ========== ETAPA 2: INSTALAR WORDPRESS ==========
 
-async function installWordPress(domain) {
+async function installWordPress(domain, username) {
   console.log('\n' + '='.repeat(70));
   console.log('🌐 [ETAPA 2] INSTALANDO WORDPRESS');
   console.log('='.repeat(70));
   console.log('   Domain:', domain);
-  console.log('   Username:', config.WORDPRESS_DEFAULT_USER);
+  console.log('   Username:', username);
+  console.log('   WP Admin:', config.WORDPRESS_DEFAULT_USER);
   
   const wpPassword = await getPasswordFromPassbolt();
   
@@ -237,7 +249,7 @@ async function installWordPress(domain) {
   try {
     console.log('🔑 Criando sessão no cPanel...');
     const sessionResponse = await axios.get(
-      `${config.WHM_URL}/json-api/create_user_session?api.version=1&user=${config.WHM_ACCOUNT_USERNAME}&service=cpaneld`,
+      `${config.WHM_URL}/json-api/create_user_session?api.version=1&user=${username}&service=cpaneld`,
       {
         headers: {
           'Authorization': `whm ${config.WHM_USERNAME}:${config.WHM_API_TOKEN}`
@@ -366,7 +378,7 @@ async function installWordPress(domain) {
 
 // ========== ETAPA 3: INSTALAR PLUGINS ==========
 
-async function installPlugins(domain) {
+async function installPlugins(domain, username) {
   console.log('\n' + '='.repeat(70));
   console.log('🔌 [ETAPA 3] INSTALANDO PLUGINS');
   console.log('='.repeat(70));
@@ -395,7 +407,7 @@ async function installPlugins(domain) {
     
     console.log(`✅ ${plugins.length} plugins configurados`);
     
-    return await installPluginsViaFileManager(domain, plugins);
+    return await installPluginsViaFileManager(domain, plugins, username);
     
   } catch (error) {
     console.error('❌ [ETAPA 3] ERRO:', error.message);
@@ -405,7 +417,7 @@ async function installPlugins(domain) {
 
 // ========== FUNÇÕES AUXILIARES DE ARQUIVO ==========
 
-async function deletePluginZip(baseUrl, cpSecurityToken, sessionData, zipPath, httpsAgent) {
+async function deletePluginZip(baseUrl, cpSecurityToken, sessionData, zipPath, httpsAgent, username) {
   const fileName = zipPath.split('/').pop();
   const dirPath = zipPath.substring(0, zipPath.lastIndexOf('/'));
   
@@ -433,7 +445,7 @@ async function deletePluginZip(baseUrl, cpSecurityToken, sessionData, zipPath, h
   try {
     const api2Url = `${baseUrl}${cpSecurityToken}/json-api/cpanel`;
     const response = await axios.post(api2Url, new URLSearchParams({
-      'cpanel_jsonapi_user': config.WHM_ACCOUNT_USERNAME,
+      'cpanel_jsonapi_user': username,
       'cpanel_jsonapi_apiversion': '2',
       'cpanel_jsonapi_module': 'Fileman',
       'cpanel_jsonapi_func': 'fileop',
@@ -453,7 +465,7 @@ async function deletePluginZip(baseUrl, cpSecurityToken, sessionData, zipPath, h
   try {
     const whmUrl = `${config.WHM_URL}/json-api/cpanel`;
     const response = await axios.post(whmUrl, new URLSearchParams({
-      'cpanel_jsonapi_user': config.WHM_ACCOUNT_USERNAME,
+      'cpanel_jsonapi_user': username,
       'cpanel_jsonapi_apiversion': '2',
       'cpanel_jsonapi_module': 'Fileman',
       'cpanel_jsonapi_func': 'fileop',
@@ -491,7 +503,7 @@ async function deletePluginZip(baseUrl, cpSecurityToken, sessionData, zipPath, h
   return false;
 }
 
-async function cleanupPluginZips(baseUrl, cpSecurityToken, sessionData, pluginsPath, httpsAgent) {
+async function cleanupPluginZips(baseUrl, cpSecurityToken, sessionData, pluginsPath, httpsAgent, username) {
   const headers = {
     'Content-Type': 'application/x-www-form-urlencoded',
     'Cookie': `cpsession=${sessionData.session}`
@@ -519,7 +531,7 @@ async function cleanupPluginZips(baseUrl, cpSecurityToken, sessionData, pluginsP
         const zipPath = `${pluginsPath}/${file.file}`;
         console.log(`   🗑️ Removendo: ${file.file}`);
         
-        const deleted = await deletePluginZip(baseUrl, cpSecurityToken, sessionData, zipPath, httpsAgent);
+        const deleted = await deletePluginZip(baseUrl, cpSecurityToken, sessionData, zipPath, httpsAgent, username);
         if (deleted) {
           deletedCount++;
         } else {
@@ -544,7 +556,7 @@ async function cleanupPluginZips(baseUrl, cpSecurityToken, sessionData, pluginsP
   }
 }
 
-async function deleteFileViaCpanel(baseUrl, cpSecurityToken, sessionData, filePath, httpsAgent) {
+async function deleteFileViaCpanel(baseUrl, cpSecurityToken, sessionData, filePath, httpsAgent, username) {
   const fileName = filePath.split('/').pop();
   const dirPath = filePath.substring(0, filePath.lastIndexOf('/'));
   
@@ -574,7 +586,7 @@ async function deleteFileViaCpanel(baseUrl, cpSecurityToken, sessionData, filePa
   try {
     const api2Url = `${baseUrl}${cpSecurityToken}/json-api/cpanel`;
     const response = await axios.post(api2Url, new URLSearchParams({
-      'cpanel_jsonapi_user': config.WHM_ACCOUNT_USERNAME,
+      'cpanel_jsonapi_user': username,
       'cpanel_jsonapi_apiversion': '2',
       'cpanel_jsonapi_module': 'Fileman',
       'cpanel_jsonapi_func': 'fileop',
@@ -599,7 +611,7 @@ async function deleteFileViaCpanel(baseUrl, cpSecurityToken, sessionData, filePa
   try {
     const whmUrl = `${config.WHM_URL}/json-api/cpanel`;
     const response = await axios.post(whmUrl, new URLSearchParams({
-      'cpanel_jsonapi_user': config.WHM_ACCOUNT_USERNAME,
+      'cpanel_jsonapi_user': username,
       'cpanel_jsonapi_apiversion': '2',
       'cpanel_jsonapi_module': 'Fileman',
       'cpanel_jsonapi_func': 'fileop',
@@ -642,7 +654,7 @@ async function deleteFileViaCpanel(baseUrl, cpSecurityToken, sessionData, filePa
   return false;
 }
 
-async function cleanupOldActivationFiles(baseUrl, cpSecurityToken, sessionData, httpsAgent, publicHtmlPath, muPluginsPath) {
+async function cleanupOldActivationFiles(baseUrl, cpSecurityToken, sessionData, httpsAgent, publicHtmlPath, muPluginsPath, username) {
   const headers = {
     'Content-Type': 'application/x-www-form-urlencoded',
     'Cookie': `cpsession=${sessionData.session}`
@@ -668,7 +680,7 @@ async function cleanupOldActivationFiles(baseUrl, cpSecurityToken, sessionData, 
       if (file.file && file.file.startsWith('dh-activate-') && file.file.endsWith('.php')) {
         console.log(`   🗑️ Removendo arquivo antigo: ${file.file}`);
         await deleteFileViaCpanel(baseUrl, cpSecurityToken, sessionData, 
-          `${publicHtmlPath}/${file.file}`, httpsAgent);
+          `${publicHtmlPath}/${file.file}`, httpsAgent, username);
       }
     }
   } catch (e) {
@@ -695,7 +707,7 @@ async function cleanupOldActivationFiles(baseUrl, cpSecurityToken, sessionData, 
       if (file.file && file.file.startsWith('activate-plugins-') && file.file.endsWith('.php')) {
         console.log(`   🗑️ Removendo mu-plugin antigo: ${file.file}`);
         await deleteFileViaCpanel(baseUrl, cpSecurityToken, sessionData, 
-          `${muPluginsPath}/${file.file}`, httpsAgent);
+          `${muPluginsPath}/${file.file}`, httpsAgent, username);
       }
     }
   } catch (e) {
@@ -705,15 +717,16 @@ async function cleanupOldActivationFiles(baseUrl, cpSecurityToken, sessionData, 
 
 // ========== INSTALAR PLUGINS VIA FILE MANAGER ==========
 
-async function installPluginsViaFileManager(domain, plugins) {
+async function installPluginsViaFileManager(domain, plugins, username) {
   console.log('\n📁 Instalando plugins via cPanel File Manager...');
+  console.log('   Username:', username);
   
   const results = [];
   
   try {
     console.log('🔑 Criando sessão no cPanel...');
     const sessionResponse = await axios.get(
-      `${config.WHM_URL}/json-api/create_user_session?api.version=1&user=${config.WHM_ACCOUNT_USERNAME}&service=cpaneld`,
+      `${config.WHM_URL}/json-api/create_user_session?api.version=1&user=${username}&service=cpaneld`,
       {
         headers: {
           'Authorization': `whm ${config.WHM_USERNAME}:${config.WHM_API_TOKEN}`
@@ -733,7 +746,7 @@ async function installPluginsViaFileManager(domain, plugins) {
     console.log('✅ Sessão cPanel criada');
     
     const baseUrl = config.WHM_URL.replace(':2087', ':2083').replace(/\/$/, '');
-    const pluginsPath = `/home/${config.WHM_ACCOUNT_USERNAME}/public_html/wp-content/plugins`;
+    const pluginsPath = `/home/${username}/public_html/wp-content/plugins`;
     const headers = {
       'Content-Type': 'application/x-www-form-urlencoded',
       'Cookie': `cpsession=${sessionData.session}`
@@ -809,7 +822,7 @@ async function installPluginsViaFileManager(domain, plugins) {
         try {
           const shellUrl = `${baseUrl}${cpSecurityToken}/json-api/cpanel`;
           const shellParams = new URLSearchParams({
-            'cpanel_jsonapi_user': config.WHM_ACCOUNT_USERNAME,
+            'cpanel_jsonapi_user': username,
             'cpanel_jsonapi_apiversion': '2',
             'cpanel_jsonapi_module': 'Fileman',
             'cpanel_jsonapi_func': 'fileop',
@@ -836,7 +849,7 @@ async function installPluginsViaFileManager(domain, plugins) {
           try {
             const whmExtractUrl = `${config.WHM_URL}/json-api/cpanel`;
             const whmParams = new URLSearchParams({
-              'cpanel_jsonapi_user': config.WHM_ACCOUNT_USERNAME,
+              'cpanel_jsonapi_user': username,
               'cpanel_jsonapi_apiversion': '2',
               'cpanel_jsonapi_module': 'Fileman',
               'cpanel_jsonapi_func': 'fileop',
@@ -869,7 +882,7 @@ async function installPluginsViaFileManager(domain, plugins) {
         }
         
         console.log(`   🗑️ Removendo arquivo ZIP...`);
-        const zipDeleted = await deletePluginZip(baseUrl, cpSecurityToken, sessionData, zipPath, httpsAgent);
+        const zipDeleted = await deletePluginZip(baseUrl, cpSecurityToken, sessionData, zipPath, httpsAgent, username);
         if (zipDeleted) {
           console.log(`   ✅ ZIP removido`);
         } else {
@@ -900,7 +913,7 @@ async function installPluginsViaFileManager(domain, plugins) {
     
     // Limpeza final
     console.log('\n🧹 Limpando arquivos ZIP restantes...');
-    await cleanupPluginZips(baseUrl, cpSecurityToken, sessionData, pluginsPath, httpsAgent);
+    await cleanupPluginZips(baseUrl, cpSecurityToken, sessionData, pluginsPath, httpsAgent, username);
     
     // Ativar plugins
     if (installedPlugins.length > 0) {
@@ -912,7 +925,8 @@ async function installPluginsViaFileManager(domain, plugins) {
         domain, 
         installedPlugins, 
         sessionData, 
-        cpSecurityToken
+        cpSecurityToken,
+        username
       );
       
       return { 
@@ -941,8 +955,9 @@ async function installPluginsViaFileManager(domain, plugins) {
 
 // ========== ATIVAR PLUGINS VIA SCRIPT PHP DIRETO ==========
 
-async function activatePluginsViaDirectPHP(domain, pluginNames, sessionData, cpSecurityToken) {
+async function activatePluginsViaDirectPHP(domain, pluginNames, sessionData, cpSecurityToken, username) {
   console.log('\n🔌 Ativando plugins via Script PHP Direto...');
+  console.log('   Username:', username);
   
   const results = {
     activated: [],
@@ -955,8 +970,8 @@ async function activatePluginsViaDirectPHP(domain, pluginNames, sessionData, cpS
   
   const httpsAgent = new https.Agent({ rejectUnauthorized: false });
   const baseUrl = config.WHM_URL.replace(':2087', ':2083').replace(/\/$/, '');
-  const publicHtmlPath = `/home/${config.WHM_ACCOUNT_USERNAME}/public_html`;
-  const muPluginsPath = `/home/${config.WHM_ACCOUNT_USERNAME}/public_html/wp-content/mu-plugins`;
+  const publicHtmlPath = `/home/${username}/public_html`;
+  const muPluginsPath = `/home/${username}/public_html/wp-content/mu-plugins`;
   
   const uniqueId = uuidv4().replace(/-/g, '').substring(0, 16);
   const phpFileName = `dh-activate-${uniqueId}.php`;
@@ -965,7 +980,7 @@ async function activatePluginsViaDirectPHP(domain, pluginNames, sessionData, cpS
   try {
     // Limpar arquivos antigos
     console.log('   0️⃣ Limpando arquivos antigos...');
-    await cleanupOldActivationFiles(baseUrl, cpSecurityToken, sessionData, httpsAgent, publicHtmlPath, muPluginsPath);
+    await cleanupOldActivationFiles(baseUrl, cpSecurityToken, sessionData, httpsAgent, publicHtmlPath, muPluginsPath, username);
     
     // Gerar código PHP
     console.log('   1️⃣ Gerando script PHP...');
@@ -1231,7 +1246,7 @@ exit;
       }
     } catch (parseError) {
       console.log('   ⚠️ Erro ao parsear resposta');
-      await deleteFileViaCpanel(baseUrl, cpSecurityToken, sessionData, phpFilePath, httpsAgent);
+      await deleteFileViaCpanel(baseUrl, cpSecurityToken, sessionData, phpFilePath, httpsAgent, username);
       throw new Error(`Resposta inválida: ${parseError.message}`);
     }
     
@@ -1255,7 +1270,7 @@ exit;
     // Cleanup se não auto-deletou
     if (!phpResults.file_deleted) {
       console.log('\n   ⚠️ Arquivo não foi auto-deletado, removendo via cPanel...');
-      const deleted = await deleteFileViaCpanel(baseUrl, cpSecurityToken, sessionData, phpFilePath, httpsAgent);
+      const deleted = await deleteFileViaCpanel(baseUrl, cpSecurityToken, sessionData, phpFilePath, httpsAgent, username);
       if (deleted) {
         console.log('   ✅ Arquivo removido via cPanel');
       } else {
@@ -1289,7 +1304,7 @@ exit;
     console.error(`   ❌ Erro: ${error.message}`);
     
     try {
-      await deleteFileViaCpanel(baseUrl, cpSecurityToken, sessionData, phpFilePath, httpsAgent);
+      await deleteFileViaCpanel(baseUrl, cpSecurityToken, sessionData, phpFilePath, httpsAgent, username);
     } catch (e) { /* ignora */ }
     
     results.errors.push({ plugin: 'system', action: 'general', error: error.message });
@@ -1311,7 +1326,8 @@ async function setupWordPress(domain, sessionId = null) {
     etapa1_whm: null,
     etapa2_wordpress: null,
     etapa3_plugins: null,
-    success: false
+    success: false,
+    username: null
   };
   
   // ETAPA 1: Criar conta WHM
@@ -1327,8 +1343,12 @@ async function setupWordPress(domain, sessionId = null) {
     return result;
   }
   
+  // Guardar o username gerado
+  const username = result.etapa1_whm.username;
+  result.username = username;
+  
   await updateProgress(sessionId, 'wordpress_whm', 'completed', 
-    `Conta criada com sucesso!`, domain);
+    `Conta ${username} criada com sucesso!`, domain);
   
   console.log('\n⏳ Aguardando 10 segundos para propagação da conta...');
   await new Promise(resolve => setTimeout(resolve, 10000));
@@ -1337,7 +1357,7 @@ async function setupWordPress(domain, sessionId = null) {
   await updateProgress(sessionId, 'wordpress_install', 'in_progress', 
     `Instalando WordPress em ${domain}...`, domain);
   
-  result.etapa2_wordpress = await installWordPress(domain);
+  result.etapa2_wordpress = await installWordPress(domain, username);
   
   if (!result.etapa2_wordpress.success) {
     console.log('\n❌ PROCESSO INTERROMPIDO - Falha na Etapa 2 (WordPress)');
@@ -1356,7 +1376,7 @@ async function setupWordPress(domain, sessionId = null) {
   await updateProgress(sessionId, 'wordpress_plugins', 'in_progress', 
     `Instalando plugins em ${domain}...`, domain);
   
-  result.etapa3_plugins = await installPlugins(domain);
+  result.etapa3_plugins = await installPlugins(domain, username);
   
   if (result.etapa3_plugins?.success) {
     await updateProgress(sessionId, 'wordpress_plugins', 'completed', 
