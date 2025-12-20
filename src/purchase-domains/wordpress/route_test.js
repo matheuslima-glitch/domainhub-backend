@@ -347,9 +347,12 @@ async function installPlugins(domain) {
     const githubApiUrl = 'https://api.github.com/repos/matheuslima-glitch/wordpress-plugins/contents/';
     
     const githubResponse = await axios.get(githubApiUrl, {
-      headers: { 'Accept': 'application/vnd.github.v3+json' },
-      timeout: 30000
-    });
+  headers: { 
+    'Accept': 'application/vnd.github.v3+json',
+    'User-Agent': 'DomainHub-Backend'
+  },
+  timeout: 30000
+});
     
     const plugins = githubResponse.data
       .filter(file => file.name.endsWith('.zip'))
