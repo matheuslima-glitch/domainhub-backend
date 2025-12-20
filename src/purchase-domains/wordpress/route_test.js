@@ -418,14 +418,33 @@ async function installPluginsViaFileManager(domain, plugins) {
       try {
         const zipPath = `${pluginsPath}/${plugin.name}.zip`;
         
-        // PASSO 1: Deletar ZIP antigo se existir
+        // PASSO 1: Deletar ZIP antigo e pasta do plugin se existirem
         console.log(`   🗑️ Limpando arquivos antigos...`);
-        const deleteUrl = `${baseUrl}${cpSecurityToken}/execute/Fileman/delete_files`;
+        const trashUrl = `${baseUrl}${cpSecurityToken}/execute/Fileman/trash`;
+        
+        // Tentar deletar o ZIP
         try {
-          await axios.post(deleteUrl, new URLSearchParams({ files: zipPath }).toString(), {
+          await axios.post(trashUrl, new URLSearchParams({ 
+            path: zipPath 
+          }).toString(), {
             headers, timeout: 15000, httpsAgent
           });
-        } catch (e) { /* ignora se não existe */ }
+          console.log(`   ✅ ZIP antigo removido`);
+        } catch (e) { 
+          // Se não existir, tenta com delete_files como fallback
+          try {
+            const deleteUrl = `${baseUrl}${cpSecurityToken}/execute/Fileman/delete_files`;
+            await axios.post(deleteUrl, new URLSearchParams({ 
+              path: zipPath,
+              'files-0': zipPath
+            }).toString(), {
+              headers, timeout: 15000, httpsAgent
+            });
+          } catch (e2) { /* ignora se não existe */ }
+        }
+        
+        // Pequena pausa para garantir que o arquivo foi removido
+        await new Promise(resolve => setTimeout(resolve, 500));
         
         // PASSO 2: Baixar o ZIP do GitHub
         console.log(`   ⬇️ Baixando do GitHub...`);
@@ -438,12 +457,13 @@ async function installPluginsViaFileManager(domain, plugins) {
         const sizeMB = (zipResponse.data.length / 1024 / 1024).toFixed(2);
         console.log(`   📦 Tamanho: ${sizeMB} MB`);
         
-        // PASSO 3: Upload do ZIP para cPanel
+        // PASSO 3: Upload do ZIP para cPanel COM OVERWRITE
         console.log(`   📤 Enviando para servidor...`);
         const uploadUrl = `${baseUrl}${cpSecurityToken}/execute/Fileman/upload_files`;
         
         const form = new FormData();
         form.append('dir', pluginsPath);
+        form.append('overwrite', '1'); // ← CORREÇÃO: Permite sobrescrever arquivos existentes
         form.append('file-0', Buffer.from(zipResponse.data), {
           filename: `${plugin.name}.zip`,
           contentType: 'application/zip'
@@ -488,7 +508,7 @@ async function installPluginsViaFileManager(domain, plugins) {
         // PASSO 5: Deletar ZIP após extração bem-sucedida
         console.log(`   🗑️ Removendo arquivo ZIP...`);
         try {
-          await axios.post(deleteUrl, new URLSearchParams({ files: zipPath }).toString(), {
+          await axios.post(trashUrl, new URLSearchParams({ path: zipPath }).toString(), {
             headers, timeout: 15000, httpsAgent
           });
         } catch (e) { /* ignora */ }
