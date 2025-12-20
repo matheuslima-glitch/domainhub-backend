@@ -342,29 +342,32 @@ async function installPlugins(domain) {
   const results = [];
   
   try {
-    // Buscar lista de plugins do GitHub
-    console.log('📋 Buscando lista de plugins do GitHub...');
-    const githubApiUrl = 'https://api.github.com/repos/matheuslima-glitch/wordpress-plugins/contents/';
+    // Lista de plugins (hardcoded)
+    console.log('📋 Carregando lista de plugins...');
+    const githubBaseUrl = 'https://raw.githubusercontent.com/matheuslima-glitch/wordpress-plugins/main';
     
-    const githubResponse = await axios.get(githubApiUrl, {
-  headers: { 
-    'Accept': 'application/vnd.github.v3+json',
-    'User-Agent': 'DomainHub-Backend'
-  },
-  timeout: 30000
-});
+    const pluginNames = [
+      'duplicate-post',
+      'elementor',
+      'elementor-pro',
+      'google-site-kit',
+      'insert-headers-and-footers',
+      'litespeed-cache',
+      'rename-wp-admin-login',
+      'wordfence',
+      'wordpress-seo',
+      'wordpress-seo-premium'
+    ];
     
-    const plugins = githubResponse.data
-      .filter(file => file.name.endsWith('.zip'))
-      .map(file => ({
-        name: file.name.replace('.zip', ''),
-        downloadUrl: file.download_url
-      }));
+    const plugins = pluginNames.map(name => ({
+      name: name,
+      downloadUrl: `${githubBaseUrl}/${name}.zip`
+    }));
     
-    console.log(`✅ Encontrados ${plugins.length} plugins: ${plugins.map(p => p.name).join(', ')}`);
+    console.log(`✅ ${plugins.length} plugins configurados`);
     
     if (plugins.length === 0) {
-      return { success: false, error: 'Nenhum plugin encontrado no repositório' };
+      return { success: false, error: 'Nenhum plugin configurado' };
     }
     
     // Obter credenciais WordPress
@@ -400,7 +403,6 @@ async function installPlugins(domain) {
         });
         
         // Enviar para WordPress
-
         const form = new FormData();
         form.append('file', Buffer.from(zipResponse.data), {
           filename: `${plugin.name}.zip`,
@@ -490,7 +492,7 @@ async function installPluginsViaFileManager(domain, plugins) {
           timeout: 120000
         });
         
-        // Upload para pasta temporária via cPanel
+        // Upload para pasta de plugins via cPanel
         const uploadUrl = `${baseUrl}${cpSecurityToken}/execute/Fileman/upload_files`;
         
         const form = new FormData();
@@ -573,6 +575,7 @@ async function installPluginsViaFileManager(domain, plugins) {
     return { success: false, error: error.message };
   }
 }
+
 // ========== FUNÇÃO PRINCIPAL ==========
 
 async function setupDomain(domain) {
