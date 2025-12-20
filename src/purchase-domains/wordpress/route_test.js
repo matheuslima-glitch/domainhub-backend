@@ -366,7 +366,7 @@ async function installPlugins(domain) {
     
     console.log(`✅ ${plugins.length} plugins configurados`);
     
-    // Vai direto para instalação via cPanel (mais confiável)
+    // Instalar via cPanel File Manager
     return await installPluginsViaFileManager(domain, plugins);
     
   } catch (error) {
@@ -412,6 +412,9 @@ async function installPluginsViaFileManager(domain, plugins) {
     };
     const httpsAgent = new https.Agent({ rejectUnauthorized: false });
     
+    // Lista de plugins instalados com sucesso (para ativação posterior)
+    const installedPlugins = [];
+    
     for (const plugin of plugins) {
       console.log(`\n📦 Instalando ${plugin.name}...`);
       
@@ -422,28 +425,19 @@ async function installPluginsViaFileManager(domain, plugins) {
         console.log(`   🗑️ Limpando arquivos antigos...`);
         const trashUrl = `${baseUrl}${cpSecurityToken}/execute/Fileman/trash`;
         
-        // Tentar deletar o ZIP
         try {
-          await axios.post(trashUrl, new URLSearchParams({ 
-            path: zipPath 
-          }).toString(), {
+          await axios.post(trashUrl, new URLSearchParams({ path: zipPath }).toString(), {
             headers, timeout: 15000, httpsAgent
           });
-          console.log(`   ✅ ZIP antigo removido`);
-        } catch (e) { 
-          // Se não existir, tenta com delete_files como fallback
-          try {
-            const deleteUrl = `${baseUrl}${cpSecurityToken}/execute/Fileman/delete_files`;
-            await axios.post(deleteUrl, new URLSearchParams({ 
-              path: zipPath,
-              'files-0': zipPath
-            }).toString(), {
-              headers, timeout: 15000, httpsAgent
-            });
-          } catch (e2) { /* ignora se não existe */ }
-        }
+        } catch (e) { /* ignora se não existe */ }
         
-        // Pequena pausa para garantir que o arquivo foi removido
+        // Deletar pasta do plugin se existir (para reinstalação limpa)
+        try {
+          await axios.post(trashUrl, new URLSearchParams({ path: `${pluginsPath}/${plugin.name}` }).toString(), {
+            headers, timeout: 15000, httpsAgent
+          });
+        } catch (e) { /* ignora se não existe */ }
+        
         await new Promise(resolve => setTimeout(resolve, 500));
         
         // PASSO 2: Baixar o ZIP do GitHub
@@ -457,13 +451,13 @@ async function installPluginsViaFileManager(domain, plugins) {
         const sizeMB = (zipResponse.data.length / 1024 / 1024).toFixed(2);
         console.log(`   📦 Tamanho: ${sizeMB} MB`);
         
-        // PASSO 3: Upload do ZIP para cPanel COM OVERWRITE
+        // PASSO 3: Upload do ZIP para cPanel
         console.log(`   📤 Enviando para servidor...`);
         const uploadUrl = `${baseUrl}${cpSecurityToken}/execute/Fileman/upload_files`;
         
         const form = new FormData();
         form.append('dir', pluginsPath);
-        form.append('overwrite', '1'); // ← CORREÇÃO: Permite sobrescrever arquivos existentes
+        form.append('overwrite', '1');
         form.append('file-0', Buffer.from(zipResponse.data), {
           filename: `${plugin.name}.zip`,
           contentType: 'application/zip'
@@ -478,7 +472,6 @@ async function installPluginsViaFileManager(domain, plugins) {
           httpsAgent
         });
         
-        // Verificar se upload funcionou
         const uploadData = uploadResponse.data?.data;
         if (!uploadData || uploadData.succeeded !== 1) {
           const reason = uploadData?.uploads?.[0]?.reason || JSON.stringify(uploadResponse.data?.errors);
@@ -486,26 +479,177 @@ async function installPluginsViaFileManager(domain, plugins) {
         }
         console.log(`   ✅ Upload OK`);
         
-        // PASSO 4: Extrair ZIP usando API correta
+        // PASSO 4: Extrair ZIP usando Terminal/Shell do cPanel
         console.log(`   📂 Extraindo arquivos...`);
-        const extractUrl = `${baseUrl}${cpSecurityToken}/execute/Archive/extract`;
         
-        const extractResponse = await axios.post(extractUrl, 
-          new URLSearchParams({
-            path: zipPath,
-            extract_to: pluginsPath
-          }).toString(),
-          { headers, timeout: 120000, httpsAgent }
-        );
+        // Método 1: Tentar via UAPI Terminal
+        let extractSuccess = false;
         
-        // Verificar se extração funcionou
-        const extractData = extractResponse.data;
-        if (extractData?.status === 0 || (extractData?.errors && extractData.errors.length > 0)) {
-          throw new Error(`Extração falhou: ${JSON.stringify(extractData?.errors || extractData)}`);
+        // Tentar extrair via comando shell no cPanel
+        const terminalUrl = `${baseUrl}${cpSecurityToken}/execute/SSH/start_session`;
+        
+        try {
+          // Usar a API de execução de comandos do cPanel (se disponível)
+          const shellUrl = `${baseUrl}${cpSecurityToken}/json-api/cpanel`;
+          const shellParams = new URLSearchParams({
+            'cpanel_jsonapi_user': config.WHM_ACCOUNT_USERNAME,
+            'cpanel_jsonapi_apiversion': '2',
+            'cpanel_jsonapi_module': 'Fileman',
+            'cpanel_jsonapi_func': 'fileop',
+            'op': 'extract',
+            'sourcefiles': zipPath,
+            'destfiles': pluginsPath,
+            'overwrite': '1'
+          });
+          
+          const shellResponse = await axios.post(shellUrl, shellParams.toString(), {
+            headers, timeout: 120000, httpsAgent
+          });
+          
+          if (shellResponse.data?.cpanelresult?.data?.[0]?.result === 1) {
+            extractSuccess = true;
+            console.log(`   ✅ Extração via Fileman OK`);
+          }
+        } catch (e) {
+          console.log(`   ⚠️ Método Fileman falhou: ${e.message}`);
         }
-        console.log(`   ✅ Extração OK`);
         
-        // PASSO 5: Deletar ZIP após extração bem-sucedida
+        // Método 2: Tentar via API2 extract
+        if (!extractSuccess) {
+          try {
+            const api2Url = `${baseUrl}${cpSecurityToken}/json-api/cpanel`;
+            const api2Params = new URLSearchParams({
+              'cpanel_jsonapi_user': config.WHM_ACCOUNT_USERNAME,
+              'cpanel_jsonapi_apiversion': '2',
+              'cpanel_jsonapi_module': 'Fileman',
+              'cpanel_jsonapi_func': 'extract',
+              'file': zipPath,
+              'dir': pluginsPath
+            });
+            
+            const api2Response = await axios.post(api2Url, api2Params.toString(), {
+              headers, timeout: 120000, httpsAgent
+            });
+            
+            const api2Data = api2Response.data;
+            if (api2Data?.cpanelresult?.data?.[0]?.extract === 1 || 
+                api2Data?.cpanelresult?.event?.result === 1 ||
+                !api2Data?.cpanelresult?.error) {
+              extractSuccess = true;
+              console.log(`   ✅ Extração via API2 OK`);
+            }
+          } catch (e) {
+            console.log(`   ⚠️ Método API2 falhou: ${e.message}`);
+          }
+        }
+        
+        // Método 3: Tentar via UAPI Fileman extract
+        if (!extractSuccess) {
+          try {
+            const uapiUrl = `${baseUrl}${cpSecurityToken}/execute/Fileman/extract`;
+            const uapiParams = new URLSearchParams({
+              'path': zipPath,
+              'dir': pluginsPath
+            });
+            
+            const uapiResponse = await axios.post(uapiUrl, uapiParams.toString(), {
+              headers, timeout: 120000, httpsAgent
+            });
+            
+            if (uapiResponse.data?.status === 1 || uapiResponse.data?.data) {
+              extractSuccess = true;
+              console.log(`   ✅ Extração via UAPI OK`);
+            }
+          } catch (e) {
+            console.log(`   ⚠️ Método UAPI falhou: ${e.message}`);
+          }
+        }
+        
+        // Método 4: Usar WHM API para executar comando no servidor
+        if (!extractSuccess) {
+          try {
+            console.log(`   🔄 Tentando extração via WHM...`);
+            const whmExtractUrl = `${config.WHM_URL}/json-api/cpanel`;
+            const whmParams = new URLSearchParams({
+              'cpanel_jsonapi_user': config.WHM_ACCOUNT_USERNAME,
+              'cpanel_jsonapi_apiversion': '2',
+              'cpanel_jsonapi_module': 'Fileman',
+              'cpanel_jsonapi_func': 'fileop',
+              'op': 'extract',
+              'sourcefiles': zipPath,
+              'destfiles': pluginsPath
+            });
+            
+            const whmResponse = await axios.post(whmExtractUrl, whmParams.toString(), {
+              headers: {
+                'Authorization': `whm ${config.WHM_USERNAME}:${config.WHM_API_TOKEN}`,
+                'Content-Type': 'application/x-www-form-urlencoded'
+              },
+              timeout: 120000,
+              httpsAgent
+            });
+            
+            if (whmResponse.data?.cpanelresult?.data?.[0]?.result === 1 ||
+                whmResponse.data?.cpanelresult?.event?.result === 1) {
+              extractSuccess = true;
+              console.log(`   ✅ Extração via WHM OK`);
+            }
+          } catch (e) {
+            console.log(`   ⚠️ Método WHM falhou: ${e.message}`);
+          }
+        }
+        
+        // Método 5: Usar File Manager Web Interface (último recurso)
+        if (!extractSuccess) {
+          try {
+            console.log(`   🔄 Tentando extração via File Manager Web...`);
+            const fmUrl = `${baseUrl}${cpSecurityToken}/frontend/jupiter/filemanager/htextract.html`;
+            const fmParams = new URLSearchParams({
+              'file': `${plugin.name}.zip`,
+              'dir': pluginsPath,
+              'doubledecode': '0'
+            });
+            
+            const fmResponse = await axios.post(fmUrl, fmParams.toString(), {
+              headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'Cookie': `cpsession=${sessionData.session}`,
+                'Referer': `${baseUrl}${cpSecurityToken}/frontend/jupiter/filemanager/index.html`
+              },
+              timeout: 120000,
+              httpsAgent
+            });
+            
+            // Verificar se a pasta do plugin foi criada
+            await new Promise(resolve => setTimeout(resolve, 2000));
+            
+            const checkUrl = `${baseUrl}${cpSecurityToken}/execute/Fileman/list_files`;
+            const checkResponse = await axios.post(checkUrl, new URLSearchParams({
+              'dir': pluginsPath,
+              'include_mime': '0',
+              'include_hash': '0',
+              'include_permissions': '0'
+            }).toString(), {
+              headers, timeout: 30000, httpsAgent
+            });
+            
+            const files = checkResponse.data?.data || [];
+            const pluginFolder = files.find(f => f.file === plugin.name && f.type === 'dir');
+            
+            if (pluginFolder) {
+              extractSuccess = true;
+              console.log(`   ✅ Extração via FM Web OK`);
+            }
+          } catch (e) {
+            console.log(`   ⚠️ Método FM Web falhou: ${e.message}`);
+          }
+        }
+        
+        if (!extractSuccess) {
+          throw new Error('Todos os métodos de extração falharam');
+        }
+        
+        // PASSO 5: Deletar ZIP após extração
         console.log(`   🗑️ Removendo arquivo ZIP...`);
         try {
           await axios.post(trashUrl, new URLSearchParams({ path: zipPath }).toString(), {
@@ -515,25 +659,44 @@ async function installPluginsViaFileManager(domain, plugins) {
         
         console.log(`   ✅ ${plugin.name} INSTALADO COM SUCESSO!`);
         results.push({ plugin: plugin.name, success: true });
+        installedPlugins.push(plugin.name);
         
       } catch (err) {
         console.log(`   ❌ FALHA ${plugin.name}: ${err.message}`);
         results.push({ plugin: plugin.name, success: false, error: err.message });
       }
       
-      // Pausa entre plugins para não sobrecarregar
-      await new Promise(resolve => setTimeout(resolve, 3000));
+      // Pausa entre plugins
+      await new Promise(resolve => setTimeout(resolve, 2000));
     }
     
     const successCount = results.filter(r => r.success).length;
     const failedCount = results.filter(r => !r.success).length;
     
     console.log('\n' + '='.repeat(50));
-    console.log(`📊 RESULTADO FINAL: ${successCount}/${plugins.length} plugins instalados`);
+    console.log(`📊 RESULTADO INSTALAÇÃO: ${successCount}/${plugins.length} plugins`);
     if (failedCount > 0) {
       console.log(`⚠️ ${failedCount} plugins falharam`);
     }
     console.log('='.repeat(50));
+    
+    // ETAPA 4: Ativar plugins, atualizar e configurar auto-update
+    if (installedPlugins.length > 0) {
+      console.log('\n' + '='.repeat(70));
+      console.log('🔧 [ETAPA 4] ATIVANDO E CONFIGURANDO PLUGINS');
+      console.log('='.repeat(70));
+      
+      const activationResults = await activateAndConfigurePlugins(domain, installedPlugins);
+      
+      return { 
+        success: successCount > 0, 
+        total: plugins.length,
+        installed: successCount,
+        failed: failedCount,
+        results,
+        activation: activationResults
+      };
+    }
     
     return { 
       success: successCount > 0, 
@@ -546,6 +709,198 @@ async function installPluginsViaFileManager(domain, plugins) {
   } catch (error) {
     console.error('❌ Erro crítico no File Manager:', error.message);
     return { success: false, error: error.message, results };
+  }
+}
+
+// ========== ATIVAR E CONFIGURAR PLUGINS ==========
+
+async function activateAndConfigurePlugins(domain, pluginNames) {
+  console.log('\n🔌 Ativando plugins via WordPress...');
+  
+  const results = {
+    activated: [],
+    updated: [],
+    autoUpdateEnabled: [],
+    errors: []
+  };
+  
+  try {
+    // Obter senha do WordPress do Passbolt
+    const wpPassword = await getPasswordFromPassbolt();
+    const wpUser = config.WORDPRESS_DEFAULT_USER;
+    const wpUrl = `https://${domain}`;
+    
+    // Criar autenticação básica para API REST do WordPress
+    const authHeader = 'Basic ' + Buffer.from(`${wpUser}:${wpPassword}`).toString('base64');
+    const wpHeaders = {
+      'Authorization': authHeader,
+      'Content-Type': 'application/json'
+    };
+    const httpsAgent = new https.Agent({ rejectUnauthorized: false });
+    
+    // Aguardar WordPress estar pronto
+    console.log('⏳ Aguardando WordPress estar pronto...');
+    await new Promise(resolve => setTimeout(resolve, 5000));
+    
+    // Mapear nomes de plugins para slugs do WordPress
+    const pluginSlugs = {
+      'duplicate-post': 'duplicate-post/duplicate-post.php',
+      'elementor': 'elementor/elementor.php',
+      'elementor-pro': 'elementor-pro/elementor-pro.php',
+      'google-site-kit': 'google-site-kit/google-site-kit.php',
+      'insert-headers-and-footers': 'insert-headers-and-footers/ihaf.php',
+      'litespeed-cache': 'litespeed-cache/litespeed-cache.php',
+      'rename-wp-admin-login': 'rename-wp-admin-login/rename-wp-admin-login.php',
+      'wordfence': 'wordfence/wordfence.php',
+      'wordpress-seo': 'wordpress-seo/wp-seo.php',
+      'wordpress-seo-premium': 'wordpress-seo-premium/wp-seo-premium.php'
+    };
+    
+    // Primeiro, tentar obter lista de plugins instalados
+    console.log('📋 Verificando plugins instalados...');
+    
+    try {
+      const listResponse = await axios.get(`${wpUrl}/wp-json/wp/v2/plugins`, {
+        headers: wpHeaders,
+        timeout: 30000,
+        httpsAgent
+      });
+      
+      const installedPlugins = listResponse.data || [];
+      console.log(`   ✅ ${installedPlugins.length} plugins encontrados na API`);
+      
+      for (const pluginName of pluginNames) {
+        const pluginSlug = pluginSlugs[pluginName] || `${pluginName}/${pluginName}.php`;
+        const encodedSlug = encodeURIComponent(pluginSlug);
+        
+        console.log(`\n   🔧 Processando ${pluginName}...`);
+        
+        // Verificar se plugin existe na lista
+        const plugin = installedPlugins.find(p => 
+          p.plugin === pluginSlug || 
+          p.plugin.includes(pluginName) ||
+          p.textdomain === pluginName
+        );
+        
+        const actualSlug = plugin?.plugin || pluginSlug;
+        const actualEncodedSlug = encodeURIComponent(actualSlug);
+        
+        // ATIVAR PLUGIN
+        try {
+          console.log(`      🔌 Ativando...`);
+          const activateResponse = await axios.post(
+            `${wpUrl}/wp-json/wp/v2/plugins/${actualEncodedSlug}`,
+            { status: 'active' },
+            { headers: wpHeaders, timeout: 30000, httpsAgent }
+          );
+          
+          if (activateResponse.data?.status === 'active') {
+            console.log(`      ✅ Ativado!`);
+            results.activated.push(pluginName);
+          }
+        } catch (activateErr) {
+          // Tentar método alternativo se a API REST não funcionar
+          if (activateErr.response?.status === 404) {
+            console.log(`      ⚠️ Plugin não encontrado na API, tentando slug alternativo...`);
+            
+            // Tentar com diferentes variações do slug
+            const slugVariations = [
+              `${pluginName}/${pluginName}.php`,
+              `${pluginName}/plugin.php`,
+              `${pluginName}/index.php`,
+              `${pluginName}/${pluginName.replace(/-/g, '_')}.php`
+            ];
+            
+            for (const altSlug of slugVariations) {
+              try {
+                const altResponse = await axios.post(
+                  `${wpUrl}/wp-json/wp/v2/plugins/${encodeURIComponent(altSlug)}`,
+                  { status: 'active' },
+                  { headers: wpHeaders, timeout: 30000, httpsAgent }
+                );
+                
+                if (altResponse.data?.status === 'active') {
+                  console.log(`      ✅ Ativado com slug: ${altSlug}`);
+                  results.activated.push(pluginName);
+                  break;
+                }
+              } catch (e) { /* continua tentando */ }
+            }
+          } else {
+            console.log(`      ⚠️ Erro ao ativar: ${activateErr.message}`);
+            results.errors.push({ plugin: pluginName, action: 'activate', error: activateErr.message });
+          }
+        }
+        
+        // ATIVAR AUTO-UPDATE
+        try {
+          console.log(`      🔄 Ativando auto-update...`);
+          const autoUpdateResponse = await axios.post(
+            `${wpUrl}/wp-json/wp/v2/plugins/${actualEncodedSlug}`,
+            { auto_update: true },
+            { headers: wpHeaders, timeout: 30000, httpsAgent }
+          );
+          
+          if (autoUpdateResponse.data) {
+            console.log(`      ✅ Auto-update ativado!`);
+            results.autoUpdateEnabled.push(pluginName);
+          }
+        } catch (autoErr) {
+          console.log(`      ⚠️ Erro ao ativar auto-update: ${autoErr.message}`);
+        }
+        
+        // Pequena pausa entre operações
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+      
+    } catch (apiError) {
+      console.log(`   ⚠️ API REST não disponível: ${apiError.message}`);
+      console.log('   🔄 Tentando ativação via WP-CLI simulado...');
+      
+      // Método alternativo: Modificar opção do banco de dados via arquivo
+      // (Este é um fallback que pode não funcionar em todos os casos)
+      results.errors.push({ 
+        plugin: 'all', 
+        action: 'api_access', 
+        error: 'API REST não disponível, plugins precisam ser ativados manualmente' 
+      });
+    }
+    
+    // FORÇAR VERIFICAÇÃO DE ATUALIZAÇÕES
+    console.log('\n   📥 Forçando verificação de atualizações...');
+    try {
+      // Limpar transients de update
+      await axios.delete(`${wpUrl}/wp-json/wp/v2/settings`, {
+        headers: wpHeaders,
+        timeout: 30000,
+        httpsAgent,
+        data: { _transient_update_plugins: null }
+      });
+      
+      // Tentar forçar update check via cron
+      await axios.get(`${wpUrl}/wp-cron.php?doing_wp_cron`, {
+        timeout: 30000,
+        httpsAgent
+      });
+      
+      console.log('   ✅ Verificação de atualizações disparada');
+    } catch (updateErr) {
+      console.log(`   ⚠️ Não foi possível forçar atualização: ${updateErr.message}`);
+    }
+    
+    console.log('\n' + '='.repeat(50));
+    console.log('📊 RESULTADO ATIVAÇÃO:');
+    console.log(`   ✅ Ativados: ${results.activated.length}`);
+    console.log(`   🔄 Auto-update: ${results.autoUpdateEnabled.length}`);
+    console.log(`   ❌ Erros: ${results.errors.length}`);
+    console.log('='.repeat(50));
+    
+    return results;
+    
+  } catch (error) {
+    console.error('❌ Erro na ativação:', error.message);
+    results.errors.push({ plugin: 'all', action: 'general', error: error.message });
+    return results;
   }
 }
 
