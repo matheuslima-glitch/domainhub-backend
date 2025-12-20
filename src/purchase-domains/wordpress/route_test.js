@@ -332,98 +332,147 @@ async function installWordPress(domain) {
   }
 }
 
-// ========== AUTENTICAÇÃO WORDPRESS VIA COOKIE ==========
+// ========== AUTENTICAÇÃO WORDPRESS - REDIRECT MANUAL ==========
 
 /**
- * Cria uma instância do axios com cookie jar manual
- * Acumula cookies de todas as respostas durante redirects
+ * Faz uma request HTTP seguindo redirects MANUALMENTE
+ * para capturar todos os cookies de cada resposta
  */
-function createWordPressClient(baseUrl) {
+async function httpRequestWithCookies(method, url, data, cookieJar, extraHeaders = {}) {
   const httpsAgent = new https.Agent({ rejectUnauthorized: false });
-  const cookieJar = new Map();
   
-  const client = axios.create({
-    baseURL: baseUrl,
-    httpsAgent,
-    timeout: 30000,
-    maxRedirects: 10,
-    validateStatus: (status) => status < 500,
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-      'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7'
-    }
-  });
-  
-  // Interceptor para capturar cookies de TODAS as respostas
-  client.interceptors.response.use((response) => {
-    const setCookies = response.headers['set-cookie'];
-    if (setCookies) {
-      setCookies.forEach(cookieStr => {
-        const [nameValue] = cookieStr.split(';');
-        const [name, value] = nameValue.split('=');
-        if (name && value) {
-          cookieJar.set(name.trim(), value.trim());
-        }
-      });
-    }
-    return response;
-  });
-  
-  // Interceptor para enviar cookies em TODAS as requests
-  client.interceptors.request.use((config) => {
-    if (cookieJar.size > 0) {
-      const cookieString = Array.from(cookieJar.entries())
-        .map(([name, value]) => `${name}=${value}`)
-        .join('; ');
-      config.headers['Cookie'] = cookieString;
-    }
-    return config;
-  });
-  
-  return {
-    client,
-    cookieJar,
-    getCookieString: () => {
-      return Array.from(cookieJar.entries())
-        .map(([name, value]) => `${name}=${value}`)
-        .join('; ');
-    }
+  const headers = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+    'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
+    ...extraHeaders
   };
+  
+  // Adicionar cookies ao header
+  if (cookieJar.size > 0) {
+    headers['Cookie'] = Array.from(cookieJar.entries())
+      .map(([name, value]) => `${name}=${value}`)
+      .join('; ');
+  }
+  
+  let currentUrl = url;
+  let redirectCount = 0;
+  const maxRedirects = 10;
+  
+  while (redirectCount < maxRedirects) {
+    try {
+      const config = {
+        method,
+        url: currentUrl,
+        headers,
+        httpsAgent,
+        timeout: 30000,
+        maxRedirects: 0, // Desabilitar redirects automáticos
+        validateStatus: () => true // Aceitar qualquer status
+      };
+      
+      if (data && method.toUpperCase() === 'POST') {
+        config.data = data;
+      }
+      
+      const response = await axios(config);
+      
+      // Capturar cookies desta resposta
+      const setCookies = response.headers['set-cookie'];
+      if (setCookies) {
+        setCookies.forEach(cookieStr => {
+          // Parse do cookie: "nome=valor; Path=/; ..."
+          const parts = cookieStr.split(';')[0].split('=');
+          const name = parts[0].trim();
+          const value = parts.slice(1).join('=').trim();
+          if (name && value) {
+            cookieJar.set(name, value);
+          }
+        });
+      }
+      
+      // Verificar se é redirect (301, 302, 303, 307, 308)
+      if ([301, 302, 303, 307, 308].includes(response.status)) {
+        const location = response.headers['location'];
+        if (!location) {
+          throw new Error(`Redirect ${response.status} sem Location header`);
+        }
+        
+        // Resolver URL relativa
+        if (location.startsWith('/')) {
+          const urlObj = new URL(currentUrl);
+          currentUrl = `${urlObj.protocol}//${urlObj.host}${location}`;
+        } else if (!location.startsWith('http')) {
+          const urlObj = new URL(currentUrl);
+          currentUrl = `${urlObj.protocol}//${urlObj.host}/${location}`;
+        } else {
+          currentUrl = location;
+        }
+        
+        // Atualizar cookie header para próxima request
+        if (cookieJar.size > 0) {
+          headers['Cookie'] = Array.from(cookieJar.entries())
+            .map(([name, value]) => `${name}=${value}`)
+            .join('; ');
+        }
+        
+        // Para 303, sempre usar GET
+        if (response.status === 303) {
+          method = 'GET';
+          data = null;
+        }
+        
+        redirectCount++;
+        continue;
+      }
+      
+      // Não é redirect, retornar resposta
+      return {
+        status: response.status,
+        data: response.data,
+        headers: response.headers,
+        finalUrl: currentUrl
+      };
+      
+    } catch (error) {
+      throw error;
+    }
+  }
+  
+  throw new Error(`Máximo de redirects (${maxRedirects}) excedido`);
 }
 
 /**
  * Autentica no WordPress via wp-login.php
- * 
- * FLUXO:
- * 1. GET wp-login.php para obter cookies iniciais
- * 2. POST credenciais para wp-login.php
- * 3. Seguir redirects, acumulando cookies
- * 4. Verificar se temos cookies de autenticação
- * 5. Acessar wp-admin para obter nonce
+ * Usa redirect manual para capturar TODOS os cookies
  */
 async function authenticateWordPress(domain, username, password) {
   console.log('\n🔐 [WORDPRESS] Autenticando via Cookie...');
   
   const wpUrl = `https://${domain}`;
-  const { client, cookieJar, getCookieString } = createWordPressClient(wpUrl);
+  const cookieJar = new Map();
   
   try {
     // PASSO 1: Acessar wp-login.php para obter cookies iniciais
     console.log('   1️⃣ Acessando página de login...');
     
-    const loginPageResponse = await client.get('/wp-login.php');
+    const loginPageResponse = await httpRequestWithCookies(
+      'GET',
+      `${wpUrl}/wp-login.php`,
+      null,
+      cookieJar
+    );
     
     if (loginPageResponse.status !== 200) {
       throw new Error(`Página de login retornou status ${loginPageResponse.status}`);
     }
     
-    // Setar cookie de teste
+    // Setar cookie de teste que o WordPress espera
     cookieJar.set('wordpress_test_cookie', 'WP%20Cookie%20check');
     
-    console.log(`   ✅ Página de login OK (cookies iniciais: ${cookieJar.size})`);
+    console.log(`   ✅ Página de login OK (cookies: ${cookieJar.size})`);
     
-    // PASSO 2: Fazer login
+    // PASSO 2: Fazer login com POST
     console.log('   2️⃣ Enviando credenciais...');
     
     const loginData = new URLSearchParams({
@@ -432,162 +481,162 @@ async function authenticateWordPress(domain, username, password) {
       'wp-submit': 'Log In',
       redirect_to: `${wpUrl}/wp-admin/`,
       testcookie: '1'
-    });
+    }).toString();
     
-    const loginResponse = await client.post('/wp-login.php', loginData.toString(), {
-      headers: {
+    const loginResponse = await httpRequestWithCookies(
+      'POST',
+      `${wpUrl}/wp-login.php`,
+      loginData,
+      cookieJar,
+      {
         'Content-Type': 'application/x-www-form-urlencoded',
-        'Referer': `${wpUrl}/wp-login.php`
+        'Referer': `${wpUrl}/wp-login.php`,
+        'Origin': wpUrl
       }
-    });
-    
-    // Debug: mostrar cookies recebidos
-    console.log(`   📦 Cookies após login: ${cookieJar.size}`);
-    for (const [name, value] of cookieJar.entries()) {
-      const displayValue = value.length > 20 ? value.substring(0, 20) + '...' : value;
-      console.log(`      - ${name}: ${displayValue}`);
-    }
-    
-    // Verificar se temos cookies de autenticação
-    const hasAuthCookie = Array.from(cookieJar.keys()).some(name => 
-      name.startsWith('wordpress_logged_in') || 
-      name.startsWith('wordpress_sec') ||
-      name.startsWith('wp-settings')
     );
     
-    if (!hasAuthCookie) {
-      // Verificar se a página contém erro de login
-      const responseHtml = loginResponse.data || '';
-      
-      if (responseHtml.includes('login_error') || responseHtml.includes('ERROR')) {
-        // Extrair mensagem de erro
-        const errorMatch = responseHtml.match(/<div[^>]*id="login_error"[^>]*>([\s\S]*?)<\/div>/i);
-        const errorMsg = errorMatch ? errorMatch[1].replace(/<[^>]+>/g, '').trim() : 'Credenciais inválidas';
+    // Debug: mostrar cookies
+    console.log(`   📦 Cookies após login: ${cookieJar.size}`);
+    for (const [name, value] of cookieJar.entries()) {
+      const displayValue = value.length > 30 ? value.substring(0, 30) + '...' : value;
+      const isAuth = name.includes('wordpress_logged_in') || name.includes('wordpress_sec');
+      console.log(`      ${isAuth ? '🔑' : '-'} ${name}: ${displayValue}`);
+    }
+    
+    // Verificar cookies de autenticação
+    const hasLoggedInCookie = Array.from(cookieJar.keys()).some(name => 
+      name.startsWith('wordpress_logged_in')
+    );
+    
+    const hasSecCookie = Array.from(cookieJar.keys()).some(name => 
+      name.startsWith('wordpress_sec')
+    );
+    
+    if (!hasLoggedInCookie && !hasSecCookie) {
+      // Verificar se página de login mostra erro
+      const html = loginResponse.data || '';
+      if (html.includes('login_error') || html.includes('Erro')) {
+        const errorMatch = html.match(/<div[^>]*id="login_error"[^>]*>([\s\S]*?)<\/div>/i);
+        const errorMsg = errorMatch 
+          ? errorMatch[1].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim()
+          : 'Credenciais inválidas';
         throw new Error(`Login falhou: ${errorMsg}`);
       }
       
-      // Pode ser que o WordPress não setou cookies por algum motivo de segurança
-      console.log('   ⚠️ Cookies de autenticação não encontrados, tentando continuar...');
+      // Pode ser que o WordPress redirecione para outra página de verificação
+      console.log('   ⚠️ Cookies de autenticação não encontrados');
+      console.log(`   📍 URL final: ${loginResponse.finalUrl}`);
+      
+      // Se fomos parar em wp-admin, provavelmente funcionou
+      if (loginResponse.finalUrl.includes('wp-admin')) {
+        console.log('   ✅ Redirecionado para wp-admin (login OK)');
+      } else {
+        throw new Error('Login falhou - cookies de autenticação não recebidos');
+      }
     } else {
       console.log('   ✅ Login OK - cookies de autenticação recebidos');
     }
     
-    // PASSO 3: Acessar wp-admin para obter nonce
+    // PASSO 3: Acessar wp-admin/plugins.php para obter nonce
     console.log('   3️⃣ Acessando wp-admin para obter nonce...');
     
-    const adminResponse = await client.get('/wp-admin/plugins.php');
+    const adminResponse = await httpRequestWithCookies(
+      'GET',
+      `${wpUrl}/wp-admin/plugins.php`,
+      null,
+      cookieJar
+    );
     
-    // Verificar se fomos redirecionados para login (sessão inválida)
-    if (adminResponse.request?.path?.includes('wp-login.php') || 
-        adminResponse.data?.includes('wp-login.php')) {
+    // Verificar se fomos redirecionados para login
+    if (adminResponse.finalUrl.includes('wp-login.php')) {
       throw new Error('Sessão não autenticada - redirecionado para login');
     }
     
     const adminHtml = adminResponse.data || '';
     
-    // Extrair nonce - tentar múltiplos métodos
+    // Extrair nonce
     let nonce = null;
     
-    // Método 1: wpApiSettings.nonce
+    // Método 1: wpApiSettings.nonce (mais comum em WP moderno)
     const wpApiMatch = adminHtml.match(/wpApiSettings\s*=\s*\{[^}]*"nonce"\s*:\s*"([^"]+)"/);
     if (wpApiMatch) {
       nonce = wpApiMatch[1];
       console.log('   ✅ Nonce obtido via wpApiSettings');
     }
     
-    // Método 2: wp.apiFetch.nonceMiddleware
+    // Método 2: Buscar em scripts inline
     if (!nonce) {
-      const apiFetchMatch = adminHtml.match(/wp\.apiFetch\.nonceMiddleware\s*=\s*[^"]*"([^"]+)"/);
-      if (apiFetchMatch) {
-        nonce = apiFetchMatch[1];
-        console.log('   ✅ Nonce obtido via apiFetch');
+      const nonceMatch = adminHtml.match(/"nonce"\s*:\s*"([a-f0-9]{10})"/);
+      if (nonceMatch) {
+        nonce = nonceMatch[1];
+        console.log('   ✅ Nonce obtido via script inline');
       }
     }
     
     // Método 3: _wpnonce em forms
     if (!nonce) {
-      const wpNonceMatch = adminHtml.match(/name="_wpnonce"\s+value="([^"]+)"/);
-      if (wpNonceMatch) {
-        nonce = wpNonceMatch[1];
+      const formNonceMatch = adminHtml.match(/name="_wpnonce"\s+value="([^"]+)"/);
+      if (formNonceMatch) {
+        nonce = formNonceMatch[1];
         console.log('   ✅ Nonce obtido via form');
       }
     }
     
-    // Método 4: data-wp-nonce
     if (!nonce) {
-      const dataNonceMatch = adminHtml.match(/data-wp-nonce="([^"]+)"/);
-      if (dataNonceMatch) {
-        nonce = dataNonceMatch[1];
-        console.log('   ✅ Nonce obtido via data attribute');
-      }
+      console.log('   ⚠️ Nonce não encontrado, continuando sem nonce...');
     }
     
-    // Método 5: Buscar qualquer nonce no HTML
-    if (!nonce) {
-      const anyNonceMatch = adminHtml.match(/"nonce"\s*:\s*"([a-f0-9]{10})"/);
-      if (anyNonceMatch) {
-        nonce = anyNonceMatch[1];
-        console.log('   ✅ Nonce obtido via regex genérico');
-      }
-    }
-    
-    if (!nonce) {
-      console.log('   ⚠️ Nonce não encontrado, tentando sem nonce...');
-    }
-    
-    // PASSO 4: Verificar se REST API está acessível
+    // PASSO 4: Testar REST API
     console.log('   4️⃣ Verificando REST API...');
     
     const restHeaders = {
       'Content-Type': 'application/json',
       'Accept': 'application/json'
     };
-    
     if (nonce) {
       restHeaders['X-WP-Nonce'] = nonce;
     }
     
-    const restResponse = await client.get('/wp-json/wp/v2/plugins', {
-      headers: restHeaders
-    });
+    const restResponse = await httpRequestWithCookies(
+      'GET',
+      `${wpUrl}/wp-json/wp/v2/plugins`,
+      null,
+      cookieJar,
+      restHeaders
+    );
     
     if (restResponse.status === 401) {
-      console.log('   ⚠️ REST API retornou 401, tentando sem nonce...');
-      
-      // Tentar sem nonce
-      const restResponse2 = await client.get('/wp-json/wp/v2/plugins', {
-        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' }
-      });
-      
-      if (restResponse2.status === 401) {
-        throw new Error('REST API inacessível - autenticação falhou');
-      }
+      throw new Error('REST API retornou 401 - autenticação não reconhecida');
     }
     
     if (restResponse.status === 404) {
-      throw new Error('REST API de plugins não encontrada (404) - verifique se a API está habilitada');
+      throw new Error('REST API de plugins não encontrada (404)');
     }
     
     if (restResponse.status === 403) {
-      throw new Error('Sem permissão para acessar plugins (403) - usuário pode não ser admin');
+      throw new Error('Sem permissão para acessar plugins (403)');
+    }
+    
+    if (restResponse.status !== 200) {
+      throw new Error(`REST API retornou status ${restResponse.status}`);
     }
     
     console.log('   ✅ REST API acessível');
     
+    // Retornar dados de autenticação
+    const cookieString = Array.from(cookieJar.entries())
+      .map(([name, value]) => `${name}=${value}`)
+      .join('; ');
+    
     return {
-      client,
-      cookies: getCookieString(),
+      cookieJar,
+      cookies: cookieString,
       nonce: nonce,
       wpUrl: wpUrl
     };
     
   } catch (error) {
-    // Logar mais detalhes do erro
     console.log(`   ❌ Erro: ${error.message}`);
-    if (error.response) {
-      console.log(`   📊 Status: ${error.response.status}`);
-      console.log(`   📦 Cookies atuais: ${cookieJar.size}`);
-    }
     throw error;
   }
 }
@@ -602,7 +651,6 @@ async function installPlugins(domain) {
   const results = [];
   
   try {
-    // Lista de plugins
     console.log('📋 Carregando lista de plugins...');
     const githubBaseUrl = 'https://raw.githubusercontent.com/matheuslima-glitch/wordpress-plugins/main';
     
@@ -626,7 +674,6 @@ async function installPlugins(domain) {
     
     console.log(`✅ ${plugins.length} plugins configurados`);
     
-    // Instalar via cPanel File Manager
     return await installPluginsViaFileManager(domain, plugins);
     
   } catch (error) {
@@ -642,7 +689,6 @@ async function installPluginsViaFileManager(domain, plugins) {
   const results = [];
   
   try {
-    // Criar sessão no cPanel
     console.log('🔑 Criando sessão no cPanel...');
     const sessionResponse = await axios.get(
       `${config.WHM_URL}/json-api/create_user_session?api.version=1&user=${config.WHM_ACCOUNT_USERNAME}&service=cpaneld`,
@@ -672,7 +718,6 @@ async function installPluginsViaFileManager(domain, plugins) {
     };
     const httpsAgent = new https.Agent({ rejectUnauthorized: false });
     
-    // Lista de plugins instalados com sucesso (para ativação posterior)
     const installedPlugins = [];
     
     for (const plugin of plugins) {
@@ -681,7 +726,6 @@ async function installPluginsViaFileManager(domain, plugins) {
       try {
         const zipPath = `${pluginsPath}/${plugin.name}.zip`;
         
-        // PASSO 1: Deletar ZIP antigo e pasta do plugin se existirem
         console.log(`   🗑️ Limpando arquivos antigos...`);
         const trashUrl = `${baseUrl}${cpSecurityToken}/execute/Fileman/trash`;
         
@@ -689,17 +733,16 @@ async function installPluginsViaFileManager(domain, plugins) {
           await axios.post(trashUrl, new URLSearchParams({ path: zipPath }).toString(), {
             headers, timeout: 15000, httpsAgent
           });
-        } catch (e) { /* ignora se não existe */ }
+        } catch (e) { /* ignora */ }
         
         try {
           await axios.post(trashUrl, new URLSearchParams({ path: `${pluginsPath}/${plugin.name}` }).toString(), {
             headers, timeout: 15000, httpsAgent
           });
-        } catch (e) { /* ignora se não existe */ }
+        } catch (e) { /* ignora */ }
         
         await new Promise(resolve => setTimeout(resolve, 500));
         
-        // PASSO 2: Baixar o ZIP do GitHub
         console.log(`   ⬇️ Baixando do GitHub...`);
         const zipResponse = await axios.get(plugin.downloadUrl, {
           responseType: 'arraybuffer',
@@ -710,7 +753,6 @@ async function installPluginsViaFileManager(domain, plugins) {
         const sizeMB = (zipResponse.data.length / 1024 / 1024).toFixed(2);
         console.log(`   📦 Tamanho: ${sizeMB} MB`);
         
-        // PASSO 3: Upload do ZIP para cPanel
         console.log(`   📤 Enviando para servidor...`);
         const uploadUrl = `${baseUrl}${cpSecurityToken}/execute/Fileman/upload_files`;
         
@@ -738,7 +780,6 @@ async function installPluginsViaFileManager(domain, plugins) {
         }
         console.log(`   ✅ Upload OK`);
         
-        // PASSO 4: Extrair ZIP
         console.log(`   📂 Extraindo arquivos...`);
         
         let extractSuccess = false;
@@ -804,7 +845,6 @@ async function installPluginsViaFileManager(domain, plugins) {
           throw new Error('Todos os métodos de extração falharam');
         }
         
-        // PASSO 5: Deletar ZIP
         console.log(`   🗑️ Removendo arquivo ZIP...`);
         try {
           await axios.post(trashUrl, new URLSearchParams({ path: zipPath }).toString(), {
@@ -834,7 +874,6 @@ async function installPluginsViaFileManager(domain, plugins) {
     }
     console.log('='.repeat(50));
     
-    // ETAPA 4: Ativar plugins
     if (installedPlugins.length > 0) {
       console.log('\n' + '='.repeat(70));
       console.log('🔧 [ETAPA 4] ATIVANDO E CONFIGURANDO PLUGINS');
@@ -879,38 +918,38 @@ async function activatePluginsViaREST(domain, pluginNames) {
   };
   
   try {
-    // Obter senha do WordPress
     const wpPassword = await getPasswordFromPassbolt();
     const wpUser = config.WORDPRESS_DEFAULT_USER;
     
-    // Autenticar no WordPress
     const auth = await authenticateWordPress(domain, wpUser, wpPassword);
     
-    // Headers para REST API
     const restHeaders = {
       'Content-Type': 'application/json',
       'Accept': 'application/json'
     };
-    
     if (auth.nonce) {
       restHeaders['X-WP-Nonce'] = auth.nonce;
     }
     
-    // PASSO 1: Listar todos os plugins instalados
+    // PASSO 1: Listar plugins
     console.log('\n   📋 Listando plugins instalados...');
     
-    const listResponse = await auth.client.get('/wp-json/wp/v2/plugins', {
-      headers: restHeaders
-    });
+    const listResponse = await httpRequestWithCookies(
+      'GET',
+      `${auth.wpUrl}/wp-json/wp/v2/plugins`,
+      null,
+      auth.cookieJar,
+      restHeaders
+    );
     
     if (listResponse.status !== 200) {
       throw new Error(`Falha ao listar plugins: status ${listResponse.status}`);
     }
     
-    const installedPlugins = listResponse.data || [];
+    const installedPlugins = Array.isArray(listResponse.data) ? listResponse.data : [];
     console.log(`   ✅ ${installedPlugins.length} plugins encontrados`);
     
-    // Criar mapa de plugins
+    // Mapa de plugins
     const pluginMap = {};
     installedPlugins.forEach(p => {
       const pluginFolder = p.plugin.split('/')[0];
@@ -925,7 +964,7 @@ async function activatePluginsViaREST(domain, pluginNames) {
       
       if (!plugin) {
         console.log(`   ⚠️ ${pluginName}: não encontrado`);
-        results.errors.push({ plugin: pluginName, action: 'find', error: 'Plugin não encontrado' });
+        results.errors.push({ plugin: pluginName, action: 'find', error: 'Não encontrado' });
         continue;
       }
       
@@ -939,22 +978,27 @@ async function activatePluginsViaREST(domain, pluginNames) {
       }
       
       try {
-        const activateResponse = await auth.client.post(
-          `/wp-json/wp/v2/plugins/${encodedSlug}`,
-          { status: 'active' },
-          { headers: restHeaders, timeout: 60000 }
+        const activateResponse = await httpRequestWithCookies(
+          'POST',
+          `${auth.wpUrl}/wp-json/wp/v2/plugins/${encodedSlug}`,
+          JSON.stringify({ status: 'active' }),
+          auth.cookieJar,
+          restHeaders
         );
         
-        if (activateResponse.data?.status === 'active') {
+        const responseData = typeof activateResponse.data === 'string' 
+          ? JSON.parse(activateResponse.data) 
+          : activateResponse.data;
+        
+        if (responseData?.status === 'active') {
           console.log(`   ✅ ${pluginName}: ativado`);
           results.activated.push(pluginName);
         } else {
           console.log(`   ⚠️ ${pluginName}: status não confirmado`);
         }
       } catch (activateErr) {
-        const errMsg = activateErr.response?.data?.message || activateErr.message;
-        console.log(`   ❌ ${pluginName}: ${errMsg}`);
-        results.errors.push({ plugin: pluginName, action: 'activate', error: errMsg });
+        console.log(`   ❌ ${pluginName}: ${activateErr.message}`);
+        results.errors.push({ plugin: pluginName, action: 'activate', error: activateErr.message });
       }
       
       await new Promise(resolve => setTimeout(resolve, 1000));
@@ -964,33 +1008,50 @@ async function activatePluginsViaREST(domain, pluginNames) {
     console.log('\n   📥 Forçando verificação de atualizações...');
     
     try {
-      await auth.client.get('/wp-cron.php?doing_wp_cron', { timeout: 30000 });
+      await httpRequestWithCookies(
+        'GET',
+        `${auth.wpUrl}/wp-cron.php?doing_wp_cron`,
+        null,
+        auth.cookieJar
+      );
       console.log('   ✅ Cron executado');
       results.updated.push('cron_executed');
     } catch (cronErr) {
-      console.log(`   ⚠️ Cron falhou: ${cronErr.message}`);
+      console.log(`   ⚠️ Cron: ${cronErr.message}`);
     }
     
     // PASSO 4: Ativar auto-update
     console.log('\n   🔄 Ativando auto-update...');
     
+    // Recarregar lista
+    const updatedListResponse = await httpRequestWithCookies(
+      'GET',
+      `${auth.wpUrl}/wp-json/wp/v2/plugins`,
+      null,
+      auth.cookieJar,
+      restHeaders
+    );
+    
+    const updatedPlugins = Array.isArray(updatedListResponse.data) ? updatedListResponse.data : [];
+    
     for (const pluginName of pluginNames) {
-      const plugin = pluginMap[pluginName];
+      const plugin = updatedPlugins.find(p => p.plugin.startsWith(pluginName + '/'));
       if (!plugin) continue;
       
-      const pluginSlug = plugin.plugin;
-      const encodedSlug = encodeURIComponent(pluginSlug);
+      const encodedSlug = encodeURIComponent(plugin.plugin);
       
       try {
-        await auth.client.post(
-          `/wp-json/wp/v2/plugins/${encodedSlug}`,
-          { auto_update: true },
-          { headers: restHeaders, timeout: 30000 }
+        await httpRequestWithCookies(
+          'POST',
+          `${auth.wpUrl}/wp-json/wp/v2/plugins/${encodedSlug}`,
+          JSON.stringify({ auto_update: true }),
+          auth.cookieJar,
+          restHeaders
         );
         console.log(`   ✅ ${pluginName}: auto-update ativado`);
         results.autoUpdateEnabled.push(pluginName);
       } catch (autoErr) {
-        console.log(`   ⚠️ ${pluginName}: auto-update não disponível`);
+        console.log(`   ⚠️ ${pluginName}: auto-update falhou`);
       }
       
       await new Promise(resolve => setTimeout(resolve, 500));
@@ -1054,7 +1115,7 @@ async function setupDomain(domain) {
   return result;
 }
 
-// ========== ROTAS DE TESTE ==========
+// ========== ROTAS ==========
 
 router.post('/whm-test', async (req, res) => {
   const { domain } = req.body;
@@ -1125,16 +1186,6 @@ router.post('/plugins-only', async (req, res) => {
   }
 });
 
-router.get('/passbolt-test', async (req, res) => {
-  try {
-    const password = await getPasswordFromPassbolt();
-    res.json({ success: true, passwordLength: password.length });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// Rota para testar APENAS a ativação dos plugins (sem instalar)
 router.post('/activate-only', async (req, res) => {
   const { domain } = req.body;
   
@@ -1148,7 +1199,6 @@ router.post('/activate-only', async (req, res) => {
   console.log('='.repeat(70));
   
   try {
-    // Lista de plugins que devem estar instalados
     const pluginNames = [
       'duplicate-post',
       'elementor',
@@ -1166,6 +1216,15 @@ router.post('/activate-only', async (req, res) => {
     res.json({ domain, ...result });
   } catch (error) {
     console.error('❌ ERRO:', error.message);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+router.get('/passbolt-test', async (req, res) => {
+  try {
+    const password = await getPasswordFromPassbolt();
+    res.json({ success: true, passwordLength: password.length });
+  } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
 });
