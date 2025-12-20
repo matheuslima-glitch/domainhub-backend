@@ -332,323 +332,12 @@ async function installWordPress(domain) {
   }
 }
 
-// ========== AUTENTICAÇÃO WORDPRESS - REDIRECT MANUAL ==========
-
-/**
- * Faz uma request HTTP seguindo redirects MANUALMENTE
- * para capturar todos os cookies de cada resposta
- */
-async function httpRequestWithCookies(method, url, data, cookieJar, extraHeaders = {}) {
-  const httpsAgent = new https.Agent({ rejectUnauthorized: false });
-  
-  const headers = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-    'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
-    ...extraHeaders
-  };
-  
-  // Adicionar cookies ao header
-  if (cookieJar.size > 0) {
-    headers['Cookie'] = Array.from(cookieJar.entries())
-      .map(([name, value]) => `${name}=${value}`)
-      .join('; ');
-  }
-  
-  let currentUrl = url;
-  let redirectCount = 0;
-  const maxRedirects = 10;
-  
-  while (redirectCount < maxRedirects) {
-    try {
-      const config = {
-        method,
-        url: currentUrl,
-        headers,
-        httpsAgent,
-        timeout: 30000,
-        maxRedirects: 0, // Desabilitar redirects automáticos
-        validateStatus: () => true // Aceitar qualquer status
-      };
-      
-      if (data && method.toUpperCase() === 'POST') {
-        config.data = data;
-      }
-      
-      const response = await axios(config);
-      
-      // Capturar cookies desta resposta
-      const setCookies = response.headers['set-cookie'];
-      if (setCookies) {
-        setCookies.forEach(cookieStr => {
-          // Parse do cookie: "nome=valor; Path=/; ..."
-          const parts = cookieStr.split(';')[0].split('=');
-          const name = parts[0].trim();
-          const value = parts.slice(1).join('=').trim();
-          if (name && value) {
-            cookieJar.set(name, value);
-          }
-        });
-      }
-      
-      // Verificar se é redirect (301, 302, 303, 307, 308)
-      if ([301, 302, 303, 307, 308].includes(response.status)) {
-        const location = response.headers['location'];
-        if (!location) {
-          throw new Error(`Redirect ${response.status} sem Location header`);
-        }
-        
-        // Resolver URL relativa
-        if (location.startsWith('/')) {
-          const urlObj = new URL(currentUrl);
-          currentUrl = `${urlObj.protocol}//${urlObj.host}${location}`;
-        } else if (!location.startsWith('http')) {
-          const urlObj = new URL(currentUrl);
-          currentUrl = `${urlObj.protocol}//${urlObj.host}/${location}`;
-        } else {
-          currentUrl = location;
-        }
-        
-        // Atualizar cookie header para próxima request
-        if (cookieJar.size > 0) {
-          headers['Cookie'] = Array.from(cookieJar.entries())
-            .map(([name, value]) => `${name}=${value}`)
-            .join('; ');
-        }
-        
-        // Para 303, sempre usar GET
-        if (response.status === 303) {
-          method = 'GET';
-          data = null;
-        }
-        
-        redirectCount++;
-        continue;
-      }
-      
-      // Não é redirect, retornar resposta
-      return {
-        status: response.status,
-        data: response.data,
-        headers: response.headers,
-        finalUrl: currentUrl
-      };
-      
-    } catch (error) {
-      throw error;
-    }
-  }
-  
-  throw new Error(`Máximo de redirects (${maxRedirects}) excedido`);
-}
-
-/**
- * Autentica no WordPress via wp-login.php
- * Usa redirect manual para capturar TODOS os cookies
- */
-async function authenticateWordPress(domain, username, password) {
-  console.log('\n🔐 [WORDPRESS] Autenticando via Cookie...');
-  
-  const wpUrl = `https://${domain}`;
-  const cookieJar = new Map();
-  
-  try {
-    // PASSO 1: Acessar wp-login.php para obter cookies iniciais
-    console.log('   1️⃣ Acessando página de login...');
-    
-    const loginPageResponse = await httpRequestWithCookies(
-      'GET',
-      `${wpUrl}/wp-login.php`,
-      null,
-      cookieJar
-    );
-    
-    if (loginPageResponse.status !== 200) {
-      throw new Error(`Página de login retornou status ${loginPageResponse.status}`);
-    }
-    
-    // Setar cookie de teste que o WordPress espera
-    cookieJar.set('wordpress_test_cookie', 'WP%20Cookie%20check');
-    
-    console.log(`   ✅ Página de login OK (cookies: ${cookieJar.size})`);
-    
-    // PASSO 2: Fazer login com POST
-    console.log('   2️⃣ Enviando credenciais...');
-    
-    const loginData = new URLSearchParams({
-      log: username,
-      pwd: password,
-      'wp-submit': 'Log In',
-      redirect_to: `${wpUrl}/wp-admin/`,
-      testcookie: '1'
-    }).toString();
-    
-    const loginResponse = await httpRequestWithCookies(
-      'POST',
-      `${wpUrl}/wp-login.php`,
-      loginData,
-      cookieJar,
-      {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'Referer': `${wpUrl}/wp-login.php`,
-        'Origin': wpUrl
-      }
-    );
-    
-    // Debug: mostrar cookies
-    console.log(`   📦 Cookies após login: ${cookieJar.size}`);
-    for (const [name, value] of cookieJar.entries()) {
-      const displayValue = value.length > 30 ? value.substring(0, 30) + '...' : value;
-      const isAuth = name.includes('wordpress_logged_in') || name.includes('wordpress_sec');
-      console.log(`      ${isAuth ? '🔑' : '-'} ${name}: ${displayValue}`);
-    }
-    
-    // Verificar cookies de autenticação
-    const hasLoggedInCookie = Array.from(cookieJar.keys()).some(name => 
-      name.startsWith('wordpress_logged_in')
-    );
-    
-    const hasSecCookie = Array.from(cookieJar.keys()).some(name => 
-      name.startsWith('wordpress_sec')
-    );
-    
-    if (!hasLoggedInCookie && !hasSecCookie) {
-      // Verificar se página de login mostra erro
-      const html = loginResponse.data || '';
-      if (html.includes('login_error') || html.includes('Erro')) {
-        const errorMatch = html.match(/<div[^>]*id="login_error"[^>]*>([\s\S]*?)<\/div>/i);
-        const errorMsg = errorMatch 
-          ? errorMatch[1].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim()
-          : 'Credenciais inválidas';
-        throw new Error(`Login falhou: ${errorMsg}`);
-      }
-      
-      // Pode ser que o WordPress redirecione para outra página de verificação
-      console.log('   ⚠️ Cookies de autenticação não encontrados');
-      console.log(`   📍 URL final: ${loginResponse.finalUrl}`);
-      
-      // Se fomos parar em wp-admin, provavelmente funcionou
-      if (loginResponse.finalUrl.includes('wp-admin')) {
-        console.log('   ✅ Redirecionado para wp-admin (login OK)');
-      } else {
-        throw new Error('Login falhou - cookies de autenticação não recebidos');
-      }
-    } else {
-      console.log('   ✅ Login OK - cookies de autenticação recebidos');
-    }
-    
-    // PASSO 3: Acessar wp-admin/plugins.php para obter nonce
-    console.log('   3️⃣ Acessando wp-admin para obter nonce...');
-    
-    const adminResponse = await httpRequestWithCookies(
-      'GET',
-      `${wpUrl}/wp-admin/plugins.php`,
-      null,
-      cookieJar
-    );
-    
-    // Verificar se fomos redirecionados para login
-    if (adminResponse.finalUrl.includes('wp-login.php')) {
-      throw new Error('Sessão não autenticada - redirecionado para login');
-    }
-    
-    const adminHtml = adminResponse.data || '';
-    
-    // Extrair nonce
-    let nonce = null;
-    
-    // Método 1: wpApiSettings.nonce (mais comum em WP moderno)
-    const wpApiMatch = adminHtml.match(/wpApiSettings\s*=\s*\{[^}]*"nonce"\s*:\s*"([^"]+)"/);
-    if (wpApiMatch) {
-      nonce = wpApiMatch[1];
-      console.log('   ✅ Nonce obtido via wpApiSettings');
-    }
-    
-    // Método 2: Buscar em scripts inline
-    if (!nonce) {
-      const nonceMatch = adminHtml.match(/"nonce"\s*:\s*"([a-f0-9]{10})"/);
-      if (nonceMatch) {
-        nonce = nonceMatch[1];
-        console.log('   ✅ Nonce obtido via script inline');
-      }
-    }
-    
-    // Método 3: _wpnonce em forms
-    if (!nonce) {
-      const formNonceMatch = adminHtml.match(/name="_wpnonce"\s+value="([^"]+)"/);
-      if (formNonceMatch) {
-        nonce = formNonceMatch[1];
-        console.log('   ✅ Nonce obtido via form');
-      }
-    }
-    
-    if (!nonce) {
-      console.log('   ⚠️ Nonce não encontrado, continuando sem nonce...');
-    }
-    
-    // PASSO 4: Testar REST API
-    console.log('   4️⃣ Verificando REST API...');
-    
-    const restHeaders = {
-      'Content-Type': 'application/json',
-      'Accept': 'application/json'
-    };
-    if (nonce) {
-      restHeaders['X-WP-Nonce'] = nonce;
-    }
-    
-    const restResponse = await httpRequestWithCookies(
-      'GET',
-      `${wpUrl}/wp-json/wp/v2/plugins`,
-      null,
-      cookieJar,
-      restHeaders
-    );
-    
-    if (restResponse.status === 401) {
-      throw new Error('REST API retornou 401 - autenticação não reconhecida');
-    }
-    
-    if (restResponse.status === 404) {
-      throw new Error('REST API de plugins não encontrada (404)');
-    }
-    
-    if (restResponse.status === 403) {
-      throw new Error('Sem permissão para acessar plugins (403)');
-    }
-    
-    if (restResponse.status !== 200) {
-      throw new Error(`REST API retornou status ${restResponse.status}`);
-    }
-    
-    console.log('   ✅ REST API acessível');
-    
-    // Retornar dados de autenticação
-    const cookieString = Array.from(cookieJar.entries())
-      .map(([name, value]) => `${name}=${value}`)
-      .join('; ');
-    
-    return {
-      cookieJar,
-      cookies: cookieString,
-      nonce: nonce,
-      wpUrl: wpUrl
-    };
-    
-  } catch (error) {
-    console.log(`   ❌ Erro: ${error.message}`);
-    throw error;
-  }
-}
-
 // ========== ETAPA 3: INSTALAR PLUGINS ==========
 
 async function installPlugins(domain) {
   console.log('\n' + '='.repeat(70));
   console.log('🔌 [ETAPA 3] INSTALANDO PLUGINS');
   console.log('='.repeat(70));
-  
-  const results = [];
   
   try {
     console.log('📋 Carregando lista de plugins...');
@@ -725,10 +414,9 @@ async function installPluginsViaFileManager(domain, plugins) {
       
       try {
         const zipPath = `${pluginsPath}/${plugin.name}.zip`;
-        
-        console.log(`   🗑️ Limpando arquivos antigos...`);
         const trashUrl = `${baseUrl}${cpSecurityToken}/execute/Fileman/trash`;
         
+        console.log(`   🗑️ Limpando arquivos antigos...`);
         try {
           await axios.post(trashUrl, new URLSearchParams({ path: zipPath }).toString(), {
             headers, timeout: 15000, httpsAgent
@@ -874,12 +562,18 @@ async function installPluginsViaFileManager(domain, plugins) {
     }
     console.log('='.repeat(50));
     
+    // ETAPA 4: Ativar plugins via MU-Plugin
     if (installedPlugins.length > 0) {
       console.log('\n' + '='.repeat(70));
       console.log('🔧 [ETAPA 4] ATIVANDO E CONFIGURANDO PLUGINS');
       console.log('='.repeat(70));
       
-      const activationResults = await activatePluginsViaREST(domain, installedPlugins);
+      const activationResults = await activatePluginsViaMuPlugin(
+        domain, 
+        installedPlugins, 
+        sessionData, 
+        cpSecurityToken
+      );
       
       return { 
         success: successCount > 0, 
@@ -905,10 +599,25 @@ async function installPluginsViaFileManager(domain, plugins) {
   }
 }
 
-// ========== ATIVAR PLUGINS VIA REST API ==========
+// ========== ATIVAR PLUGINS VIA MU-PLUGIN ==========
 
-async function activatePluginsViaREST(domain, pluginNames) {
-  console.log('\n🔌 Ativando plugins via WordPress REST API...');
+/**
+ * Ativa plugins via MU-Plugin (Must-Use Plugin)
+ * 
+ * COMO FUNCIONA:
+ * 1. Cria pasta mu-plugins se não existir
+ * 2. Upload de arquivo PHP que será executado automaticamente
+ * 3. Faz requisição HTTP ao site (dispara execução do mu-plugin)
+ * 4. O mu-plugin ativa plugins, força update, ativa auto-update
+ * 5. O mu-plugin se AUTO-DELETA imediatamente após conclusão
+ * 
+ * POR QUE FUNCIONA:
+ * - MU-plugins são carregados ANTES de qualquer outro código
+ * - Não passam por wp-login.php (sem captcha)
+ * - São executados em QUALQUER requisição ao WordPress
+ */
+async function activatePluginsViaMuPlugin(domain, pluginNames, sessionData, cpSecurityToken) {
+  console.log('\n🔌 Ativando plugins via MU-Plugin...');
   
   const results = {
     activated: [],
@@ -917,144 +626,321 @@ async function activatePluginsViaREST(domain, pluginNames) {
     errors: []
   };
   
+  const httpsAgent = new https.Agent({ rejectUnauthorized: false });
+  const baseUrl = config.WHM_URL.replace(':2087', ':2083').replace(/\/$/, '');
+  const muPluginsPath = `/home/${config.WHM_ACCOUNT_USERNAME}/public_html/wp-content/mu-plugins`;
+  
+  // Gerar chave secreta única
+  const secretKey = uuidv4().replace(/-/g, '');
+  const muPluginFileName = `activate-plugins-${secretKey.substring(0, 8)}.php`;
+  const muPluginFilePath = `${muPluginsPath}/${muPluginFileName}`;
+  
   try {
-    const wpPassword = await getPasswordFromPassbolt();
-    const wpUser = config.WORDPRESS_DEFAULT_USER;
+    // PASSO 1: Criar pasta mu-plugins se não existir
+    console.log('   1️⃣ Criando pasta mu-plugins...');
     
-    const auth = await authenticateWordPress(domain, wpUser, wpPassword);
-    
-    const restHeaders = {
-      'Content-Type': 'application/json',
-      'Accept': 'application/json'
-    };
-    if (auth.nonce) {
-      restHeaders['X-WP-Nonce'] = auth.nonce;
+    const mkdirUrl = `${baseUrl}${cpSecurityToken}/execute/Fileman/mkdir`;
+    try {
+      await axios.post(mkdirUrl, new URLSearchParams({
+        path: muPluginsPath,
+        permissions: '0755'
+      }).toString(), {
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'Cookie': `cpsession=${sessionData.session}`
+        },
+        timeout: 15000,
+        httpsAgent
+      });
+      console.log('   ✅ Pasta mu-plugins criada/verificada');
+    } catch (e) {
+      // Pasta pode já existir, ignorar erro
+      console.log('   ℹ️ Pasta mu-plugins já existe');
     }
     
-    // PASSO 1: Listar plugins
-    console.log('\n   📋 Listando plugins instalados...');
+    // PASSO 2: Criar o código PHP do MU-Plugin
+    console.log('   2️⃣ Gerando MU-Plugin...');
     
-    const listResponse = await httpRequestWithCookies(
-      'GET',
-      `${auth.wpUrl}/wp-json/wp/v2/plugins`,
-      null,
-      auth.cookieJar,
-      restHeaders
-    );
+    const pluginsArrayPhp = JSON.stringify(pluginNames);
     
-    if (listResponse.status !== 200) {
-      throw new Error(`Falha ao listar plugins: status ${listResponse.status}`);
+    const muPluginCode = `<?php
+/**
+ * MU-Plugin temporário para ativação de plugins
+ * Chave: ${secretKey}
+ * ESTE ARQUIVO SE AUTO-DELETA APÓS EXECUÇÃO
+ */
+
+// Só executar se a chave secreta estiver presente na URL
+if (!isset(\$_GET['activate_key']) || \$_GET['activate_key'] !== '${secretKey}') {
+    return; // Não fazer nada se a chave não bater
+}
+
+// Evitar execução múltipla
+if (defined('DOMAINHUB_ACTIVATING_PLUGINS')) {
+    return;
+}
+define('DOMAINHUB_ACTIVATING_PLUGINS', true);
+
+// Garantir que temos as funções necessárias
+require_once(ABSPATH . 'wp-admin/includes/plugin.php');
+require_once(ABSPATH . 'wp-admin/includes/file.php');
+require_once(ABSPATH . 'wp-admin/includes/update.php');
+
+// Desabilitar output buffering e enviar headers
+while (ob_get_level()) {
+    ob_end_clean();
+}
+header('Content-Type: application/json; charset=utf-8');
+header('Cache-Control: no-cache, no-store, must-revalidate');
+
+\$results = [
+    'success' => true,
+    'activated' => [],
+    'already_active' => [],
+    'auto_update_enabled' => [],
+    'update_check' => false,
+    'errors' => [],
+    'self_deleted' => false
+];
+
+// Lista de plugins para ativar
+\$plugins_to_activate = ${pluginsArrayPhp};
+
+// Obter todos os plugins instalados
+\$all_plugins = get_plugins();
+
+// ========== PASSO 1: ATIVAR PLUGINS ==========
+foreach (\$plugins_to_activate as \$plugin_name) {
+    \$found = false;
+    
+    foreach (\$all_plugins as \$plugin_file => \$plugin_data) {
+        // Verificar se o plugin corresponde ao nome
+        \$plugin_folder = explode('/', \$plugin_file)[0];
+        
+        if (\$plugin_folder === \$plugin_name || 
+            strpos(\$plugin_file, \$plugin_name . '/') === 0 ||
+            strpos(\$plugin_file, \$plugin_name . '.php') !== false) {
+            
+            \$found = true;
+            
+            if (is_plugin_active(\$plugin_file)) {
+                \$results['already_active'][] = \$plugin_name;
+            } else {
+                \$activation_result = activate_plugin(\$plugin_file);
+                
+                if (is_wp_error(\$activation_result)) {
+                    \$results['errors'][] = [
+                        'plugin' => \$plugin_name,
+                        'action' => 'activate',
+                        'error' => \$activation_result->get_error_message()
+                    ];
+                } else {
+                    \$results['activated'][] = \$plugin_name;
+                }
+            }
+            break;
+        }
     }
     
-    const installedPlugins = Array.isArray(listResponse.data) ? listResponse.data : [];
-    console.log(`   ✅ ${installedPlugins.length} plugins encontrados`);
+    if (!\$found) {
+        \$results['errors'][] = [
+            'plugin' => \$plugin_name,
+            'action' => 'find',
+            'error' => 'Plugin não encontrado no diretório'
+        ];
+    }
+}
+
+// ========== PASSO 2: FORÇAR VERIFICAÇÃO DE ATUALIZAÇÕES ==========
+try {
+    // Limpar cache de plugins
+    wp_clean_plugins_cache(true);
     
-    // Mapa de plugins
-    const pluginMap = {};
-    installedPlugins.forEach(p => {
-      const pluginFolder = p.plugin.split('/')[0];
-      pluginMap[pluginFolder] = p;
+    // Deletar transient de updates para forçar nova verificação
+    delete_site_transient('update_plugins');
+    
+    // Forçar verificação de atualizações
+    wp_update_plugins();
+    
+    \$results['update_check'] = true;
+} catch (Exception \$e) {
+    \$results['errors'][] = [
+        'plugin' => 'system',
+        'action' => 'update_check',
+        'error' => \$e->getMessage()
+    ];
+}
+
+// ========== PASSO 3: ATIVAR AUTO-UPDATE PARA TODOS OS PLUGINS ==========
+\$auto_updates = (array) get_site_option('auto_update_plugins', []);
+\$plugins_updated = false;
+
+// Recarregar lista de plugins (pode ter mudado após ativação)
+\$all_plugins = get_plugins();
+
+foreach (\$all_plugins as \$plugin_file => \$plugin_data) {
+    \$plugin_folder = explode('/', \$plugin_file)[0];
+    
+    // Verificar se é um dos plugins que instalamos
+    foreach (\$plugins_to_activate as \$plugin_name) {
+        if (\$plugin_folder === \$plugin_name || 
+            strpos(\$plugin_file, \$plugin_name . '/') === 0) {
+            
+            if (!in_array(\$plugin_file, \$auto_updates)) {
+                \$auto_updates[] = \$plugin_file;
+                \$results['auto_update_enabled'][] = \$plugin_name;
+                \$plugins_updated = true;
+            }
+            break;
+        }
+    }
+}
+
+if (\$plugins_updated) {
+    update_site_option('auto_update_plugins', \$auto_updates);
+}
+
+// ========== PASSO 4: AUTO-DELETAR ESTE ARQUIVO ==========
+\$this_file = __FILE__;
+
+// Tentar deletar imediatamente
+if (file_exists(\$this_file)) {
+    \$deleted = @unlink(\$this_file);
+    \$results['self_deleted'] = \$deleted;
+    
+    if (!\$deleted) {
+        // Se não conseguiu deletar, tentar com chmod primeiro
+        @chmod(\$this_file, 0777);
+        \$deleted = @unlink(\$this_file);
+        \$results['self_deleted'] = \$deleted;
+    }
+}
+
+// Verificar se realmente foi deletado
+if (file_exists(\$this_file)) {
+    \$results['self_deleted'] = false;
+    \$results['errors'][] = [
+        'plugin' => 'system',
+        'action' => 'self_delete',
+        'error' => 'Não foi possível auto-deletar o arquivo'
+    ];
+}
+
+// Calcular sucesso total
+\$results['success'] = count(\$results['errors']) === 0 || 
+    (count(\$results['activated']) > 0 || count(\$results['already_active']) > 0);
+
+// Retornar JSON e encerrar
+echo json_encode(\$results, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+exit;
+`;
+
+    // PASSO 3: Upload do MU-Plugin via cPanel
+    console.log('   3️⃣ Fazendo upload do MU-Plugin...');
+    
+    const uploadUrl = `${baseUrl}${cpSecurityToken}/execute/Fileman/upload_files`;
+    
+    const form = new FormData();
+    form.append('dir', muPluginsPath);
+    form.append('overwrite', '1');
+    form.append('file-0', Buffer.from(muPluginCode, 'utf8'), {
+      filename: muPluginFileName,
+      contentType: 'application/x-php'
     });
     
-    // PASSO 2: Ativar cada plugin
-    console.log('\n   🔌 Ativando plugins...');
+    const uploadResponse = await axios.post(uploadUrl, form, {
+      headers: {
+        ...form.getHeaders(),
+        'Cookie': `cpsession=${sessionData.session}`
+      },
+      timeout: 30000,
+      httpsAgent
+    });
     
-    for (const pluginName of pluginNames) {
-      const plugin = pluginMap[pluginName];
-      
-      if (!plugin) {
-        console.log(`   ⚠️ ${pluginName}: não encontrado`);
-        results.errors.push({ plugin: pluginName, action: 'find', error: 'Não encontrado' });
-        continue;
-      }
-      
-      const pluginSlug = plugin.plugin;
-      const encodedSlug = encodeURIComponent(pluginSlug);
-      
-      if (plugin.status === 'active') {
-        console.log(`   ℹ️ ${pluginName}: já ativo`);
-        results.activated.push(pluginName);
-        continue;
-      }
-      
-      try {
-        const activateResponse = await httpRequestWithCookies(
-          'POST',
-          `${auth.wpUrl}/wp-json/wp/v2/plugins/${encodedSlug}`,
-          JSON.stringify({ status: 'active' }),
-          auth.cookieJar,
-          restHeaders
-        );
-        
-        const responseData = typeof activateResponse.data === 'string' 
-          ? JSON.parse(activateResponse.data) 
-          : activateResponse.data;
-        
-        if (responseData?.status === 'active') {
-          console.log(`   ✅ ${pluginName}: ativado`);
-          results.activated.push(pluginName);
-        } else {
-          console.log(`   ⚠️ ${pluginName}: status não confirmado`);
-        }
-      } catch (activateErr) {
-        console.log(`   ❌ ${pluginName}: ${activateErr.message}`);
-        results.errors.push({ plugin: pluginName, action: 'activate', error: activateErr.message });
-      }
-      
-      await new Promise(resolve => setTimeout(resolve, 1000));
+    if (uploadResponse.data?.data?.succeeded !== 1) {
+      const reason = uploadResponse.data?.data?.uploads?.[0]?.reason || 'Erro desconhecido';
+      throw new Error(`Upload do MU-Plugin falhou: ${reason}`);
     }
     
-    // PASSO 3: Forçar verificação de atualizações
-    console.log('\n   📥 Forçando verificação de atualizações...');
+    console.log('   ✅ MU-Plugin enviado');
     
+    // PASSO 4: Aguardar arquivo estar disponível
+    console.log('   4️⃣ Aguardando arquivo estar disponível...');
+    await new Promise(resolve => setTimeout(resolve, 2000));
+    
+    // PASSO 5: Executar o MU-Plugin via requisição HTTP
+    console.log('   5️⃣ Executando MU-Plugin...');
+    
+    const activationUrl = `https://${domain}/?activate_key=${secretKey}`;
+    
+    let phpResponse;
     try {
-      await httpRequestWithCookies(
-        'GET',
-        `${auth.wpUrl}/wp-cron.php?doing_wp_cron`,
-        null,
-        auth.cookieJar
-      );
-      console.log('   ✅ Cron executado');
-      results.updated.push('cron_executed');
-    } catch (cronErr) {
-      console.log(`   ⚠️ Cron: ${cronErr.message}`);
+      phpResponse = await axios.get(activationUrl, {
+        timeout: 120000,
+        httpsAgent,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          'Accept': 'application/json, text/plain, */*'
+        },
+        validateStatus: () => true // Aceitar qualquer status
+      });
+    } catch (reqError) {
+      throw new Error(`Falha ao executar MU-Plugin: ${reqError.message}`);
     }
     
-    // PASSO 4: Ativar auto-update
-    console.log('\n   🔄 Ativando auto-update...');
+    // PASSO 6: Processar resposta
+    console.log('   6️⃣ Processando resposta...');
     
-    // Recarregar lista
-    const updatedListResponse = await httpRequestWithCookies(
-      'GET',
-      `${auth.wpUrl}/wp-json/wp/v2/plugins`,
-      null,
-      auth.cookieJar,
-      restHeaders
-    );
-    
-    const updatedPlugins = Array.isArray(updatedListResponse.data) ? updatedListResponse.data : [];
-    
-    for (const pluginName of pluginNames) {
-      const plugin = updatedPlugins.find(p => p.plugin.startsWith(pluginName + '/'));
-      if (!plugin) continue;
-      
-      const encodedSlug = encodeURIComponent(plugin.plugin);
-      
-      try {
-        await httpRequestWithCookies(
-          'POST',
-          `${auth.wpUrl}/wp-json/wp/v2/plugins/${encodedSlug}`,
-          JSON.stringify({ auto_update: true }),
-          auth.cookieJar,
-          restHeaders
-        );
-        console.log(`   ✅ ${pluginName}: auto-update ativado`);
-        results.autoUpdateEnabled.push(pluginName);
-      } catch (autoErr) {
-        console.log(`   ⚠️ ${pluginName}: auto-update falhou`);
+    let phpResults;
+    try {
+      if (typeof phpResponse.data === 'string') {
+        // Tentar encontrar JSON na resposta (pode ter HTML misturado)
+        const jsonMatch = phpResponse.data.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          phpResults = JSON.parse(jsonMatch[0]);
+        } else {
+          throw new Error('JSON não encontrado na resposta');
+        }
+      } else {
+        phpResults = phpResponse.data;
       }
+    } catch (parseError) {
+      console.log('   ⚠️ Resposta não é JSON válido');
+      console.log('   📄 Resposta recebida:', String(phpResponse.data).substring(0, 500));
       
-      await new Promise(resolve => setTimeout(resolve, 500));
+      // Tentar deletar o arquivo manualmente se ainda existir
+      await tryDeleteMuPlugin(baseUrl, cpSecurityToken, sessionData, muPluginFilePath, httpsAgent);
+      
+      throw new Error(`Resposta inválida do MU-Plugin: ${parseError.message}`);
+    }
+    
+    // Processar resultados
+    results.activated = [...(phpResults.activated || []), ...(phpResults.already_active || [])];
+    results.autoUpdateEnabled = phpResults.auto_update_enabled || [];
+    results.updated = phpResults.update_check ? ['update_check_completed'] : [];
+    results.errors = phpResults.errors || [];
+    
+    // Log dos resultados
+    console.log(`\n   ✅ Ativados: ${phpResults.activated?.length || 0}`);
+    if (phpResults.already_active?.length > 0) {
+      console.log(`   ℹ️ Já estavam ativos: ${phpResults.already_active.length}`);
+    }
+    console.log(`   ✅ Auto-update ativado: ${phpResults.auto_update_enabled?.length || 0}`);
+    console.log(`   ✅ Verificação de updates: ${phpResults.update_check ? 'OK' : 'Falhou'}`);
+    console.log(`   🗑️ Auto-deletado: ${phpResults.self_deleted ? 'SIM' : 'NÃO'}`);
+    
+    // Se não auto-deletou, tentar deletar manualmente
+    if (!phpResults.self_deleted) {
+      console.log('   ⚠️ Tentando deletar manualmente...');
+      await tryDeleteMuPlugin(baseUrl, cpSecurityToken, sessionData, muPluginFilePath, httpsAgent);
+    }
+    
+    // Log de erros se houver
+    if (phpResults.errors?.length > 0) {
+      console.log('\n   ⚠️ Erros encontrados:');
+      phpResults.errors.forEach(err => {
+        console.log(`      - ${err.plugin}: ${err.error}`);
+      });
     }
     
     console.log('\n' + '='.repeat(50));
@@ -1067,9 +953,35 @@ async function activatePluginsViaREST(domain, pluginNames) {
     return results;
     
   } catch (error) {
-    console.error('❌ Erro na ativação:', error.message);
-    results.errors.push({ plugin: 'all', action: 'general', error: error.message });
+    console.error(`   ❌ Erro: ${error.message}`);
+    
+    // Tentar deletar o arquivo em caso de erro
+    try {
+      await tryDeleteMuPlugin(baseUrl, cpSecurityToken, sessionData, muPluginFilePath, httpsAgent);
+    } catch (e) { /* ignora */ }
+    
+    results.errors.push({ plugin: 'system', action: 'general', error: error.message });
     return results;
+  }
+}
+
+// Função auxiliar para deletar MU-Plugin manualmente
+async function tryDeleteMuPlugin(baseUrl, cpSecurityToken, sessionData, filePath, httpsAgent) {
+  try {
+    const trashUrl = `${baseUrl}${cpSecurityToken}/execute/Fileman/trash`;
+    await axios.post(trashUrl, new URLSearchParams({ path: filePath }).toString(), {
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Cookie': `cpsession=${sessionData.session}`
+      },
+      timeout: 15000,
+      httpsAgent
+    });
+    console.log('   🗑️ MU-Plugin deletado manualmente');
+    return true;
+  } catch (e) {
+    console.log(`   ⚠️ Falha ao deletar manualmente: ${e.message}`);
+    return false;
   }
 }
 
@@ -1199,6 +1111,28 @@ router.post('/activate-only', async (req, res) => {
   console.log('='.repeat(70));
   
   try {
+    // Criar sessão no cPanel para a ativação
+    console.log('🔑 Criando sessão no cPanel...');
+    const sessionResponse = await axios.get(
+      `${config.WHM_URL}/json-api/create_user_session?api.version=1&user=${config.WHM_ACCOUNT_USERNAME}&service=cpaneld`,
+      {
+        headers: {
+          'Authorization': `whm ${config.WHM_USERNAME}:${config.WHM_API_TOKEN}`
+        },
+        timeout: 30000,
+        httpsAgent: new https.Agent({ rejectUnauthorized: false })
+      }
+    );
+    
+    const sessionData = sessionResponse.data?.data;
+    const cpSecurityToken = sessionData?.cp_security_token;
+    
+    if (!cpSecurityToken) {
+      throw new Error('Não foi possível criar sessão no cPanel');
+    }
+    
+    console.log('✅ Sessão cPanel criada');
+    
     const pluginNames = [
       'duplicate-post',
       'elementor',
@@ -1212,7 +1146,7 @@ router.post('/activate-only', async (req, res) => {
       'wordpress-seo-premium'
     ];
     
-    const result = await activatePluginsViaREST(domain, pluginNames);
+    const result = await activatePluginsViaMuPlugin(domain, pluginNames, sessionData, cpSecurityToken);
     res.json({ domain, ...result });
   } catch (error) {
     console.error('❌ ERRO:', error.message);
