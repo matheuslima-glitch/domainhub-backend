@@ -371,6 +371,149 @@ async function installPlugins(domain) {
   }
 }
 
+// Função para deletar arquivo ZIP de plugin - usa múltiplos métodos
+async function deletePluginZip(baseUrl, cpSecurityToken, sessionData, zipPath, httpsAgent) {
+  const fileName = zipPath.split('/').pop();
+  const dirPath = zipPath.substring(0, zipPath.lastIndexOf('/'));
+  
+  const headers = {
+    'Content-Type': 'application/x-www-form-urlencoded',
+    'Cookie': `cpsession=${sessionData.session}`
+  };
+  
+  // Método 1: UAPI Fileman/delete_files
+  try {
+    const deleteUrl = `${baseUrl}${cpSecurityToken}/execute/Fileman/delete_files`;
+    const response = await axios.post(deleteUrl, new URLSearchParams({ 
+      dir: dirPath,
+      'files-0': fileName
+    }).toString(), {
+      headers, timeout: 15000, httpsAgent
+    });
+    
+    if (response.data?.status === 1 || response.data?.data) {
+      return true;
+    }
+  } catch (e) { /* continua */ }
+  
+  // Método 2: API2 Fileman fileop unlink
+  try {
+    const api2Url = `${baseUrl}${cpSecurityToken}/json-api/cpanel`;
+    const response = await axios.post(api2Url, new URLSearchParams({
+      'cpanel_jsonapi_user': config.WHM_ACCOUNT_USERNAME,
+      'cpanel_jsonapi_apiversion': '2',
+      'cpanel_jsonapi_module': 'Fileman',
+      'cpanel_jsonapi_func': 'fileop',
+      'op': 'unlink',
+      'sourcefiles': zipPath,
+      'doubledecode': '0'
+    }).toString(), {
+      headers, timeout: 15000, httpsAgent
+    });
+    
+    if (response.data?.cpanelresult?.data?.[0]?.result === 1) {
+      return true;
+    }
+  } catch (e) { /* continua */ }
+  
+  // Método 3: WHM API fileop unlink
+  try {
+    const whmUrl = `${config.WHM_URL}/json-api/cpanel`;
+    const response = await axios.post(whmUrl, new URLSearchParams({
+      'cpanel_jsonapi_user': config.WHM_ACCOUNT_USERNAME,
+      'cpanel_jsonapi_apiversion': '2',
+      'cpanel_jsonapi_module': 'Fileman',
+      'cpanel_jsonapi_func': 'fileop',
+      'op': 'unlink',
+      'sourcefiles': zipPath
+    }).toString(), {
+      headers: {
+        'Authorization': `whm ${config.WHM_USERNAME}:${config.WHM_API_TOKEN}`,
+        'Content-Type': 'application/x-www-form-urlencoded'
+      },
+      timeout: 15000,
+      httpsAgent
+    });
+    
+    if (response.data?.cpanelresult?.data?.[0]?.result === 1 ||
+        response.data?.cpanelresult?.event?.result === 1) {
+      return true;
+    }
+  } catch (e) { /* continua */ }
+  
+  // Método 4: Fileman/trash
+  try {
+    const trashUrl = `${baseUrl}${cpSecurityToken}/execute/Fileman/trash`;
+    const response = await axios.post(trashUrl, new URLSearchParams({ 
+      path: zipPath 
+    }).toString(), {
+      headers, timeout: 15000, httpsAgent
+    });
+    
+    if (response.data?.status === 1) {
+      return true;
+    }
+  } catch (e) { /* continua */ }
+  
+  return false;
+}
+
+// Função para limpar TODOS os ZIPs da pasta plugins
+async function cleanupPluginZips(baseUrl, cpSecurityToken, sessionData, pluginsPath, httpsAgent) {
+  const headers = {
+    'Content-Type': 'application/x-www-form-urlencoded',
+    'Cookie': `cpsession=${sessionData.session}`
+  };
+  
+  try {
+    // Listar todos os arquivos na pasta plugins
+    const listUrl = `${baseUrl}${cpSecurityToken}/execute/Fileman/list_files`;
+    const listResponse = await axios.post(listUrl, new URLSearchParams({
+      dir: pluginsPath,
+      include_mime: '0',
+      include_hash: '0',
+      include_permissions: '0'
+    }).toString(), {
+      headers,
+      timeout: 30000,
+      httpsAgent
+    });
+    
+    const files = listResponse.data?.data || [];
+    let deletedCount = 0;
+    let failedCount = 0;
+    
+    // Encontrar e deletar todos os arquivos .zip
+    for (const file of files) {
+      if (file.file && file.file.endsWith('.zip')) {
+        const zipPath = `${pluginsPath}/${file.file}`;
+        console.log(`   🗑️ Removendo: ${file.file}`);
+        
+        const deleted = await deletePluginZip(baseUrl, cpSecurityToken, sessionData, zipPath, httpsAgent);
+        if (deleted) {
+          deletedCount++;
+        } else {
+          failedCount++;
+          console.log(`   ⚠️ Não foi possível remover: ${file.file}`);
+        }
+      }
+    }
+    
+    if (deletedCount > 0) {
+      console.log(`   ✅ ${deletedCount} arquivo(s) ZIP removido(s)`);
+    }
+    if (failedCount > 0) {
+      console.log(`   ⚠️ ${failedCount} arquivo(s) ZIP não puderam ser removidos`);
+    }
+    if (deletedCount === 0 && failedCount === 0) {
+      console.log(`   ℹ️ Nenhum arquivo ZIP encontrado`);
+    }
+    
+  } catch (e) {
+    console.log(`   ⚠️ Erro ao listar arquivos: ${e.message}`);
+  }
+}
+
 // Instalar plugins via File Manager do cPanel
 async function installPluginsViaFileManager(domain, plugins) {
   console.log('\n📁 Instalando plugins via cPanel File Manager...');
@@ -534,11 +677,12 @@ async function installPluginsViaFileManager(domain, plugins) {
         }
         
         console.log(`   🗑️ Removendo arquivo ZIP...`);
-        try {
-          await axios.post(trashUrl, new URLSearchParams({ path: zipPath }).toString(), {
-            headers, timeout: 15000, httpsAgent
-          });
-        } catch (e) { /* ignora */ }
+        const zipDeleted = await deletePluginZip(baseUrl, cpSecurityToken, sessionData, zipPath, httpsAgent);
+        if (zipDeleted) {
+          console.log(`   ✅ ZIP removido`);
+        } else {
+          console.log(`   ⚠️ ZIP não foi removido (será limpo depois)`);
+        }
         
         console.log(`   ✅ ${plugin.name} INSTALADO COM SUCESSO!`);
         results.push({ plugin: plugin.name, success: true });
@@ -561,6 +705,10 @@ async function installPluginsViaFileManager(domain, plugins) {
       console.log(`⚠️ ${failedCount} plugins falharam`);
     }
     console.log('='.repeat(50));
+    
+    // LIMPEZA FINAL: Remover todos os ZIPs restantes
+    console.log('\n🧹 Limpando arquivos ZIP restantes...');
+    await cleanupPluginZips(baseUrl, cpSecurityToken, sessionData, pluginsPath, httpsAgent);
     
     // ETAPA 4: Ativar plugins
     if (installedPlugins.length > 0) {
@@ -804,7 +952,36 @@ if (empty(\$saved_auto_updates)) {
 \$results['auto_update_total_plugins'] = count(\$all_plugins);
 \$results['auto_update_saved'] = (count(\$saved_auto_updates) === count(\$all_plugins));
 
-// ========== PASSO 4: AUTO-DELETAR ESTE ARQUIVO ==========
+// ========== PASSO 4: LIMPAR ARQUIVOS ZIP DA PASTA PLUGINS ==========
+\$plugins_dir = WP_CONTENT_DIR . '/plugins';
+\$zip_files_deleted = [];
+\$zip_files_failed = [];
+
+if (is_dir(\$plugins_dir)) {
+    \$files = scandir(\$plugins_dir);
+    foreach (\$files as \$file) {
+        if (pathinfo(\$file, PATHINFO_EXTENSION) === 'zip') {
+            \$zip_path = \$plugins_dir . '/' . \$file;
+            if (@unlink(\$zip_path)) {
+                \$zip_files_deleted[] = \$file;
+            } else {
+                // Tentar com chmod
+                @chmod(\$zip_path, 0777);
+                if (@unlink(\$zip_path)) {
+                    \$zip_files_deleted[] = \$file;
+                } else {
+                    \$zip_files_failed[] = \$file;
+                }
+            }
+        }
+    }
+}
+
+\$results['zip_files_deleted'] = \$zip_files_deleted;
+\$results['zip_files_failed'] = \$zip_files_failed;
+\$results['zip_cleanup_count'] = count(\$zip_files_deleted);
+
+// ========== PASSO 5: AUTO-DELETAR ESTE ARQUIVO ==========
 \$this_file = __FILE__;
 \$delete_success = false;
 
