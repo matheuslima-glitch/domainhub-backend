@@ -562,13 +562,13 @@ async function installPluginsViaFileManager(domain, plugins) {
     }
     console.log('='.repeat(50));
     
-    // ETAPA 4: Ativar plugins via MU-Plugin
+    // ETAPA 4: Ativar plugins
     if (installedPlugins.length > 0) {
       console.log('\n' + '='.repeat(70));
       console.log('🔧 [ETAPA 4] ATIVANDO E CONFIGURANDO PLUGINS');
       console.log('='.repeat(70));
       
-      const activationResults = await activatePluginsViaMuPlugin(
+      const activationResults = await activatePluginsViaDirectPHP(
         domain, 
         installedPlugins, 
         sessionData, 
@@ -599,25 +599,22 @@ async function installPluginsViaFileManager(domain, plugins) {
   }
 }
 
-// ========== ATIVAR PLUGINS VIA MU-PLUGIN ==========
+// ========== ATIVAR PLUGINS VIA SCRIPT PHP DIRETO ==========
 
 /**
- * Ativa plugins via MU-Plugin (Must-Use Plugin)
+ * Ativa plugins via arquivo PHP direto na public_html
  * 
- * COMO FUNCIONA:
- * 1. Cria pasta mu-plugins se não existir
- * 2. Upload de arquivo PHP que será executado automaticamente
- * 3. Faz requisição HTTP ao site (dispara execução do mu-plugin)
- * 4. O mu-plugin ativa plugins, força update, ativa auto-update
- * 5. O mu-plugin se AUTO-DELETA imediatamente após conclusão
+ * DIFERENÇA DO MU-PLUGIN:
+ * - MU-Plugin: WordPress carrega automaticamente, mas pode ter problemas de timing
+ * - PHP Direto: Nós carregamos o WordPress manualmente, controle total
  * 
- * POR QUE FUNCIONA:
- * - MU-plugins são carregados ANTES de qualquer outro código
- * - Não passam por wp-login.php (sem captcha)
- * - São executados em QUALQUER requisição ao WordPress
+ * FLUXO:
+ * 1. Upload de arquivo PHP para public_html (ex: dh-activate-abc123.php)
+ * 2. Acessar diretamente: https://dominio.com/dh-activate-abc123.php
+ * 3. O script carrega wp-load.php, executa tudo e se auto-deleta
  */
-async function activatePluginsViaMuPlugin(domain, pluginNames, sessionData, cpSecurityToken) {
-  console.log('\n🔌 Ativando plugins via MU-Plugin...');
+async function activatePluginsViaDirectPHP(domain, pluginNames, sessionData, cpSecurityToken) {
+  console.log('\n🔌 Ativando plugins via Script PHP Direto...');
   
   const results = {
     activated: [],
@@ -628,82 +625,90 @@ async function activatePluginsViaMuPlugin(domain, pluginNames, sessionData, cpSe
   
   const httpsAgent = new https.Agent({ rejectUnauthorized: false });
   const baseUrl = config.WHM_URL.replace(':2087', ':2083').replace(/\/$/, '');
+  const publicHtmlPath = `/home/${config.WHM_ACCOUNT_USERNAME}/public_html`;
   const muPluginsPath = `/home/${config.WHM_ACCOUNT_USERNAME}/public_html/wp-content/mu-plugins`;
   
-  // Gerar chave secreta única
-  const secretKey = uuidv4().replace(/-/g, '');
-  const muPluginFileName = `activate-plugins-${secretKey.substring(0, 8)}.php`;
-  const muPluginFilePath = `${muPluginsPath}/${muPluginFileName}`;
+  // Gerar nome único para o arquivo
+  const uniqueId = uuidv4().replace(/-/g, '').substring(0, 16);
+  const phpFileName = `dh-activate-${uniqueId}.php`;
+  const phpFilePath = `${publicHtmlPath}/${phpFileName}`;
   
   try {
-    // PASSO 1: Criar pasta mu-plugins se não existir
-    console.log('   1️⃣ Criando pasta mu-plugins...');
-    
-    const mkdirUrl = `${baseUrl}${cpSecurityToken}/execute/Fileman/mkdir`;
-    try {
-      await axios.post(mkdirUrl, new URLSearchParams({
-        path: muPluginsPath,
-        permissions: '0755'
-      }).toString(), {
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-          'Cookie': `cpsession=${sessionData.session}`
-        },
-        timeout: 15000,
-        httpsAgent
-      });
-      console.log('   ✅ Pasta mu-plugins criada/verificada');
-    } catch (e) {
-      // Pasta pode já existir, ignorar erro
-      console.log('   ℹ️ Pasta mu-plugins já existe');
-    }
-    
-    // PASSO 2: Criar o código PHP do MU-Plugin
-    console.log('   2️⃣ Gerando MU-Plugin...');
+    // PASSO 0: Limpar arquivos antigos (mu-plugins e scripts anteriores)
+    console.log('   0️⃣ Limpando arquivos antigos...');
+    await cleanupOldActivationFiles(baseUrl, cpSecurityToken, sessionData, httpsAgent, publicHtmlPath, muPluginsPath);
+    // PASSO 1: Gerar o código PHP
+    console.log('   1️⃣ Gerando script PHP...');
     
     const pluginsArrayPhp = JSON.stringify(pluginNames);
     
-    const muPluginCode = `<?php
+    // Script PHP que será executado diretamente
+    const phpCode = `<?php
 /**
- * MU-Plugin temporário para ativação de plugins
- * Chave: ${secretKey}
- * ESTE ARQUIVO SE AUTO-DELETA APÓS EXECUÇÃO
+ * Script temporário para ativação de plugins WordPress
+ * ID: ${uniqueId}
+ * Gerado em: ${new Date().toISOString()}
+ * 
+ * IMPORTANTE: Este arquivo se AUTO-DELETA após execução
  */
 
-// Só executar se a chave secreta estiver presente na URL
-if (!isset(\$_GET['activate_key']) || \$_GET['activate_key'] !== '${secretKey}') {
-    return; // Não fazer nada se a chave não bater
+// Desabilitar qualquer cache
+header('Cache-Control: no-cache, no-store, must-revalidate');
+header('Pragma: no-cache');
+header('Expires: 0');
+
+// Definir que é uma requisição AJAX/API para evitar redirects
+define('DOING_AJAX', true);
+define('WP_ADMIN', true);
+
+// Capturar erros
+error_reporting(E_ALL);
+ini_set('display_errors', 0);
+
+// Caminho para wp-load.php
+\$wp_load_path = __DIR__ . '/wp-load.php';
+
+if (!file_exists(\$wp_load_path)) {
+    header('Content-Type: application/json');
+    echo json_encode(['success' => false, 'error' => 'wp-load.php não encontrado']);
+    exit;
 }
 
-// Evitar execução múltipla
-if (defined('DOMAINHUB_ACTIVATING_PLUGINS')) {
-    return;
+// Carregar WordPress
+try {
+    require_once(\$wp_load_path);
+} catch (Exception \$e) {
+    header('Content-Type: application/json');
+    echo json_encode(['success' => false, 'error' => 'Erro ao carregar WordPress: ' . \$e->getMessage()]);
+    exit;
 }
-define('DOMAINHUB_ACTIVATING_PLUGINS', true);
 
-// Garantir que temos as funções necessárias
+// Carregar funções administrativas necessárias
 require_once(ABSPATH . 'wp-admin/includes/plugin.php');
 require_once(ABSPATH . 'wp-admin/includes/file.php');
 require_once(ABSPATH . 'wp-admin/includes/update.php');
 
-// Desabilitar output buffering e enviar headers
+// Limpar output buffer
 while (ob_get_level()) {
     ob_end_clean();
 }
-header('Content-Type: application/json; charset=utf-8');
-header('Cache-Control: no-cache, no-store, must-revalidate');
 
+// Definir header JSON
+header('Content-Type: application/json; charset=utf-8');
+
+// Resultados
 \$results = [
     'success' => true,
+    'script_id' => '${uniqueId}',
     'activated' => [],
     'already_active' => [],
     'auto_update_enabled' => [],
     'update_check' => false,
     'errors' => [],
-    'self_deleted' => false
+    'file_deleted' => false
 ];
 
-// Lista de plugins para ativar
+// Lista de plugins
 \$plugins_to_activate = ${pluginsArrayPhp};
 
 // Obter todos os plugins instalados
@@ -714,7 +719,6 @@ foreach (\$plugins_to_activate as \$plugin_name) {
     \$found = false;
     
     foreach (\$all_plugins as \$plugin_file => \$plugin_data) {
-        // Verificar se o plugin corresponde ao nome
         \$plugin_folder = explode('/', \$plugin_file)[0];
         
         if (\$plugin_folder === \$plugin_name || 
@@ -726,7 +730,7 @@ foreach (\$plugins_to_activate as \$plugin_name) {
             if (is_plugin_active(\$plugin_file)) {
                 \$results['already_active'][] = \$plugin_name;
             } else {
-                \$activation_result = activate_plugin(\$plugin_file);
+                \$activation_result = activate_plugin(\$plugin_file, '', false, true);
                 
                 if (is_wp_error(\$activation_result)) {
                     \$results['errors'][] = [
@@ -746,22 +750,16 @@ foreach (\$plugins_to_activate as \$plugin_name) {
         \$results['errors'][] = [
             'plugin' => \$plugin_name,
             'action' => 'find',
-            'error' => 'Plugin não encontrado no diretório'
+            'error' => 'Plugin não encontrado'
         ];
     }
 }
 
 // ========== PASSO 2: FORÇAR VERIFICAÇÃO DE ATUALIZAÇÕES ==========
 try {
-    // Limpar cache de plugins
     wp_clean_plugins_cache(true);
-    
-    // Deletar transient de updates para forçar nova verificação
     delete_site_transient('update_plugins');
-    
-    // Forçar verificação de atualizações
     wp_update_plugins();
-    
     \$results['update_check'] = true;
 } catch (Exception \$e) {
     \$results['errors'][] = [
@@ -771,17 +769,13 @@ try {
     ];
 }
 
-// ========== PASSO 3: ATIVAR AUTO-UPDATE PARA TODOS OS PLUGINS ==========
+// ========== PASSO 3: ATIVAR AUTO-UPDATE ==========
 \$auto_updates = (array) get_site_option('auto_update_plugins', []);
-\$plugins_updated = false;
-
-// Recarregar lista de plugins (pode ter mudado após ativação)
-\$all_plugins = get_plugins();
+\$all_plugins = get_plugins(); // Recarregar
 
 foreach (\$all_plugins as \$plugin_file => \$plugin_data) {
     \$plugin_folder = explode('/', \$plugin_file)[0];
     
-    // Verificar se é um dos plugins que instalamos
     foreach (\$plugins_to_activate as \$plugin_name) {
         if (\$plugin_folder === \$plugin_name || 
             strpos(\$plugin_file, \$plugin_name . '/') === 0) {
@@ -789,62 +783,67 @@ foreach (\$all_plugins as \$plugin_file => \$plugin_data) {
             if (!in_array(\$plugin_file, \$auto_updates)) {
                 \$auto_updates[] = \$plugin_file;
                 \$results['auto_update_enabled'][] = \$plugin_name;
-                \$plugins_updated = true;
             }
             break;
         }
     }
 }
 
-if (\$plugins_updated) {
-    update_site_option('auto_update_plugins', \$auto_updates);
-}
+update_site_option('auto_update_plugins', \$auto_updates);
 
 // ========== PASSO 4: AUTO-DELETAR ESTE ARQUIVO ==========
 \$this_file = __FILE__;
+\$delete_success = false;
 
-// Tentar deletar imediatamente
+// Método 1: unlink direto
 if (file_exists(\$this_file)) {
-    \$deleted = @unlink(\$this_file);
-    \$results['self_deleted'] = \$deleted;
-    
-    if (!\$deleted) {
-        // Se não conseguiu deletar, tentar com chmod primeiro
-        @chmod(\$this_file, 0777);
-        \$deleted = @unlink(\$this_file);
-        \$results['self_deleted'] = \$deleted;
+    \$delete_success = @unlink(\$this_file);
+}
+
+// Método 2: chmod + unlink
+if (!$delete_success && file_exists(\$this_file)) {
+    @chmod(\$this_file, 0777);
+    \$delete_success = @unlink(\$this_file);
+}
+
+// Método 3: rename + unlink (às vezes funciona quando unlink falha)
+if (!$delete_success && file_exists(\$this_file)) {
+    \$temp_name = \$this_file . '.delete';
+    if (@rename(\$this_file, \$temp_name)) {
+        \$delete_success = @unlink(\$temp_name);
     }
 }
 
-// Verificar se realmente foi deletado
+\$results['file_deleted'] = !file_exists(\$this_file);
+
+// Verificar se realmente deletou
 if (file_exists(\$this_file)) {
-    \$results['self_deleted'] = false;
     \$results['errors'][] = [
         'plugin' => 'system',
         'action' => 'self_delete',
-        'error' => 'Não foi possível auto-deletar o arquivo'
+        'error' => 'Arquivo não foi deletado automaticamente',
+        'file_path' => \$this_file
     ];
 }
 
-// Calcular sucesso total
-\$results['success'] = count(\$results['errors']) === 0 || 
-    (count(\$results['activated']) > 0 || count(\$results['already_active']) > 0);
+// Calcular sucesso
+\$results['success'] = (count(\$results['activated']) > 0 || count(\$results['already_active']) > 0);
 
-// Retornar JSON e encerrar
+// Output JSON
 echo json_encode(\$results, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
 exit;
 `;
 
-    // PASSO 3: Upload do MU-Plugin via cPanel
-    console.log('   3️⃣ Fazendo upload do MU-Plugin...');
+    // PASSO 2: Upload do arquivo PHP
+    console.log('   2️⃣ Fazendo upload do script...');
     
     const uploadUrl = `${baseUrl}${cpSecurityToken}/execute/Fileman/upload_files`;
     
     const form = new FormData();
-    form.append('dir', muPluginsPath);
+    form.append('dir', publicHtmlPath);
     form.append('overwrite', '1');
-    form.append('file-0', Buffer.from(muPluginCode, 'utf8'), {
-      filename: muPluginFileName,
+    form.append('file-0', Buffer.from(phpCode, 'utf8'), {
+      filename: phpFileName,
       contentType: 'application/x-php'
     });
     
@@ -859,86 +858,111 @@ exit;
     
     if (uploadResponse.data?.data?.succeeded !== 1) {
       const reason = uploadResponse.data?.data?.uploads?.[0]?.reason || 'Erro desconhecido';
-      throw new Error(`Upload do MU-Plugin falhou: ${reason}`);
+      throw new Error(`Upload falhou: ${reason}`);
     }
     
-    console.log('   ✅ MU-Plugin enviado');
+    console.log(`   ✅ Script enviado: ${phpFileName}`);
     
-    // PASSO 4: Aguardar arquivo estar disponível
-    console.log('   4️⃣ Aguardando arquivo estar disponível...');
+    // PASSO 3: Aguardar arquivo estar disponível
+    console.log('   3️⃣ Aguardando arquivo...');
     await new Promise(resolve => setTimeout(resolve, 2000));
     
-    // PASSO 5: Executar o MU-Plugin via requisição HTTP
-    console.log('   5️⃣ Executando MU-Plugin...');
+    // PASSO 4: Executar o script via HTTP
+    console.log('   4️⃣ Executando script...');
     
-    const activationUrl = `https://${domain}/?activate_key=${secretKey}`;
+    const scriptUrl = `https://${domain}/${phpFileName}`;
+    console.log(`   📍 URL: ${scriptUrl}`);
     
     let phpResponse;
     try {
-      phpResponse = await axios.get(activationUrl, {
+      phpResponse = await axios.get(scriptUrl, {
         timeout: 120000,
         httpsAgent,
         headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-          'Accept': 'application/json, text/plain, */*'
+          'User-Agent': 'Mozilla/5.0 DomainHub-Backend/1.0',
+          'Accept': 'application/json'
         },
-        validateStatus: () => true // Aceitar qualquer status
+        validateStatus: () => true
       });
     } catch (reqError) {
-      throw new Error(`Falha ao executar MU-Plugin: ${reqError.message}`);
+      throw new Error(`Erro na requisição: ${reqError.message}`);
     }
     
-    // PASSO 6: Processar resposta
-    console.log('   6️⃣ Processando resposta...');
+    console.log(`   📊 Status HTTP: ${phpResponse.status}`);
+    
+    // PASSO 5: Processar resposta
+    console.log('   5️⃣ Processando resposta...');
     
     let phpResults;
+    const responseData = phpResponse.data;
+    
+    // Tentar parsear JSON
     try {
-      if (typeof phpResponse.data === 'string') {
-        // Tentar encontrar JSON na resposta (pode ter HTML misturado)
-        const jsonMatch = phpResponse.data.match(/\{[\s\S]*\}/);
-        if (jsonMatch) {
-          phpResults = JSON.parse(jsonMatch[0]);
+      if (typeof responseData === 'string') {
+        // Remover possível BOM ou espaços
+        let cleanData = responseData.trim();
+        
+        // Se começa com HTML, tentar extrair JSON
+        if (cleanData.startsWith('<!') || cleanData.startsWith('<html') || cleanData.startsWith('<br')) {
+          const jsonMatch = cleanData.match(/\{[\s\S]*\}/);
+          if (jsonMatch) {
+            phpResults = JSON.parse(jsonMatch[0]);
+          } else {
+            throw new Error('Resposta contém HTML sem JSON');
+          }
         } else {
-          throw new Error('JSON não encontrado na resposta');
+          phpResults = JSON.parse(cleanData);
         }
+      } else if (typeof responseData === 'object') {
+        phpResults = responseData;
       } else {
-        phpResults = phpResponse.data;
+        throw new Error(`Tipo de resposta inesperado: ${typeof responseData}`);
       }
     } catch (parseError) {
-      console.log('   ⚠️ Resposta não é JSON válido');
-      console.log('   📄 Resposta recebida:', String(phpResponse.data).substring(0, 500));
+      console.log('   ⚠️ Erro ao parsear resposta');
+      console.log('   📄 Resposta (primeiros 1000 chars):');
+      console.log('   ', String(responseData).substring(0, 1000));
       
-      // Tentar deletar o arquivo manualmente se ainda existir
-      await tryDeleteMuPlugin(baseUrl, cpSecurityToken, sessionData, muPluginFilePath, httpsAgent);
+      // Tentar deletar arquivo manualmente
+      await deleteFileViaCpanel(baseUrl, cpSecurityToken, sessionData, phpFilePath, httpsAgent);
       
-      throw new Error(`Resposta inválida do MU-Plugin: ${parseError.message}`);
+      throw new Error(`Resposta inválida: ${parseError.message}`);
     }
     
     // Processar resultados
     results.activated = [...(phpResults.activated || []), ...(phpResults.already_active || [])];
     results.autoUpdateEnabled = phpResults.auto_update_enabled || [];
-    results.updated = phpResults.update_check ? ['update_check_completed'] : [];
+    results.updated = phpResults.update_check ? ['update_check_ok'] : [];
     results.errors = phpResults.errors || [];
     
     // Log dos resultados
-    console.log(`\n   ✅ Ativados: ${phpResults.activated?.length || 0}`);
-    if (phpResults.already_active?.length > 0) {
-      console.log(`   ℹ️ Já estavam ativos: ${phpResults.already_active.length}`);
-    }
-    console.log(`   ✅ Auto-update ativado: ${phpResults.auto_update_enabled?.length || 0}`);
-    console.log(`   ✅ Verificação de updates: ${phpResults.update_check ? 'OK' : 'Falhou'}`);
-    console.log(`   🗑️ Auto-deletado: ${phpResults.self_deleted ? 'SIM' : 'NÃO'}`);
+    console.log(`\n   📊 RESULTADOS:`);
+    console.log(`   ✅ Ativados: ${phpResults.activated?.length || 0}`);
+    console.log(`   ℹ️ Já ativos: ${phpResults.already_active?.length || 0}`);
+    console.log(`   🔄 Auto-update: ${phpResults.auto_update_enabled?.length || 0}`);
+    console.log(`   📥 Update check: ${phpResults.update_check ? 'OK' : 'Falhou'}`);
+    console.log(`   🗑️ Auto-deletado: ${phpResults.file_deleted ? 'SIM ✓' : 'NÃO ✗'}`);
     
-    // Se não auto-deletou, tentar deletar manualmente
-    if (!phpResults.self_deleted) {
-      console.log('   ⚠️ Tentando deletar manualmente...');
-      await tryDeleteMuPlugin(baseUrl, cpSecurityToken, sessionData, muPluginFilePath, httpsAgent);
+    // Se não foi auto-deletado, deletar via cPanel
+    if (!phpResults.file_deleted) {
+      console.log('\n   ⚠️ Arquivo não foi auto-deletado, removendo via cPanel...');
+      const deleted = await deleteFileViaCpanel(baseUrl, cpSecurityToken, sessionData, phpFilePath, httpsAgent);
+      if (deleted) {
+        console.log('   ✅ Arquivo removido via cPanel');
+      } else {
+        console.log('   ❌ FALHA ao remover arquivo via cPanel');
+        results.errors.push({
+          plugin: 'system',
+          action: 'cleanup',
+          error: `Arquivo ${phpFileName} não foi removido`
+        });
+      }
     }
     
-    // Log de erros se houver
-    if (phpResults.errors?.length > 0) {
-      console.log('\n   ⚠️ Erros encontrados:');
-      phpResults.errors.forEach(err => {
+    // Erros encontrados
+    if (results.errors.length > 0) {
+      console.log('\n   ⚠️ Erros:');
+      results.errors.forEach(err => {
         console.log(`      - ${err.plugin}: ${err.error}`);
       });
     }
@@ -955,9 +979,9 @@ exit;
   } catch (error) {
     console.error(`   ❌ Erro: ${error.message}`);
     
-    // Tentar deletar o arquivo em caso de erro
+    // Tentar deletar arquivo em caso de erro
     try {
-      await tryDeleteMuPlugin(baseUrl, cpSecurityToken, sessionData, muPluginFilePath, httpsAgent);
+      await deleteFileViaCpanel(baseUrl, cpSecurityToken, sessionData, phpFilePath, httpsAgent);
     } catch (e) { /* ignora */ }
     
     results.errors.push({ plugin: 'system', action: 'general', error: error.message });
@@ -965,11 +989,86 @@ exit;
   }
 }
 
-// Função auxiliar para deletar MU-Plugin manualmente
-async function tryDeleteMuPlugin(baseUrl, cpSecurityToken, sessionData, filePath, httpsAgent) {
+// Função para limpar arquivos de ativação antigos
+async function cleanupOldActivationFiles(baseUrl, cpSecurityToken, sessionData, httpsAgent, publicHtmlPath, muPluginsPath) {
+  const headers = {
+    'Content-Type': 'application/x-www-form-urlencoded',
+    'Cookie': `cpsession=${sessionData.session}`
+  };
+  
+  // Listar arquivos na public_html
   try {
-    const trashUrl = `${baseUrl}${cpSecurityToken}/execute/Fileman/trash`;
-    await axios.post(trashUrl, new URLSearchParams({ path: filePath }).toString(), {
+    const listUrl = `${baseUrl}${cpSecurityToken}/execute/Fileman/list_files`;
+    const listResponse = await axios.post(listUrl, new URLSearchParams({
+      dir: publicHtmlPath,
+      include_mime: '0',
+      include_hash: '0',
+      include_permissions: '0'
+    }).toString(), {
+      headers,
+      timeout: 15000,
+      httpsAgent
+    });
+    
+    const files = listResponse.data?.data || [];
+    
+    // Encontrar arquivos dh-activate-*.php
+    for (const file of files) {
+      if (file.file && file.file.startsWith('dh-activate-') && file.file.endsWith('.php')) {
+        console.log(`   🗑️ Removendo arquivo antigo: ${file.file}`);
+        await deleteFileViaCpanel(baseUrl, cpSecurityToken, sessionData, 
+          `${publicHtmlPath}/${file.file}`, httpsAgent);
+      }
+    }
+  } catch (e) {
+    console.log(`   ⚠️ Erro ao listar public_html: ${e.message}`);
+  }
+  
+  // Listar arquivos em mu-plugins
+  try {
+    const listUrl = `${baseUrl}${cpSecurityToken}/execute/Fileman/list_files`;
+    const listResponse = await axios.post(listUrl, new URLSearchParams({
+      dir: muPluginsPath,
+      include_mime: '0',
+      include_hash: '0',
+      include_permissions: '0'
+    }).toString(), {
+      headers,
+      timeout: 15000,
+      httpsAgent
+    });
+    
+    const files = listResponse.data?.data || [];
+    
+    // Encontrar arquivos activate-plugins-*.php
+    for (const file of files) {
+      if (file.file && file.file.startsWith('activate-plugins-') && file.file.endsWith('.php')) {
+        console.log(`   🗑️ Removendo mu-plugin antigo: ${file.file}`);
+        await deleteFileViaCpanel(baseUrl, cpSecurityToken, sessionData, 
+          `${muPluginsPath}/${file.file}`, httpsAgent);
+      }
+    }
+  } catch (e) {
+    console.log(`   ⚠️ Erro ao listar mu-plugins: ${e.message}`);
+  }
+}
+
+// Função auxiliar para deletar arquivo via cPanel - MÚLTIPLOS MÉTODOS
+async function deleteFileViaCpanel(baseUrl, cpSecurityToken, sessionData, filePath, httpsAgent) {
+  const fileName = filePath.split('/').pop();
+  const dirPath = filePath.substring(0, filePath.lastIndexOf('/'));
+  
+  console.log(`   🗑️ Tentando deletar: ${fileName}`);
+  console.log(`   📁 Diretório: ${dirPath}`);
+  
+  // Método 1: UAPI Fileman/delete_files (mais confiável)
+  try {
+    console.log('   → Tentando UAPI delete_files...');
+    const deleteUrl = `${baseUrl}${cpSecurityToken}/execute/Fileman/delete_files`;
+    const response = await axios.post(deleteUrl, new URLSearchParams({ 
+      dir: dirPath,
+      'files-0': fileName
+    }).toString(), {
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
         'Cookie': `cpsession=${sessionData.session}`
@@ -977,12 +1076,98 @@ async function tryDeleteMuPlugin(baseUrl, cpSecurityToken, sessionData, filePath
       timeout: 15000,
       httpsAgent
     });
-    console.log('   🗑️ MU-Plugin deletado manualmente');
-    return true;
-  } catch (e) {
-    console.log(`   ⚠️ Falha ao deletar manualmente: ${e.message}`);
-    return false;
+    
+    if (response.data?.status === 1 || response.data?.data) {
+      console.log('   ✅ Deletado via UAPI delete_files');
+      return true;
+    }
+  } catch (e1) {
+    console.log(`   ⚠️ UAPI delete_files falhou: ${e1.message}`);
   }
+  
+  // Método 2: API2 Fileman fileop delete
+  try {
+    console.log('   → Tentando API2 fileop delete...');
+    const api2Url = `${baseUrl}${cpSecurityToken}/json-api/cpanel`;
+    const response = await axios.post(api2Url, new URLSearchParams({
+      'cpanel_jsonapi_user': config.WHM_ACCOUNT_USERNAME,
+      'cpanel_jsonapi_apiversion': '2',
+      'cpanel_jsonapi_module': 'Fileman',
+      'cpanel_jsonapi_func': 'fileop',
+      'op': 'unlink',
+      'sourcefiles': filePath,
+      'doubledecode': '0'
+    }).toString(), {
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Cookie': `cpsession=${sessionData.session}`
+      },
+      timeout: 15000,
+      httpsAgent
+    });
+    
+    if (response.data?.cpanelresult?.data?.[0]?.result === 1) {
+      console.log('   ✅ Deletado via API2 fileop unlink');
+      return true;
+    }
+  } catch (e2) {
+    console.log(`   ⚠️ API2 fileop falhou: ${e2.message}`);
+  }
+  
+  // Método 3: WHM API direto
+  try {
+    console.log('   → Tentando WHM API...');
+    const whmUrl = `${config.WHM_URL}/json-api/cpanel`;
+    const response = await axios.post(whmUrl, new URLSearchParams({
+      'cpanel_jsonapi_user': config.WHM_ACCOUNT_USERNAME,
+      'cpanel_jsonapi_apiversion': '2',
+      'cpanel_jsonapi_module': 'Fileman',
+      'cpanel_jsonapi_func': 'fileop',
+      'op': 'unlink',
+      'sourcefiles': filePath
+    }).toString(), {
+      headers: {
+        'Authorization': `whm ${config.WHM_USERNAME}:${config.WHM_API_TOKEN}`,
+        'Content-Type': 'application/x-www-form-urlencoded'
+      },
+      timeout: 15000,
+      httpsAgent
+    });
+    
+    if (response.data?.cpanelresult?.data?.[0]?.result === 1 ||
+        response.data?.cpanelresult?.event?.result === 1) {
+      console.log('   ✅ Deletado via WHM API');
+      return true;
+    }
+  } catch (e3) {
+    console.log(`   ⚠️ WHM API falhou: ${e3.message}`);
+  }
+  
+  // Método 4: Fileman/trash como último recurso
+  try {
+    console.log('   → Tentando Fileman/trash...');
+    const trashUrl = `${baseUrl}${cpSecurityToken}/execute/Fileman/trash`;
+    const response = await axios.post(trashUrl, new URLSearchParams({ 
+      path: filePath 
+    }).toString(), {
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Cookie': `cpsession=${sessionData.session}`
+      },
+      timeout: 15000,
+      httpsAgent
+    });
+    
+    if (response.data?.status === 1) {
+      console.log('   ✅ Movido para lixeira via trash');
+      return true;
+    }
+  } catch (e4) {
+    console.log(`   ⚠️ Fileman/trash falhou: ${e4.message}`);
+  }
+  
+  console.log('   ❌ TODOS OS MÉTODOS DE DELEÇÃO FALHARAM');
+  return false;
 }
 
 // ========== FUNÇÃO PRINCIPAL ==========
@@ -1111,7 +1296,7 @@ router.post('/activate-only', async (req, res) => {
   console.log('='.repeat(70));
   
   try {
-    // Criar sessão no cPanel para a ativação
+    // Criar sessão no cPanel
     console.log('🔑 Criando sessão no cPanel...');
     const sessionResponse = await axios.get(
       `${config.WHM_URL}/json-api/create_user_session?api.version=1&user=${config.WHM_ACCOUNT_USERNAME}&service=cpaneld`,
@@ -1146,7 +1331,7 @@ router.post('/activate-only', async (req, res) => {
       'wordpress-seo-premium'
     ];
     
-    const result = await activatePluginsViaMuPlugin(domain, pluginNames, sessionData, cpSecurityToken);
+    const result = await activatePluginsViaDirectPHP(domain, pluginNames, sessionData, cpSecurityToken);
     res.json({ domain, ...result });
   } catch (error) {
     console.error('❌ ERRO:', error.message);
