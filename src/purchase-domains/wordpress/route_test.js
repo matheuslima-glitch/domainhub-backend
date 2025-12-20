@@ -335,173 +335,261 @@ async function installWordPress(domain) {
 // ========== AUTENTICAÇÃO WORDPRESS VIA COOKIE ==========
 
 /**
- * Autentica no WordPress via wp-login.php e retorna cookies + nonce
+ * Cria uma instância do axios com cookie jar manual
+ * Acumula cookies de todas as respostas durante redirects
+ */
+function createWordPressClient(baseUrl) {
+  const httpsAgent = new https.Agent({ rejectUnauthorized: false });
+  const cookieJar = new Map();
+  
+  const client = axios.create({
+    baseURL: baseUrl,
+    httpsAgent,
+    timeout: 30000,
+    maxRedirects: 10,
+    validateStatus: (status) => status < 500,
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+      'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7'
+    }
+  });
+  
+  // Interceptor para capturar cookies de TODAS as respostas
+  client.interceptors.response.use((response) => {
+    const setCookies = response.headers['set-cookie'];
+    if (setCookies) {
+      setCookies.forEach(cookieStr => {
+        const [nameValue] = cookieStr.split(';');
+        const [name, value] = nameValue.split('=');
+        if (name && value) {
+          cookieJar.set(name.trim(), value.trim());
+        }
+      });
+    }
+    return response;
+  });
+  
+  // Interceptor para enviar cookies em TODAS as requests
+  client.interceptors.request.use((config) => {
+    if (cookieJar.size > 0) {
+      const cookieString = Array.from(cookieJar.entries())
+        .map(([name, value]) => `${name}=${value}`)
+        .join('; ');
+      config.headers['Cookie'] = cookieString;
+    }
+    return config;
+  });
+  
+  return {
+    client,
+    cookieJar,
+    getCookieString: () => {
+      return Array.from(cookieJar.entries())
+        .map(([name, value]) => `${name}=${value}`)
+        .join('; ');
+    }
+  };
+}
+
+/**
+ * Autentica no WordPress via wp-login.php
  * 
- * COMO FUNCIONA:
- * 1. POST para wp-login.php com credenciais
- * 2. WordPress retorna cookies de sessão (wordpress_logged_in_*, wordpress_sec_*)
- * 3. Acessamos wp-admin para extrair o nonce (token CSRF)
- * 4. Usamos cookies + nonce para chamar REST API
- * 
- * POSSÍVEIS FALHAS:
- * - Senha incorreta → status 200 mas sem redirect (verificamos pelo Location header)
- * - Proteção brute-force → status 403 ou captcha
- * - REST API desabilitada → /wp-json/ retorna 404
+ * FLUXO:
+ * 1. GET wp-login.php para obter cookies iniciais
+ * 2. POST credenciais para wp-login.php
+ * 3. Seguir redirects, acumulando cookies
+ * 4. Verificar se temos cookies de autenticação
+ * 5. Acessar wp-admin para obter nonce
  */
 async function authenticateWordPress(domain, username, password) {
   console.log('\n🔐 [WORDPRESS] Autenticando via Cookie...');
   
-  const httpsAgent = new https.Agent({ rejectUnauthorized: false });
   const wpUrl = `https://${domain}`;
-  
-  // PASSO 1: Fazer login no WordPress
-  console.log('   1️⃣ Fazendo login em wp-login.php...');
-  
-  const loginData = new URLSearchParams({
-    log: username,
-    pwd: password,
-    'wp-submit': 'Log In',
-    redirect_to: `${wpUrl}/wp-admin/`,
-    testcookie: '1'
-  });
-  
-  let loginResponse;
-  try {
-    loginResponse = await axios.post(
-      `${wpUrl}/wp-login.php`,
-      loginData.toString(),
-      {
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-          'Cookie': 'wordpress_test_cookie=WP%20Cookie%20check',
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        },
-        httpsAgent,
-        timeout: 30000,
-        maxRedirects: 0,
-        validateStatus: (status) => status < 400 || status === 302
-      }
-    );
-  } catch (error) {
-    // Axios trata 302 como erro por padrão quando maxRedirects: 0
-    if (error.response && error.response.status === 302) {
-      loginResponse = error.response;
-    } else {
-      throw new Error(`Falha no login: ${error.message}`);
-    }
-  }
-  
-  // Verificar se login foi bem-sucedido (deve retornar 302 redirect)
-  const setCookies = loginResponse.headers['set-cookie'] || [];
-  const hasAuthCookie = setCookies.some(c => 
-    c.includes('wordpress_logged_in') || c.includes('wordpress_sec')
-  );
-  
-  if (!hasAuthCookie) {
-    // Verificar se retornou página de erro
-    const responseData = loginResponse.data || '';
-    if (responseData.includes('ERROR') || responseData.includes('error')) {
-      throw new Error('Credenciais inválidas ou usuário bloqueado');
-    }
-    throw new Error('Login falhou - cookies de autenticação não recebidos');
-  }
-  
-  // Formatar cookies para uso em requests
-  const cookieString = setCookies.map(c => c.split(';')[0]).join('; ');
-  console.log('   ✅ Login OK - cookies obtidos');
-  
-  // PASSO 2: Acessar wp-admin para obter nonce
-  console.log('   2️⃣ Obtendo nonce do wp-admin...');
-  
-  const adminResponse = await axios.get(`${wpUrl}/wp-admin/plugins.php`, {
-    headers: {
-      'Cookie': cookieString,
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-    },
-    httpsAgent,
-    timeout: 30000,
-    maxRedirects: 5
-  });
-  
-  const adminHtml = adminResponse.data;
-  
-  // Extrair nonce - pode estar em diferentes lugares
-  let nonce = null;
-  
-  // Método 1: wpApiSettings.nonce (mais comum)
-  const wpApiMatch = adminHtml.match(/wpApiSettings\s*=\s*\{[^}]*"nonce"\s*:\s*"([^"]+)"/);
-  if (wpApiMatch) {
-    nonce = wpApiMatch[1];
-  }
-  
-  // Método 2: _wpnonce em forms
-  if (!nonce) {
-    const wpNonceMatch = adminHtml.match(/name="_wpnonce"\s+value="([^"]+)"/);
-    if (wpNonceMatch) {
-      nonce = wpNonceMatch[1];
-    }
-  }
-  
-  // Método 3: wp_rest nonce
-  if (!nonce) {
-    const restNonceMatch = adminHtml.match(/"wp_rest"\s*:\s*"([^"]+)"/);
-    if (restNonceMatch) {
-      nonce = restNonceMatch[1];
-    }
-  }
-  
-  // Método 4: data-wp-nonce attribute
-  if (!nonce) {
-    const dataNonceMatch = adminHtml.match(/data-wp-nonce="([^"]+)"/);
-    if (dataNonceMatch) {
-      nonce = dataNonceMatch[1];
-    }
-  }
-  
-  if (!nonce) {
-    console.log('   ⚠️ Nonce não encontrado no HTML, tentando sem nonce...');
-  } else {
-    console.log('   ✅ Nonce obtido');
-  }
-  
-  // PASSO 3: Verificar se REST API está acessível
-  console.log('   3️⃣ Verificando REST API...');
+  const { client, cookieJar, getCookieString } = createWordPressClient(wpUrl);
   
   try {
-    const restCheck = await axios.get(`${wpUrl}/wp-json/wp/v2/plugins`, {
-      headers: {
-        'Cookie': cookieString,
-        'X-WP-Nonce': nonce || '',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-      },
-      httpsAgent,
-      timeout: 30000,
-      validateStatus: (status) => status < 500
+    // PASSO 1: Acessar wp-login.php para obter cookies iniciais
+    console.log('   1️⃣ Acessando página de login...');
+    
+    const loginPageResponse = await client.get('/wp-login.php');
+    
+    if (loginPageResponse.status !== 200) {
+      throw new Error(`Página de login retornou status ${loginPageResponse.status}`);
+    }
+    
+    // Setar cookie de teste
+    cookieJar.set('wordpress_test_cookie', 'WP%20Cookie%20check');
+    
+    console.log(`   ✅ Página de login OK (cookies iniciais: ${cookieJar.size})`);
+    
+    // PASSO 2: Fazer login
+    console.log('   2️⃣ Enviando credenciais...');
+    
+    const loginData = new URLSearchParams({
+      log: username,
+      pwd: password,
+      'wp-submit': 'Log In',
+      redirect_to: `${wpUrl}/wp-admin/`,
+      testcookie: '1'
     });
     
-    if (restCheck.status === 401) {
-      throw new Error('REST API retornou 401 - autenticação não aceita');
+    const loginResponse = await client.post('/wp-login.php', loginData.toString(), {
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Referer': `${wpUrl}/wp-login.php`
+      }
+    });
+    
+    // Debug: mostrar cookies recebidos
+    console.log(`   📦 Cookies após login: ${cookieJar.size}`);
+    for (const [name, value] of cookieJar.entries()) {
+      const displayValue = value.length > 20 ? value.substring(0, 20) + '...' : value;
+      console.log(`      - ${name}: ${displayValue}`);
     }
     
-    if (restCheck.status === 404) {
-      throw new Error('REST API de plugins não encontrada (404)');
+    // Verificar se temos cookies de autenticação
+    const hasAuthCookie = Array.from(cookieJar.keys()).some(name => 
+      name.startsWith('wordpress_logged_in') || 
+      name.startsWith('wordpress_sec') ||
+      name.startsWith('wp-settings')
+    );
+    
+    if (!hasAuthCookie) {
+      // Verificar se a página contém erro de login
+      const responseHtml = loginResponse.data || '';
+      
+      if (responseHtml.includes('login_error') || responseHtml.includes('ERROR')) {
+        // Extrair mensagem de erro
+        const errorMatch = responseHtml.match(/<div[^>]*id="login_error"[^>]*>([\s\S]*?)<\/div>/i);
+        const errorMsg = errorMatch ? errorMatch[1].replace(/<[^>]+>/g, '').trim() : 'Credenciais inválidas';
+        throw new Error(`Login falhou: ${errorMsg}`);
+      }
+      
+      // Pode ser que o WordPress não setou cookies por algum motivo de segurança
+      console.log('   ⚠️ Cookies de autenticação não encontrados, tentando continuar...');
+    } else {
+      console.log('   ✅ Login OK - cookies de autenticação recebidos');
     }
     
-    if (restCheck.status === 403) {
-      throw new Error('Sem permissão para acessar plugins (403)');
+    // PASSO 3: Acessar wp-admin para obter nonce
+    console.log('   3️⃣ Acessando wp-admin para obter nonce...');
+    
+    const adminResponse = await client.get('/wp-admin/plugins.php');
+    
+    // Verificar se fomos redirecionados para login (sessão inválida)
+    if (adminResponse.request?.path?.includes('wp-login.php') || 
+        adminResponse.data?.includes('wp-login.php')) {
+      throw new Error('Sessão não autenticada - redirecionado para login');
+    }
+    
+    const adminHtml = adminResponse.data || '';
+    
+    // Extrair nonce - tentar múltiplos métodos
+    let nonce = null;
+    
+    // Método 1: wpApiSettings.nonce
+    const wpApiMatch = adminHtml.match(/wpApiSettings\s*=\s*\{[^}]*"nonce"\s*:\s*"([^"]+)"/);
+    if (wpApiMatch) {
+      nonce = wpApiMatch[1];
+      console.log('   ✅ Nonce obtido via wpApiSettings');
+    }
+    
+    // Método 2: wp.apiFetch.nonceMiddleware
+    if (!nonce) {
+      const apiFetchMatch = adminHtml.match(/wp\.apiFetch\.nonceMiddleware\s*=\s*[^"]*"([^"]+)"/);
+      if (apiFetchMatch) {
+        nonce = apiFetchMatch[1];
+        console.log('   ✅ Nonce obtido via apiFetch');
+      }
+    }
+    
+    // Método 3: _wpnonce em forms
+    if (!nonce) {
+      const wpNonceMatch = adminHtml.match(/name="_wpnonce"\s+value="([^"]+)"/);
+      if (wpNonceMatch) {
+        nonce = wpNonceMatch[1];
+        console.log('   ✅ Nonce obtido via form');
+      }
+    }
+    
+    // Método 4: data-wp-nonce
+    if (!nonce) {
+      const dataNonceMatch = adminHtml.match(/data-wp-nonce="([^"]+)"/);
+      if (dataNonceMatch) {
+        nonce = dataNonceMatch[1];
+        console.log('   ✅ Nonce obtido via data attribute');
+      }
+    }
+    
+    // Método 5: Buscar qualquer nonce no HTML
+    if (!nonce) {
+      const anyNonceMatch = adminHtml.match(/"nonce"\s*:\s*"([a-f0-9]{10})"/);
+      if (anyNonceMatch) {
+        nonce = anyNonceMatch[1];
+        console.log('   ✅ Nonce obtido via regex genérico');
+      }
+    }
+    
+    if (!nonce) {
+      console.log('   ⚠️ Nonce não encontrado, tentando sem nonce...');
+    }
+    
+    // PASSO 4: Verificar se REST API está acessível
+    console.log('   4️⃣ Verificando REST API...');
+    
+    const restHeaders = {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json'
+    };
+    
+    if (nonce) {
+      restHeaders['X-WP-Nonce'] = nonce;
+    }
+    
+    const restResponse = await client.get('/wp-json/wp/v2/plugins', {
+      headers: restHeaders
+    });
+    
+    if (restResponse.status === 401) {
+      console.log('   ⚠️ REST API retornou 401, tentando sem nonce...');
+      
+      // Tentar sem nonce
+      const restResponse2 = await client.get('/wp-json/wp/v2/plugins', {
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' }
+      });
+      
+      if (restResponse2.status === 401) {
+        throw new Error('REST API inacessível - autenticação falhou');
+      }
+    }
+    
+    if (restResponse.status === 404) {
+      throw new Error('REST API de plugins não encontrada (404) - verifique se a API está habilitada');
+    }
+    
+    if (restResponse.status === 403) {
+      throw new Error('Sem permissão para acessar plugins (403) - usuário pode não ser admin');
     }
     
     console.log('   ✅ REST API acessível');
     
+    return {
+      client,
+      cookies: getCookieString(),
+      nonce: nonce,
+      wpUrl: wpUrl
+    };
+    
   } catch (error) {
-    throw new Error(`REST API inacessível: ${error.message}`);
+    // Logar mais detalhes do erro
+    console.log(`   ❌ Erro: ${error.message}`);
+    if (error.response) {
+      console.log(`   📊 Status: ${error.response.status}`);
+      console.log(`   📦 Cookies atuais: ${cookieJar.size}`);
+    }
+    throw error;
   }
-  
-  return {
-    cookies: cookieString,
-    nonce: nonce,
-    wpUrl: wpUrl
-  };
 }
 
 // ========== ETAPA 3: INSTALAR PLUGINS ==========
@@ -603,7 +691,6 @@ async function installPluginsViaFileManager(domain, plugins) {
           });
         } catch (e) { /* ignora se não existe */ }
         
-        // Deletar pasta do plugin se existir (para reinstalação limpa)
         try {
           await axios.post(trashUrl, new URLSearchParams({ path: `${pluginsPath}/${plugin.name}` }).toString(), {
             headers, timeout: 15000, httpsAgent
@@ -651,12 +738,11 @@ async function installPluginsViaFileManager(domain, plugins) {
         }
         console.log(`   ✅ Upload OK`);
         
-        // PASSO 4: Extrair ZIP usando API do cPanel
+        // PASSO 4: Extrair ZIP
         console.log(`   📂 Extraindo arquivos...`);
         
         let extractSuccess = false;
         
-        // Método 1: Tentar via cPanel API2 Fileman fileop
         try {
           const shellUrl = `${baseUrl}${cpSecurityToken}/json-api/cpanel`;
           const shellParams = new URLSearchParams({
@@ -682,10 +768,8 @@ async function installPluginsViaFileManager(domain, plugins) {
           console.log(`   ⚠️ Método Fileman falhou: ${e.message}`);
         }
         
-        // Método 2: Tentar via WHM API
         if (!extractSuccess) {
           try {
-            console.log(`   🔄 Tentando extração via WHM...`);
             const whmExtractUrl = `${config.WHM_URL}/json-api/cpanel`;
             const whmParams = new URLSearchParams({
               'cpanel_jsonapi_user': config.WHM_ACCOUNT_USERNAME,
@@ -720,7 +804,7 @@ async function installPluginsViaFileManager(domain, plugins) {
           throw new Error('Todos os métodos de extração falharam');
         }
         
-        // PASSO 5: Deletar ZIP após extração
+        // PASSO 5: Deletar ZIP
         console.log(`   🗑️ Removendo arquivo ZIP...`);
         try {
           await axios.post(trashUrl, new URLSearchParams({ path: zipPath }).toString(), {
@@ -737,7 +821,6 @@ async function installPluginsViaFileManager(domain, plugins) {
         results.push({ plugin: plugin.name, success: false, error: err.message });
       }
       
-      // Pausa entre plugins
       await new Promise(resolve => setTimeout(resolve, 2000));
     }
     
@@ -751,7 +834,7 @@ async function installPluginsViaFileManager(domain, plugins) {
     }
     console.log('='.repeat(50));
     
-    // ETAPA 4: Ativar plugins via REST API do WordPress
+    // ETAPA 4: Ativar plugins
     if (installedPlugins.length > 0) {
       console.log('\n' + '='.repeat(70));
       console.log('🔧 [ETAPA 4] ATIVANDO E CONFIGURANDO PLUGINS');
@@ -785,22 +868,6 @@ async function installPluginsViaFileManager(domain, plugins) {
 
 // ========== ATIVAR PLUGINS VIA REST API ==========
 
-/**
- * Ativa plugins via WordPress REST API usando Cookie Authentication
- * 
- * FLUXO:
- * 1. Autenticar via wp-login.php → obter cookies
- * 2. Acessar wp-admin → obter nonce
- * 3. GET /wp-json/wp/v2/plugins → listar plugins instalados
- * 4. POST /wp-json/wp/v2/plugins/{plugin} → ativar cada plugin
- * 5. POST /wp-json/wp/v2/plugins/{plugin} → ativar auto-update
- * 
- * POSSÍVEIS FALHAS:
- * - Login falha: credenciais erradas, usuário bloqueado
- * - Nonce inválido: sessão expirada
- * - Plugin não encontrado: slug diferente do esperado
- * - Sem permissão: usuário não é admin
- */
 async function activatePluginsViaREST(domain, pluginNames) {
   console.log('\n🔌 Ativando plugins via WordPress REST API...');
   
@@ -811,8 +878,6 @@ async function activatePluginsViaREST(domain, pluginNames) {
     errors: []
   };
   
-  const httpsAgent = new https.Agent({ rejectUnauthorized: false });
-  
   try {
     // Obter senha do WordPress
     const wpPassword = await getPasswordFromPassbolt();
@@ -821,29 +886,33 @@ async function activatePluginsViaREST(domain, pluginNames) {
     // Autenticar no WordPress
     const auth = await authenticateWordPress(domain, wpUser, wpPassword);
     
-    const headers = {
-      'Cookie': auth.cookies,
-      'X-WP-Nonce': auth.nonce || '',
+    // Headers para REST API
+    const restHeaders = {
       'Content-Type': 'application/json',
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+      'Accept': 'application/json'
     };
+    
+    if (auth.nonce) {
+      restHeaders['X-WP-Nonce'] = auth.nonce;
+    }
     
     // PASSO 1: Listar todos os plugins instalados
     console.log('\n   📋 Listando plugins instalados...');
     
-    const listResponse = await axios.get(`${auth.wpUrl}/wp-json/wp/v2/plugins`, {
-      headers,
-      httpsAgent,
-      timeout: 30000
+    const listResponse = await auth.client.get('/wp-json/wp/v2/plugins', {
+      headers: restHeaders
     });
+    
+    if (listResponse.status !== 200) {
+      throw new Error(`Falha ao listar plugins: status ${listResponse.status}`);
+    }
     
     const installedPlugins = listResponse.data || [];
     console.log(`   ✅ ${installedPlugins.length} plugins encontrados`);
     
-    // Criar mapa de plugins por nome
+    // Criar mapa de plugins
     const pluginMap = {};
     installedPlugins.forEach(p => {
-      // O plugin file é algo como "elementor/elementor.php"
       const pluginFolder = p.plugin.split('/')[0];
       pluginMap[pluginFolder] = p;
     });
@@ -855,7 +924,7 @@ async function activatePluginsViaREST(domain, pluginNames) {
       const plugin = pluginMap[pluginName];
       
       if (!plugin) {
-        console.log(`   ⚠️ ${pluginName}: não encontrado na lista`);
+        console.log(`   ⚠️ ${pluginName}: não encontrado`);
         results.errors.push({ plugin: pluginName, action: 'find', error: 'Plugin não encontrado' });
         continue;
       }
@@ -863,27 +932,24 @@ async function activatePluginsViaREST(domain, pluginNames) {
       const pluginSlug = plugin.plugin;
       const encodedSlug = encodeURIComponent(pluginSlug);
       
-      // Verificar se já está ativo
       if (plugin.status === 'active') {
-        console.log(`   ℹ️ ${pluginName}: já está ativo`);
+        console.log(`   ℹ️ ${pluginName}: já ativo`);
         results.activated.push(pluginName);
         continue;
       }
       
-      // Ativar plugin
       try {
-        const activateResponse = await axios.post(
-          `${auth.wpUrl}/wp-json/wp/v2/plugins/${encodedSlug}`,
+        const activateResponse = await auth.client.post(
+          `/wp-json/wp/v2/plugins/${encodedSlug}`,
           { status: 'active' },
-          { headers, httpsAgent, timeout: 60000 }
+          { headers: restHeaders, timeout: 60000 }
         );
         
         if (activateResponse.data?.status === 'active') {
           console.log(`   ✅ ${pluginName}: ativado`);
           results.activated.push(pluginName);
         } else {
-          console.log(`   ⚠️ ${pluginName}: resposta inesperada`);
-          results.errors.push({ plugin: pluginName, action: 'activate', error: 'Status não confirmado' });
+          console.log(`   ⚠️ ${pluginName}: status não confirmado`);
         }
       } catch (activateErr) {
         const errMsg = activateErr.response?.data?.message || activateErr.message;
@@ -891,7 +957,6 @@ async function activatePluginsViaREST(domain, pluginNames) {
         results.errors.push({ plugin: pluginName, action: 'activate', error: errMsg });
       }
       
-      // Pequena pausa entre ativações
       await new Promise(resolve => setTimeout(resolve, 1000));
     }
     
@@ -899,70 +964,32 @@ async function activatePluginsViaREST(domain, pluginNames) {
     console.log('\n   📥 Forçando verificação de atualizações...');
     
     try {
-      // Chamar o cron do WordPress para verificar atualizações
-      await axios.get(`${auth.wpUrl}/wp-cron.php?doing_wp_cron`, {
-        httpsAgent,
-        timeout: 30000
-      });
-      
-      // Também tentar via admin-ajax
-      await axios.post(
-        `${auth.wpUrl}/wp-admin/admin-ajax.php`,
-        new URLSearchParams({
-          action: 'update-plugin',
-          _ajax_nonce: auth.nonce || ''
-        }).toString(),
-        {
-          headers: {
-            ...headers,
-            'Content-Type': 'application/x-www-form-urlencoded'
-          },
-          httpsAgent,
-          timeout: 30000,
-          validateStatus: () => true // Aceitar qualquer status
-        }
-      );
-      
-      console.log('   ✅ Verificação de atualizações disparada');
-      results.updated.push('update_check_triggered');
-    } catch (updateErr) {
-      console.log(`   ⚠️ Erro ao verificar atualizações: ${updateErr.message}`);
+      await auth.client.get('/wp-cron.php?doing_wp_cron', { timeout: 30000 });
+      console.log('   ✅ Cron executado');
+      results.updated.push('cron_executed');
+    } catch (cronErr) {
+      console.log(`   ⚠️ Cron falhou: ${cronErr.message}`);
     }
     
-    // PASSO 4: Ativar auto-update para cada plugin
+    // PASSO 4: Ativar auto-update
     console.log('\n   🔄 Ativando auto-update...');
     
-    // Recarregar lista de plugins para pegar status atualizado
-    const updatedListResponse = await axios.get(`${auth.wpUrl}/wp-json/wp/v2/plugins`, {
-      headers,
-      httpsAgent,
-      timeout: 30000
-    });
-    
-    const updatedPlugins = updatedListResponse.data || [];
-    
     for (const pluginName of pluginNames) {
-      const plugin = updatedPlugins.find(p => p.plugin.startsWith(pluginName + '/'));
-      
+      const plugin = pluginMap[pluginName];
       if (!plugin) continue;
       
       const pluginSlug = plugin.plugin;
       const encodedSlug = encodeURIComponent(pluginSlug);
       
       try {
-        // WordPress 5.5+ suporta auto_update via REST API
-        const autoUpdateResponse = await axios.post(
-          `${auth.wpUrl}/wp-json/wp/v2/plugins/${encodedSlug}`,
+        await auth.client.post(
+          `/wp-json/wp/v2/plugins/${encodedSlug}`,
           { auto_update: true },
-          { headers, httpsAgent, timeout: 30000 }
+          { headers: restHeaders, timeout: 30000 }
         );
-        
-        if (autoUpdateResponse.data) {
-          console.log(`   ✅ ${pluginName}: auto-update ativado`);
-          results.autoUpdateEnabled.push(pluginName);
-        }
+        console.log(`   ✅ ${pluginName}: auto-update ativado`);
+        results.autoUpdateEnabled.push(pluginName);
       } catch (autoErr) {
-        // Auto-update pode não ser suportado em algumas configurações
         console.log(`   ⚠️ ${pluginName}: auto-update não disponível`);
       }
       
@@ -1103,6 +1130,42 @@ router.get('/passbolt-test', async (req, res) => {
     const password = await getPasswordFromPassbolt();
     res.json({ success: true, passwordLength: password.length });
   } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Rota para testar APENAS a ativação dos plugins (sem instalar)
+router.post('/activate-only', async (req, res) => {
+  const { domain } = req.body;
+  
+  if (!domain) {
+    return res.status(400).json({ error: 'Domínio não informado' });
+  }
+  
+  console.log('\n' + '='.repeat(70));
+  console.log('🔧 [TESTE] ATIVAÇÃO DE PLUGINS');
+  console.log('   Domínio:', domain);
+  console.log('='.repeat(70));
+  
+  try {
+    // Lista de plugins que devem estar instalados
+    const pluginNames = [
+      'duplicate-post',
+      'elementor',
+      'elementor-pro',
+      'google-site-kit',
+      'insert-headers-and-footers',
+      'litespeed-cache',
+      'rename-wp-admin-login',
+      'wordfence',
+      'wordpress-seo',
+      'wordpress-seo-premium'
+    ];
+    
+    const result = await activatePluginsViaREST(domain, pluginNames);
+    res.json({ domain, ...result });
+  } catch (error) {
+    console.error('❌ ERRO:', error.message);
     res.status(500).json({ success: false, error: error.message });
   }
 });
