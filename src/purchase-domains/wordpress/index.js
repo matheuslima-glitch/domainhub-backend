@@ -37,11 +37,7 @@ class WordPressDomainPurchase {
     this.maxRetries = 10;
     this.priceLimit = 1.00;
     
-    // 🔥 CAMINHO CORRETO - SEMPRE /home/USERNAME
-    this.basePath = `/home/${config.CPANEL_USERNAME}`;
-    
-    // Site modelo para copiar plugins
-    this.modelSitePath = `${this.basePath}/mynervify.com`;
+
     
     // Dados de contato para registro
     this.registrantInfo = {
