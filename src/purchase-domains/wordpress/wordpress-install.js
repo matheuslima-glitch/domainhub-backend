@@ -47,10 +47,63 @@ async function updateProgress(sessionId, step, status, message, domainName = nul
 
 // ========== GERAR USERNAME ÚNICO PARA WHM ==========
 
-function generateWHMUsername() {
-  // Gera 3 números aleatórios (000-999)
-  const randomNum = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
-  return `gex${randomNum}`;
+/**
+ * Lista todas as contas existentes no WHM
+ * @returns {Promise<string[]>} Array com usernames existentes
+ */
+async function listExistingWHMAccounts() {
+  try {
+    const response = await axios.get(
+      `${config.WHM_URL}/json-api/listaccts?api.version=1`,
+      {
+        headers: {
+          'Authorization': `whm ${config.WHM_USERNAME}:${config.WHM_API_TOKEN}`
+        },
+        timeout: 30000,
+        httpsAgent: new https.Agent({ rejectUnauthorized: false })
+      }
+    );
+    
+    const accounts = response.data?.data?.acct || [];
+    return accounts.map(acc => acc.user?.toLowerCase());
+  } catch (error) {
+    console.error('⚠️ [WHM] Erro ao listar contas:', error.message);
+    return [];
+  }
+}
+
+/**
+ * Gera um username único para WHM
+ * Formato: gex + 3 números (000-999)
+ * Verifica no servidor se já existe antes de retornar
+ * @returns {Promise<string>} Username único
+ */
+async function generateWHMUsername() {
+  console.log('🔐 [WHM] Gerando username único...');
+  
+  const existingUsernames = await listExistingWHMAccounts();
+  console.log(`   📋 ${existingUsernames.length} contas existentes no servidor`);
+  
+  let attempts = 0;
+  const maxAttempts = 100;
+  
+  while (attempts < maxAttempts) {
+    const randomNum = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
+    const username = `gex${randomNum}`;
+    
+    if (!existingUsernames.includes(username.toLowerCase())) {
+      console.log(`   ✅ Username único: ${username}`);
+      return username;
+    }
+    
+    attempts++;
+  }
+  
+  // Fallback: usar timestamp se esgotar tentativas
+  const timestamp = Date.now().toString().slice(-3);
+  const fallback = `gex${timestamp}`;
+  console.log(`   ⚠️ Fallback: ${fallback}`);
+  return fallback;
 }
 
 // ========== FUNÇÕES PASSBOLT ==========
@@ -177,7 +230,7 @@ async function createWHMAccount(domain) {
   console.log('   Domain:', domain);
   
   // Gerar username único
-  const username = generateWHMUsername();
+  const username = await generateWHMUsername();
   console.log('   Username:', username);
   
   const params = new URLSearchParams({
@@ -1050,43 +1103,65 @@ header('Content-Type: application/json; charset=utf-8');
 \$plugins_to_activate = ${pluginsArrayPhp};
 \$all_plugins = get_plugins();
 
+// Mapeamento slug -> arquivo principal
+\$plugin_map = [
+    'duplicate-post' => 'duplicate-post/duplicate-post.php',
+    'elementor' => 'elementor/elementor.php',
+    'elementor-pro' => 'elementor-pro/elementor-pro.php',
+    'google-site-kit' => 'google-site-kit/google-site-kit.php',
+    'insert-headers-and-footers' => 'insert-headers-and-footers/ihaf.php',
+    'litespeed-cache' => 'litespeed-cache/litespeed-cache.php',
+    'rename-wp-admin-login' => 'developer-flavor-rename-wp-admin-login/developer-flavor-rename-wp-admin-login.php',
+    'wordfence' => 'wordfence/wordfence.php',
+    'wordpress-seo' => 'wordpress-seo/wp-seo.php',
+    'wordpress-seo-premium' => 'wordpress-seo-premium/wp-seo-premium.php'
+];
+
+\$results['debug_plugins'] = array_keys(\$all_plugins);
+
 // PASSO 1: Ativar plugins
 foreach (\$plugins_to_activate as \$plugin_name) {
     \$found = false;
+    \$target_file = null;
     
-    foreach (\$all_plugins as \$plugin_file => \$plugin_data) {
-        \$plugin_folder = explode('/', \$plugin_file)[0];
-        
-        if (\$plugin_folder === \$plugin_name || 
-            strpos(\$plugin_file, \$plugin_name . '/') === 0 ||
-            strpos(\$plugin_file, \$plugin_name . '.php') !== false) {
-            
-            \$found = true;
-            
-            if (is_plugin_active(\$plugin_file)) {
-                \$results['already_active'][] = \$plugin_name;
-            } else {
-                \$activation_result = activate_plugin(\$plugin_file, '', false, true);
-                
-                if (is_wp_error(\$activation_result)) {
-                    \$results['errors'][] = [
-                        'plugin' => \$plugin_name,
-                        'action' => 'activate',
-                        'error' => \$activation_result->get_error_message()
-                    ];
-                } else {
-                    \$results['activated'][] = \$plugin_name;
-                }
+    // 1. Tentar mapeamento direto
+    if (isset(\$plugin_map[\$plugin_name]) && isset(\$all_plugins[\$plugin_map[\$plugin_name]])) {
+        \$target_file = \$plugin_map[\$plugin_name];
+        \$found = true;
+    }
+    
+    // 2. Busca flexível
+    if (!\$found) {
+        foreach (\$all_plugins as \$file => \$data) {
+            \$folder = explode('/', \$file)[0];
+            if (\$folder === \$plugin_name || strpos(\$file, \$plugin_name . '/') === 0) {
+                \$target_file = \$file;
+                \$found = true;
+                break;
             }
-            break;
         }
     }
     
-    if (!\$found) {
+    // 3. Ativar
+    if (\$found && \$target_file) {
+        if (is_plugin_active(\$target_file)) {
+            \$results['already_active'][] = \$plugin_name;
+        } else {
+            \$result = activate_plugin(\$target_file, '', false, true);
+            if (is_wp_error(\$result)) {
+                \$results['errors'][] = [
+                    'plugin' => \$plugin_name,
+                    'file' => \$target_file,
+                    'error' => \$result->get_error_message()
+                ];
+            } else {
+                \$results['activated'][] = \$plugin_name;
+            }
+        }
+    } else {
         \$results['errors'][] = [
             'plugin' => \$plugin_name,
-            'action' => 'find',
-            'error' => 'Plugin não encontrado'
+            'error' => 'Plugin nao encontrado'
         ];
     }
 }
