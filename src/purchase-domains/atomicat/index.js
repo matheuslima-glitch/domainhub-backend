@@ -20,7 +20,6 @@ class AtomiCatDomainPurchase {
     // Configurações de APIs
     this.namecheapAPI = 'https://api.namecheap.com/xml.response';
     this.openaiAPI = 'https://api.openai.com/v1/chat/completions';
-    this.godaddyAPI = 'https://api.godaddy.com/v1';
     
     // Configurações de compra
     this.maxRetries = 10;
@@ -366,68 +365,88 @@ class AtomiCatDomainPurchase {
   }
 
   /**
-   * VERIFICAR DISPONIBILIDADE - GODADDY
+   * VERIFICAR DISPONIBILIDADE E PREÇO - NAMECHEAP
    */
   async checkDomainAvailability(domain) {
-    if (!config.GODADDY_API_KEY || !config.GODADDY_API_SECRET) {
-      console.error('❌ [GODADDY] API não configurada!');
-      return { available: false, error: 'GoDaddy API não configurada' };
+    if (!config.NAMECHEAP_API_KEY || !config.NAMECHEAP_API_USER) {
+      console.error('❌ [NAMECHEAP-ATOMICAT] API não configurada!');
+      return { available: false, error: 'Namecheap API não configurada' };
     }
 
     try {
-      console.log(`🔍 [GODADDY-ATOMICAT] Verificando: ${domain}...`);
+      console.log(`🔍 [NAMECHEAP-ATOMICAT] Verificando: ${domain}...`);
       
-      const response = await axios.get(
-        `${this.godaddyAPI}/domains/available`,
-        {
-          params: {
-            domain: domain,
-            checkType: 'FULL',
-            forTransfer: false
-          },
-          headers: {
-            'Authorization': `sso-key ${config.GODADDY_API_KEY}:${config.GODADDY_API_SECRET}`,
-            'Accept': 'application/json',
-            'Content-Type': 'application/json'
-          },
-          timeout: 15000
-        }
-      );
-
-      const data = response.data;
-      const isAvailable = data.available === true;
+      // Verificar disponibilidade
+      const checkParams = {
+        ApiUser: config.NAMECHEAP_API_USER,
+        ApiKey: config.NAMECHEAP_API_KEY,
+        UserName: config.NAMECHEAP_API_USER,
+        Command: 'namecheap.domains.check',
+        ClientIp: config.NAMECHEAP_CLIENT_IP,
+        DomainList: domain
+      };
       
-      // Converter microdollars para dólares
+      const checkResponse = await axios.get(this.namecheapAPI, { params: checkParams, timeout: 15000 });
+      const checkXml = checkResponse.data;
+      
+      // Extrair disponibilidade
+      const availableMatch = checkXml.match(/Available="([^"]+)"/);
+      const isAvailable = availableMatch && availableMatch[1].toLowerCase() === 'true';
+      
+      // Verificar se é premium
+      const isPremiumMatch = checkXml.match(/IsPremiumName="([^"]+)"/);
+      const isPremium = isPremiumMatch && isPremiumMatch[1].toLowerCase() === 'true';
+      
       let price = 0.99;
-      if (data.price && typeof data.price === 'number') {
-        price = data.price / 1000000;
+      
+      // Se for premium, pegar preço premium
+      if (isPremium) {
+        const premiumPriceMatch = checkXml.match(/PremiumRegistrationPrice="([^"]+)"/);
+        if (premiumPriceMatch) {
+          price = parseFloat(premiumPriceMatch[1]);
+        }
+      } else {
+        // Buscar preço da TLD
+        const tld = domain.split('.').pop().toLowerCase();
+        
+        try {
+          const pricingParams = {
+            ApiUser: config.NAMECHEAP_API_USER,
+            ApiKey: config.NAMECHEAP_API_KEY,
+            UserName: config.NAMECHEAP_API_USER,
+            Command: 'namecheap.users.getPricing',
+            ClientIp: config.NAMECHEAP_CLIENT_IP,
+            ProductType: 'DOMAIN',
+            ProductCategory: 'REGISTER',
+            ProductName: tld
+          };
+          
+          const pricingResponse = await axios.get(this.namecheapAPI, { params: pricingParams, timeout: 15000 });
+          const pricingXml = pricingResponse.data;
+          
+          const priceMatch = pricingXml.match(/Duration="1"[^>]*Price="([^"]+)"/);
+          if (priceMatch) {
+            price = parseFloat(priceMatch[1]);
+          }
+        } catch (pricingError) {
+          console.log(`⚠️ [NAMECHEAP-ATOMICAT] Erro ao buscar pricing: ${pricingError.message}`);
+        }
       }
 
-      console.log(`📊 [GODADDY-ATOMICAT] ${domain}`);
+      console.log(`📊 [NAMECHEAP-ATOMICAT] ${domain}`);
       console.log(`   Disponível: ${isAvailable ? '✅ SIM' : '❌ NÃO'}`);
+      console.log(`   Premium: ${isPremium ? 'SIM' : 'NÃO'}`);
       console.log(`   Preço: $${price.toFixed(2)}`);
       
       return {
         available: isAvailable,
         price: price,
-        definitive: data.definitive || false
+        definitive: true,
+        isPremium: isPremium
       };
 
     } catch (error) {
-      console.error('❌ [GODADDY-ATOMICAT] Erro:', error.message);
-      
-      if (error.response) {
-        if (error.response.status === 401) {
-          return { available: false, error: 'Autenticação GoDaddy falhou' };
-        }
-        if (error.response.status === 403) {
-          return { available: false, error: 'Sem permissão GoDaddy' };
-        }
-        if (error.response.status === 404) {
-          return { available: false, error: 'Domínio inválido' };
-        }
-      }
-      
+      console.error('❌ [NAMECHEAP-ATOMICAT] Erro na verificação:', error.message);
       return { available: false, error: error.message };
     }
   }

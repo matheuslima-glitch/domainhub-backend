@@ -31,7 +31,6 @@ class WordPressDomainPurchase {
     this.namecheapAPI = 'https://api.namecheap.com/xml.response';
     this.cloudflareAPI = 'https://api.cloudflare.com/client/v4';
     this.openaiAPI = 'https://api.openai.com/v1/chat/completions';
-    this.godaddyAPI = 'https://api.godaddy.com/v1';
     
     // Configurações de compra
     this.maxRetries = 10;
