@@ -1277,11 +1277,12 @@ exit;
     // Executar
     console.log('   4️⃣ Executando script...');
     
-    const scriptUrl = `https://${domain}/${phpFileName}`;
+    let phpResponse;
+    let scriptUrl = `https://${domain}/${phpFileName}`;
     console.log(`   📍 URL: ${scriptUrl}`);
     
-    let phpResponse;
     try {
+      // Primeira tentativa: via domínio
       phpResponse = await axios.get(scriptUrl, {
         timeout: 120000,
         httpsAgent,
@@ -1292,7 +1293,44 @@ exit;
         validateStatus: () => true
       });
     } catch (reqError) {
-      throw new Error(`Erro na requisição: ${reqError.message}`);
+      // Se DNS não propagou, tentar via IP do servidor
+      if (reqError.message.includes('ENOTFOUND') || reqError.message.includes('EAI_AGAIN')) {
+        console.log(`   ⚠️ DNS não propagado, tentando via IP do servidor...`);
+        
+        // Extrair IP/host do WHM_URL (ex: https://123.45.67.89:2087)
+        const whmHost = config.WHM_URL.replace('https://', '').replace(':2087', '');
+        scriptUrl = `https://${whmHost}:2083/~${username}/${phpFileName}`;
+        
+        console.log(`   📍 URL alternativa: ${scriptUrl}`);
+        
+        try {
+          phpResponse = await axios.get(scriptUrl, {
+            timeout: 120000,
+            httpsAgent,
+            headers: {
+              'User-Agent': 'Mozilla/5.0 DomainHub-Backend/1.0',
+              'Accept': 'application/json',
+              'Host': domain
+            },
+            validateStatus: () => true
+          });
+        } catch (retryError) {
+          console.log(`   ⚠️ Também falhou via IP. Plugins serão ativados após propagação do DNS.`);
+          console.log(`   ℹ️ Acesse manualmente: https://${domain}/wp-admin/plugins.php`);
+          
+          // Não lançar erro - o domínio foi comprado, só falta ativar plugins
+          return {
+            activated: [],
+            errors: [{
+              plugin: 'all',
+              error: 'DNS não propagado - ative os plugins manualmente em /wp-admin/plugins.php'
+            }],
+            dns_pending: true
+          };
+        }
+      } else {
+        throw new Error(`Erro na requisição: ${reqError.message}`);
+      }
     }
     
     console.log(`   📊 Status HTTP: ${phpResponse.status}`);
