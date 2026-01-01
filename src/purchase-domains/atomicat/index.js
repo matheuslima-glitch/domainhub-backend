@@ -376,7 +376,6 @@ class AtomiCatDomainPurchase {
     try {
       console.log(`🔍 [NAMECHEAP-ATOMICAT] Verificando: ${domain}...`);
       
-      // Verificar disponibilidade
       const checkParams = {
         ApiUser: config.NAMECHEAP_API_USER,
         ApiKey: config.NAMECHEAP_API_KEY,
@@ -389,24 +388,37 @@ class AtomiCatDomainPurchase {
       const checkResponse = await axios.get(this.namecheapAPI, { params: checkParams, timeout: 15000 });
       const checkXml = checkResponse.data;
       
-      // Extrair disponibilidade
-      const availableMatch = checkXml.match(/Available="([^"]+)"/);
+      // DEBUG: Ver XML
+      console.log(`🔍 [NAMECHEAP-ATOMICAT DEBUG] XML (primeiros 500 chars):`);
+      console.log(checkXml.substring(0, 500));
+      
+      // Extrair o bloco DomainCheckResult
+      const domainResultMatch = checkXml.match(/<DomainCheckResult[^>]*>/i);
+      
+      if (!domainResultMatch) {
+        console.error('❌ [NAMECHEAP-ATOMICAT] DomainCheckResult não encontrado');
+        return { available: false, error: 'Resposta inválida da API' };
+      }
+      
+      const resultBlock = domainResultMatch[0];
+      console.log(`🔍 [NAMECHEAP-ATOMICAT DEBUG] Bloco: ${resultBlock}`);
+      
+      // Extrair Available do bloco correto
+      const availableMatch = resultBlock.match(/Available="([^"]+)"/i);
       const isAvailable = availableMatch && availableMatch[1].toLowerCase() === 'true';
       
       // Verificar se é premium
-      const isPremiumMatch = checkXml.match(/IsPremiumName="([^"]+)"/);
+      const isPremiumMatch = resultBlock.match(/IsPremiumName="([^"]+)"/i);
       const isPremium = isPremiumMatch && isPremiumMatch[1].toLowerCase() === 'true';
       
       let price = 0.99;
       
-      // Se for premium, pegar preço premium
       if (isPremium) {
-        const premiumPriceMatch = checkXml.match(/PremiumRegistrationPrice="([^"]+)"/);
-        if (premiumPriceMatch) {
+        const premiumPriceMatch = resultBlock.match(/PremiumRegistrationPrice="([^"]+)"/i);
+        if (premiumPriceMatch && parseFloat(premiumPriceMatch[1]) > 0) {
           price = parseFloat(premiumPriceMatch[1]);
         }
       } else {
-        // Buscar preço da TLD
         const tld = domain.split('.').pop().toLowerCase();
         
         try {
@@ -427,9 +439,14 @@ class AtomiCatDomainPurchase {
           const priceMatch = pricingXml.match(/Duration="1"[^>]*Price="([^"]+)"/);
           if (priceMatch) {
             price = parseFloat(priceMatch[1]);
+          } else {
+            const altMatch = pricingXml.match(/Price="([0-9.]+)"[^>]*Duration="1"/);
+            if (altMatch) {
+              price = parseFloat(altMatch[1]);
+            }
           }
         } catch (pricingError) {
-          console.log(`⚠️ [NAMECHEAP-ATOMICAT] Erro ao buscar pricing: ${pricingError.message}`);
+          console.log(`⚠️ [NAMECHEAP-ATOMICAT] Erro pricing: ${pricingError.message}`);
         }
       }
 
@@ -446,7 +463,7 @@ class AtomiCatDomainPurchase {
       };
 
     } catch (error) {
-      console.error('❌ [NAMECHEAP-ATOMICAT] Erro na verificação:', error.message);
+      console.error('❌ [NAMECHEAP-ATOMICAT] Erro:', error.message);
       return { available: false, error: error.message };
     }
   }
