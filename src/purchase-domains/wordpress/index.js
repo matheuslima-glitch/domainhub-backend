@@ -358,9 +358,16 @@ class WordPressDomainPurchase {
       const data = response.data;
       const isAvailable = data.available === true;
       
+      // DEBUG: Ver resposta completa da API
+      console.log(`🔍 [GODADDY DEBUG] Resposta completa:`);
+      console.log(JSON.stringify(data, null, 2));
+      
       let price = 0.99;
       if (data.price && typeof data.price === 'number') {
+        console.log(`🔍 [GODADDY DEBUG] data.price bruto: ${data.price}`);
+        console.log(`🔍 [GODADDY DEBUG] Tipo: ${typeof data.price}`);
         price = data.price / 1000000;
+        console.log(`🔍 [GODADDY DEBUG] Após divisão: ${price}`);
       }
 
       console.log(`📊 [GODADDY] ${domain}`);
