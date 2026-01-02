@@ -8,8 +8,6 @@ const requiredEnvVars = [
   'NAMECHEAP_API_USER',
   'NAMECHEAP_API_KEY',
   'NAMECHEAP_CLIENT_IP',
-  'GODADDY_API_KEY', 
-  'GODADDY_API_SECRET' 
 ];
 
 const missingVars = requiredEnvVars.filter(varName => !process.env[varName]);
@@ -67,7 +65,6 @@ if (!process.env.ZAPI_INSTANCE || !process.env.ZAPI_CLIENT_TOKEN) {
 console.log('\n📋 CONFIGURAÇÃO DO SISTEMA DOMAINHUB');
 console.log('=====================================');
 console.log(`✅ Namecheap API: Configurado`);
-console.log(`✅ GoDaddy API: ${process.env.GODADDY_API_KEY ? 'Configurado' : 'NÃO CONFIGURADO'}`);
 console.log(`✅ IP Cliente: ${process.env.NAMECHEAP_CLIENT_IP}`);
 console.log(`${process.env.OPENAI_API_KEY ? '✅' : '❌'} OpenAI: ${process.env.OPENAI_API_KEY ? 'Configurado' : 'NÃO CONFIGURADO'}`);
 console.log(`${missingWordpress.length === 0 ? '✅' : '⚠️'} WordPress: ${missingWordpress.length === 0 ? 'Configurado' : 'Parcialmente configurado'}`);
@@ -89,10 +86,6 @@ module.exports = {
   NAMECHEAP_API_USER: process.env.NAMECHEAP_API_USER,
   NAMECHEAP_API_KEY: process.env.NAMECHEAP_API_KEY,
   NAMECHEAP_CLIENT_IP: process.env.NAMECHEAP_CLIENT_IP,
-
-  // GoDaddy (Verificação de Disponibilidade) - NOVAS
-  GODADDY_API_KEY: process.env.GODADDY_API_KEY,
-  GODADDY_API_SECRET: process.env.GODADDY_API_SECRET,
 
   // OpenAI (Geração de domínios com IA)
   OPENAI_API_KEY: process.env.OPENAI_API_KEY,
