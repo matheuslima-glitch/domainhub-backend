@@ -383,6 +383,8 @@ class WordPressDomainPurchase {
         const tld = domain.split('.').pop().toLowerCase();
         
         try {
+          console.log(`💰 [PRICING] Buscando preço para TLD: .${tld}`);
+          
           const pricingParams = {
             ApiUser: config.NAMECHEAP_API_USER,
             ApiKey: config.NAMECHEAP_API_KEY,
@@ -397,17 +399,30 @@ class WordPressDomainPurchase {
           const pricingResponse = await axios.get(this.namecheapAPI, { params: pricingParams, timeout: 15000 });
           const pricingXml = pricingResponse.data;
           
-          const priceMatch = pricingXml.match(/Duration="1"[^>]*Price="([^"]+)"/);
-          if (priceMatch) {
-            price = parseFloat(priceMatch[1]);
+          // DEBUG: Ver resposta completa da API de pricing
+          console.log(`💰 [PRICING DEBUG] XML completo:`);
+          console.log(pricingXml);
+          
+          // Tentar extrair YourPrice (preço promocional)
+          const yourPriceMatch = pricingXml.match(/YourPrice="([0-9.]+)"/);
+          if (yourPriceMatch && parseFloat(yourPriceMatch[1]) > 0) {
+            price = parseFloat(yourPriceMatch[1]);
+            console.log(`✅ [PRICING] YourPrice encontrado: $${price}`);
           } else {
-            const altMatch = pricingXml.match(/Price="([0-9.]+)"[^>]*Duration="1"/);
-            if (altMatch) {
-              price = parseFloat(altMatch[1]);
+            // Tentar Price normal
+            const priceMatch = pricingXml.match(/Price="([0-9.]+)"/);
+            if (priceMatch && parseFloat(priceMatch[1]) > 0) {
+              price = parseFloat(priceMatch[1]);
+              console.log(`✅ [PRICING] Price encontrado: $${price}`);
+            } else {
+              console.log(`⚠️ [PRICING] Nenhum preço encontrado no XML`);
             }
           }
         } catch (pricingError) {
           console.log(`⚠️ [NAMECHEAP] Erro pricing: ${pricingError.message}`);
+          if (pricingError.response) {
+            console.log(`⚠️ [NAMECHEAP] Response data: ${JSON.stringify(pricingError.response.data)}`);
+          }
         }
       }
 
