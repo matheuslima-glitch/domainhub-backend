@@ -40,7 +40,7 @@ class DomainDeactivationService {
     
     const integrations = {
       wordpress: { exists: false, insid: null, details: null },
-      cpanel: { exists: false, subdomain: null },
+      whm: { exists: false, username: null, domain: null },
       cloudflare: { exists: false, zoneId: null }
     };
 
@@ -59,19 +59,19 @@ class DomainDeactivationService {
       console.log(`   ⚠️ Erro ao verificar WordPress: ${error.message}`);
     }
 
-    // 2. Verificar domínio no cPanel
+    // 2. Verificar domínio no WHM
     try {
-      const cpanelDomain = await this.findCPanelDomain(domainName);
-      if (cpanelDomain) {
-        integrations.cpanel.exists = true;
-        integrations.cpanel.subdomain = cpanelDomain.subdomain;
-        integrations.cpanel.details = cpanelDomain;
-        console.log(`   ✅ cPanel encontrado: subdomain=${cpanelDomain.subdomain}`);
+      const whmAccount = await this.findWHMAccount(domainName);
+      if (whmAccount) {
+        integrations.whm.exists = true;
+        integrations.whm.username = whmAccount.user;
+        integrations.whm.domain = whmAccount.domain;
+        console.log(`   ✅ WHM encontrado: username=${whmAccount.user}`);
       } else {
-        console.log(`   ⚪ cPanel não encontrado`);
+        console.log(`   ⚪ WHM não encontrado`);
       }
     } catch (error) {
-      console.log(`   ⚠️ Erro ao verificar cPanel: ${error.message}`);
+      console.log(`   ⚠️ Erro ao verificar WHM: ${error.message}`);
     }
 
     // 3. Verificar zona no Cloudflare
@@ -91,7 +91,7 @@ class DomainDeactivationService {
 
     console.log(`\n📊 [DETECT] Resumo de integrações:`);
     console.log(`   WordPress: ${integrations.wordpress.exists ? '✅' : '⚪'}`);
-    console.log(`   cPanel: ${integrations.cpanel.exists ? '✅' : '⚪'}`);
+    console.log(`   WHM: ${integrations.whm.exists ? '✅' : '⚪'}`);
     console.log(`   Cloudflare: ${integrations.cloudflare.exists ? '✅' : '⚪'}`);
 
     return integrations;
@@ -130,64 +130,51 @@ class DomainDeactivationService {
   }
 
   /**
-   * BUSCAR DOMÍNIO NO CPANEL
+   * BUSCAR CONTA DO DOMÍNIO NO WHM
    */
-  async findCPanelDomain(domainName) {
+  async findWHMAccount(domainName) {
     try {
       const response = await axios.get(
-        `${config.CPANEL_URL}/json-api/cpanel?cpanel_jsonapi_apiversion=2&cpanel_jsonapi_module=AddonDomain&cpanel_jsonapi_func=listaddondomains`,
+        `${config.WHM_URL}/json-api/listaccts?api.version=1`,
         {
           headers: {
-            'Authorization': `cpanel ${config.CPANEL_USERNAME}:${config.CPANEL_API_TOKEN}`
+            'Authorization': `whm ${config.WHM_USERNAME}:${config.WHM_API_TOKEN}`
           },
           timeout: this.defaultTimeout,
           httpsAgent: new (require('https').Agent)({ rejectUnauthorized: false })
         }
       );
 
-      const domains = response.data?.cpanelresult?.data || [];
+      const accounts = response.data?.data?.acct || [];
       
-      for (const domain of domains) {
-        if (domain.domain === domainName) {
-          return domain;
+      for (const account of accounts) {
+        if (account.domain === domainName) {
+          return account;
         }
       }
 
       return null;
     } catch (error) {
-      console.error(`❌ [CPANEL] Erro ao buscar domínios:`, error.message);
+      console.error(`❌ [WHM] Erro ao buscar contas:`, error.message);
       return null;
     }
   }
 
   /**
-   * VERIFICAR SE DOMÍNIO AINDA EXISTE NO CPANEL
-   * Usado após cada tentativa de remoção para confirmar se funcionou
+   * VERIFICAR SE CONTA WHM AINDA EXISTE
    */
-  async checkDomainStillExists(domainName) {
+  async checkAccountStillExists(domainName) {
     try {
-      console.log(`   🔍 Verificando se ${domainName} ainda existe no cPanel...`);
+      console.log(`   🔍 Verificando se conta WHM para ${domainName} ainda existe...`);
       
-      const response = await axios.get(
-        `${config.CPANEL_URL}/json-api/cpanel?cpanel_jsonapi_apiversion=2&cpanel_jsonapi_module=AddonDomain&cpanel_jsonapi_func=listaddondomains`,
-        {
-          headers: {
-            'Authorization': `cpanel ${config.CPANEL_USERNAME}:${config.CPANEL_API_TOKEN}`
-          },
-          timeout: this.defaultTimeout,
-          httpsAgent: new (require('https').Agent)({ rejectUnauthorized: false })
-        }
-      );
-
-      const domains = response.data?.cpanelresult?.data || [];
-      const exists = domains.some(d => d.domain === domainName);
+      const account = await this.findWHMAccount(domainName);
+      const exists = account !== null;
       
-      console.log(`   ${exists ? '⚠️ Domínio ainda existe' : '✅ Domínio NÃO existe mais (removido com sucesso!)'}`);
+      console.log(`   ${exists ? '⚠️ Conta ainda existe' : '✅ Conta NÃO existe mais (removida com sucesso!)'}`);
       
       return exists;
     } catch (error) {
       console.log(`   ⚠️ Erro ao verificar existência: ${error.message}`);
-      // Em caso de erro, assumimos que ainda existe para continuar tentando
       return true;
     }
   }
@@ -257,302 +244,66 @@ class DomainDeactivationService {
     }
   }
 
-  /**
-   * REMOVER DOMÍNIO DO CPANEL - V7
-   * 
-   * MELHORIAS V7:
-   * 1. Timeout aumentado para 60s
-   * 2. Após cada método, verifica se domínio ainda existe
-   * 3. Se domínio foi removido (mesmo com timeout), retorna sucesso
+/**
+   * REMOVER CONTA DO WHM (Terminate Account)
    */
-  async removeCPanelDomain(domainName) {
-    console.log(`\n🗑️ [CPANEL] Removendo domínio ${domainName}...`);
+  async removeWHMAccount(domainName) {
+    console.log(`\n🗑️ [WHM] Removendo conta do domínio ${domainName}...`);
 
-    // Gerar DOIS formatos de subdomain possíveis
-    const subdomainStandard = `${domainName}.institutoexperience.com.br`;  // Formato padrão (API)
-    const subdomainManual = `${domainName}_institutoexperience.com.br`;    // Formato manual (cPanel interface)
+    const account = await this.findWHMAccount(domainName);
     
-    console.log(`   📌 Formato padrão (API): ${subdomainStandard}`);
-    console.log(`   📌 Formato manual (cPanel): ${subdomainManual}`);
+    if (!account) {
+      console.log(`   ⚠️ Conta não encontrada no WHM para o domínio ${domainName}`);
+      return { success: true, message: 'Conta não encontrada no WHM - já removida ou não existe' };
+    }
 
-    // ========================================
-    // MÉTODO 1: Tentar remover como Addon Domain (formato MANUAL primeiro)
-    // ========================================
-    console.log(`\n   🔄 MÉTODO 1: Tentando Addon Domain (formato manual)...`);
+    const username = account.user;
+    console.log(`   📌 Username encontrado: ${username}`);
+
     try {
-      const addonManualResponse = await axios.get(
-        `${config.CPANEL_URL}/json-api/cpanel?cpanel_jsonapi_apiversion=2&cpanel_jsonapi_module=AddonDomain&cpanel_jsonapi_func=deladdondomain&domain=${domainName}&subdomain=${subdomainManual}`,
+      const response = await axios.get(
+        `${config.WHM_URL}/json-api/terminateacct?api.version=1&user=${username}`,
         {
           headers: {
-            'Authorization': `cpanel ${config.CPANEL_USERNAME}:${config.CPANEL_API_TOKEN}`
+            'Authorization': `whm ${config.WHM_USERNAME}:${config.WHM_API_TOKEN}`
           },
-          timeout: this.defaultTimeout,
+          timeout: 120000,
           httpsAgent: new (require('https').Agent)({ rejectUnauthorized: false })
         }
       );
 
-      const addonManualResult = addonManualResponse.data?.cpanelresult?.data?.[0];
-      
-      if (addonManualResult?.result === 1) {
-        console.log(`   ✅ Addon Domain removido (formato manual)!`);
-        return { success: true, message: 'Domínio removido do cPanel com sucesso' };
+      console.log(`   📥 Resposta WHM:`, JSON.stringify(response.data, null, 2));
+
+      const metadata = response.data?.metadata;
+      const result = metadata?.result;
+
+      if (result === 1 || result === '1') {
+        console.log(`   ✅ Conta WHM removida com sucesso!`);
+        return { success: true, message: 'Conta WHM removida com sucesso' };
       } else {
-        console.log(`   ⚠️ Formato manual falhou: ${addonManualResult?.reason}`);
+        const reason = metadata?.reason || 'Erro desconhecido';
+        console.log(`   ⚠️ Falha ao remover conta: ${reason}`);
+        const translatedError = await this.translateCPanelError(reason);
+        return { success: false, message: translatedError };
       }
-    } catch (addonManualError) {
-      console.log(`   ⚠️ Erro no formato manual: ${addonManualError.message}`);
+
+    } catch (error) {
+      console.error(`   ❌ Erro ao remover conta WHM:`, error.message);
       
-      // Se deu timeout, verificar se o domínio foi removido mesmo assim
-      if (addonManualError.message.includes('timeout')) {
-        console.log(`   ⏱️ Timeout detectado - verificando se domínio foi removido...`);
-        await this.delay(3000); // Aguardar 3 segundos
+      if (error.message.includes('timeout')) {
+        console.log(`   ⏱️ Timeout detectado - verificando se conta foi removida...`);
+        await this.delay(5000);
         
-        const stillExists = await this.checkDomainStillExists(domainName);
+        const stillExists = await this.checkAccountStillExists(domainName);
         if (!stillExists) {
-          console.log(`   ✅ Domínio foi removido com sucesso (apesar do timeout)!`);
-          return { success: true, message: 'Domínio removido do cPanel com sucesso' };
-        }
-      }
-    }
-
-    // Verificar se ainda existe antes de continuar
-    const existsAfterMethod1 = await this.checkDomainStillExists(domainName);
-    if (!existsAfterMethod1) {
-      return { success: true, message: 'Domínio removido do cPanel com sucesso' };
-    }
-
-    // ========================================
-    // MÉTODO 2: Tentar remover como Addon Domain (formato PADRÃO)
-    // ========================================
-    console.log(`\n   🔄 MÉTODO 2: Tentando Addon Domain (formato padrão)...`);
-    try {
-      const addonStandardResponse = await axios.get(
-        `${config.CPANEL_URL}/json-api/cpanel?cpanel_jsonapi_apiversion=2&cpanel_jsonapi_module=AddonDomain&cpanel_jsonapi_func=deladdondomain&domain=${domainName}&subdomain=${subdomainStandard}`,
-        {
-          headers: {
-            'Authorization': `cpanel ${config.CPANEL_USERNAME}:${config.CPANEL_API_TOKEN}`
-          },
-          timeout: this.defaultTimeout,
-          httpsAgent: new (require('https').Agent)({ rejectUnauthorized: false })
-        }
-      );
-
-      const addonStandardResult = addonStandardResponse.data?.cpanelresult?.data?.[0];
-      
-      if (addonStandardResult?.result === 1) {
-        console.log(`   ✅ Addon Domain removido (formato padrão)!`);
-        return { success: true, message: 'Domínio removido do cPanel com sucesso' };
-      } else {
-        console.log(`   ⚠️ Formato padrão falhou: ${addonStandardResult?.reason}`);
-      }
-    } catch (addonStandardError) {
-      console.log(`   ⚠️ Erro no formato padrão: ${addonStandardError.message}`);
-      
-      // Se deu timeout, verificar se o domínio foi removido mesmo assim
-      if (addonStandardError.message.includes('timeout')) {
-        console.log(`   ⏱️ Timeout detectado - verificando se domínio foi removido...`);
-        await this.delay(3000);
-        
-        const stillExists = await this.checkDomainStillExists(domainName);
-        if (!stillExists) {
-          console.log(`   ✅ Domínio foi removido com sucesso (apesar do timeout)!`);
-          return { success: true, message: 'Domínio removido do cPanel com sucesso' };
-        }
-      }
-    }
-
-    // Verificar se ainda existe antes de continuar
-    const existsAfterMethod2 = await this.checkDomainStillExists(domainName);
-    if (!existsAfterMethod2) {
-      return { success: true, message: 'Domínio removido do cPanel com sucesso' };
-    }
-
-    // ========================================
-    // MÉTODO 3: Listar SubDomains e encontrar o formato correto
-    // ========================================
-    console.log(`\n   🔄 MÉTODO 3: Listando SubDomains para encontrar formato correto...`);
-    try {
-      const listSubResponse = await axios.get(
-        `${config.CPANEL_URL}/json-api/cpanel?cpanel_jsonapi_apiversion=2&cpanel_jsonapi_module=SubDomain&cpanel_jsonapi_func=listsubdomains`,
-        {
-          headers: {
-            'Authorization': `cpanel ${config.CPANEL_USERNAME}:${config.CPANEL_API_TOKEN}`
-          },
-          timeout: this.defaultTimeout,
-          httpsAgent: new (require('https').Agent)({ rejectUnauthorized: false })
-        }
-      );
-
-      const subdomains = listSubResponse.data?.cpanelresult?.data || [];
-      console.log(`   📋 Total de SubDomains: ${subdomains.length}`);
-
-      // Extrair a parte principal do domínio (sem extensão)
-      const domainBase = domainName.split('.')[0]; // vitalityjourney
-      
-      // Procurar subdomínios que correspondam EXATAMENTE ao domínio
-      const exactMatches = subdomains.filter(sd => {
-        const subBase = sd.subdomain?.split('.')[0]?.replace(/_/g, '');
-        return subBase === domainBase || sd.subdomain === domainName || sd.subdomain === domainName.replace('.', '_');
-      });
-
-      console.log(`   🔍 SubDomains que correspondem a ${domainName}:`);
-      for (const sd of exactMatches) {
-        console.log(`      - subdomain: ${sd.subdomain}`);
-        console.log(`        domain: ${sd.domain}`);
-      }
-
-      // Tentar remover cada subdomínio correspondente
-      for (const sd of exactMatches) {
-        console.log(`\n   🗑️ Tentando remover via Addon usando subdomain: ${sd.domain}...`);
-        
-        try {
-          const addonFoundResponse = await axios.get(
-            `${config.CPANEL_URL}/json-api/cpanel?cpanel_jsonapi_apiversion=2&cpanel_jsonapi_module=AddonDomain&cpanel_jsonapi_func=deladdondomain&domain=${domainName}&subdomain=${sd.domain}`,
-            {
-              headers: {
-                'Authorization': `cpanel ${config.CPANEL_USERNAME}:${config.CPANEL_API_TOKEN}`
-              },
-              timeout: this.defaultTimeout,
-              httpsAgent: new (require('https').Agent)({ rejectUnauthorized: false })
-            }
-          );
-
-          const addonFoundResult = addonFoundResponse.data?.cpanelresult?.data?.[0];
-          
-          if (addonFoundResult?.result === 1) {
-            console.log(`   ✅ Addon Domain removido usando subdomain: ${sd.domain}!`);
-            return { success: true, message: 'Domínio removido do cPanel com sucesso' };
-          } else {
-            console.log(`   ⚠️ Falhou: ${addonFoundResult?.reason}`);
-          }
-        } catch (e) {
-          console.log(`   ⚠️ Erro: ${e.message}`);
-          
-          if (e.message.includes('timeout')) {
-            await this.delay(3000);
-            const stillExists = await this.checkDomainStillExists(domainName);
-            if (!stillExists) {
-              return { success: true, message: 'Domínio removido do cPanel com sucesso' };
-            }
-          }
-        }
-
-        await this.delay(500);
-      }
-
-    } catch (listError) {
-      console.log(`   ⚠️ Erro ao listar SubDomains: ${listError.message}`);
-    }
-
-    // Verificar se ainda existe antes de continuar
-    const existsAfterMethod3 = await this.checkDomainStillExists(domainName);
-    if (!existsAfterMethod3) {
-      return { success: true, message: 'Domínio removido do cPanel com sucesso' };
-    }
-
-    // ========================================
-    // MÉTODO 4: Tentar remover como Parked Domain
-    // ========================================
-    console.log(`\n   🔄 MÉTODO 4: Tentando remover como Parked Domain...`);
-    try {
-      const unparkResponse = await axios.get(
-        `${config.CPANEL_URL}/json-api/cpanel?cpanel_jsonapi_apiversion=2&cpanel_jsonapi_module=Park&cpanel_jsonapi_func=unpark&domain=${domainName}`,
-        {
-          headers: {
-            'Authorization': `cpanel ${config.CPANEL_USERNAME}:${config.CPANEL_API_TOKEN}`
-          },
-          timeout: this.defaultTimeout,
-          httpsAgent: new (require('https').Agent)({ rejectUnauthorized: false })
-        }
-      );
-
-      const unparkResult = unparkResponse.data?.cpanelresult?.data?.[0];
-      
-      if (unparkResult?.result === 1) {
-        console.log(`   ✅ Domínio removido como Parked Domain!`);
-        return { success: true, message: 'Domínio removido do cPanel com sucesso' };
-      } else {
-        console.log(`   ⚠️ Parked Domain falhou: ${unparkResult?.reason}`);
-      }
-    } catch (unparkError) {
-      console.log(`   ⚠️ Erro no Parked Domain: ${unparkError.message}`);
-      
-      if (unparkError.message.includes('timeout')) {
-        await this.delay(3000);
-        const stillExists = await this.checkDomainStillExists(domainName);
-        if (!stillExists) {
-          return { success: true, message: 'Domínio removido do cPanel com sucesso' };
-        }
-      }
-    }
-
-    // Verificar se ainda existe antes de continuar
-    const existsAfterMethod4 = await this.checkDomainStillExists(domainName);
-    if (!existsAfterMethod4) {
-      return { success: true, message: 'Domínio removido do cPanel com sucesso' };
-    }
-
-    // ========================================
-    // MÉTODO 5: Tentar SubDomain direto (ambos formatos)
-    // ========================================
-    console.log(`\n   🔄 MÉTODO 5: Tentando remover SubDomain diretamente...`);
-    
-    const subdomainFormats = [
-      `${domainName}.institutoexperience.com.br`,
-      `${domainName}_institutoexperience.com.br`,
-    ];
-
-    for (const subFormat of subdomainFormats) {
-      try {
-        console.log(`   🔄 Tentando SubDomain: ${subFormat}...`);
-        
-        const subResponse = await axios.get(
-          `${config.CPANEL_URL}/json-api/cpanel?cpanel_jsonapi_apiversion=2&cpanel_jsonapi_module=SubDomain&cpanel_jsonapi_func=delsubdomain&domain=${subFormat}`,
-          {
-            headers: {
-              'Authorization': `cpanel ${config.CPANEL_USERNAME}:${config.CPANEL_API_TOKEN}`
-            },
-            timeout: this.defaultTimeout,
-            httpsAgent: new (require('https').Agent)({ rejectUnauthorized: false })
-          }
-        );
-
-        const subResult = subResponse.data?.cpanelresult?.data?.[0];
-        
-        if (subResult?.result === 1) {
-          console.log(`   ✅ SubDomain removido: ${subFormat}!`);
-          return { success: true, message: 'Domínio removido do cPanel com sucesso' };
-        } else {
-          console.log(`   ⚠️ SubDomain falhou: ${subResult?.reason}`);
-        }
-      } catch (subError) {
-        console.log(`   ⚠️ Erro: ${subError.message}`);
-        
-        if (subError.message.includes('timeout')) {
-          await this.delay(3000);
-          const stillExists = await this.checkDomainStillExists(domainName);
-          if (!stillExists) {
-            return { success: true, message: 'Domínio removido do cPanel com sucesso' };
-          }
+          console.log(`   ✅ Conta foi removida com sucesso (apesar do timeout)!`);
+          return { success: true, message: 'Conta WHM removida com sucesso' };
         }
       }
       
-      await this.delay(500);
+      const translatedError = await this.translateCPanelError(error.message);
+      return { success: false, message: translatedError };
     }
-
-    // Verificação final
-    const existsFinal = await this.checkDomainStillExists(domainName);
-    if (!existsFinal) {
-      return { success: true, message: 'Domínio removido do cPanel com sucesso' };
-    }
-
-    // Se chegou aqui, todos os métodos falharam
-    console.log(`\n   ❌ Todos os métodos de remoção falharam`);
-    
-    const errorMessage = 'Não foi possível remover o domínio do cPanel. Verifique manualmente no painel.';
-    const translatedError = await this.translateCPanelError(errorMessage);
-    
-    return { success: false, message: translatedError };
   }
 
   /**
@@ -687,7 +438,7 @@ class DomainDeactivationService {
       integrations: null,
       steps: {
         wordpress: { executed: false, success: false, message: null },
-        cpanel: { executed: false, success: false, message: null },
+        whm: { executed: false, success: false, message: null },
         cloudflare: { executed: false, success: false, message: null },
         supabase: { executed: false, success: false, message: null }
       },
@@ -714,14 +465,14 @@ class DomainDeactivationService {
         results.steps.wordpress.message = 'WordPress não encontrado - etapa pulada';
       }
 
-      // ETAPA 3: Remover do cPanel (se existir)
-      if (integrations.cpanel.exists) {
-        results.steps.cpanel.executed = true;
-        const cpanelResult = await this.removeCPanelDomain(domainName);
-        results.steps.cpanel.success = cpanelResult.success;
-        results.steps.cpanel.message = cpanelResult.message;
+      // ETAPA 3: Remover conta do WHM (se existir)
+      if (integrations.whm.exists) {
+        results.steps.whm.executed = true;
+        const whmResult = await this.removeWHMAccount(domainName);
+        results.steps.whm.success = whmResult.success;
+        results.steps.whm.message = whmResult.message;
       } else {
-        results.steps.cpanel.message = 'Domínio não encontrado no cPanel - etapa pulada';
+        results.steps.whm.message = 'Conta não encontrada no WHM - etapa pulada';
       }
 
       // ETAPA 4: Remover zona do Cloudflare (se existir)
@@ -752,7 +503,7 @@ class DomainDeactivationService {
       console.log(`📊 [DEACTIVATION] RESUMO DA DESATIVAÇÃO - V7`);
       console.log(`${'='.repeat(70)}`);
       console.log(`   WordPress: ${results.steps.wordpress.executed ? (results.steps.wordpress.success ? '✅' : '❌') : '⏭️'} ${results.steps.wordpress.message || ''}`);
-      console.log(`   cPanel: ${results.steps.cpanel.executed ? (results.steps.cpanel.success ? '✅' : '❌') : '⏭️'} ${results.steps.cpanel.message || ''}`);
+      console.log(`   WHM: ${results.steps.whm.executed ? (results.steps.whm.success ? '✅' : '❌') : '⏭️'} ${results.steps.whm.message || ''}`);
       console.log(`   Cloudflare: ${results.steps.cloudflare.executed ? (results.steps.cloudflare.success ? '✅' : '❌') : '⏭️'} ${results.steps.cloudflare.message || ''}`);
       console.log(`   Supabase: ${results.steps.supabase.executed ? (results.steps.supabase.success ? '✅' : '❌') : '⏭️'} ${results.steps.supabase.message || ''}`);
       console.log(`\n   Status Geral: ${results.overallSuccess ? '✅ SUCESSO' : '⚠️ PARCIAL/FALHA'}`);

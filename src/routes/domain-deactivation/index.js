@@ -123,12 +123,12 @@ router.post('/step/wordpress', async (req, res) => {
 });
 
 /**
- * POST /api/domains/deactivation/step/cpanel
- * Executa apenas a remoção do cPanel
+ * POST /api/domains/deactivation/step/whm
+ * Executa apenas a remoção da conta WHM
  * 
  * Body: { domainName }
  */
-router.post('/step/cpanel', async (req, res) => {
+router.post('/step/whm', async (req, res) => {
   try {
     const { domainName } = req.body;
     
@@ -139,21 +139,21 @@ router.post('/step/cpanel', async (req, res) => {
       });
     }
     
-    console.log(`\n📡 [API] Removendo domínio do cPanel: ${domainName}`);
+    console.log(`\n📡 [API] Removendo conta WHM para: ${domainName}`);
     
     // Verificar se existe
-    const cpanelDomain = await deactivationService.findCPanelDomain(domainName);
+    const whmAccount = await deactivationService.findWHMAccount(domainName);
     
-    if (!cpanelDomain) {
+    if (!whmAccount) {
       return res.json({
         success: true,
         skipped: true,
-        message: 'Domínio não encontrado no cPanel'
+        message: 'Conta não encontrada no WHM'
       });
     }
     
     // Remover
-    const result = await deactivationService.removeCPanelDomain(domainName);
+    const result = await deactivationService.removeWHMAccount(domainName);
     
     res.json({
       success: result.success,
@@ -161,7 +161,7 @@ router.post('/step/cpanel', async (req, res) => {
     });
     
   } catch (error) {
-    console.error(`❌ [API] Erro ao remover do cPanel:`, error.message);
+    console.error(`❌ [API] Erro ao remover conta WHM:`, error.message);
     res.status(500).json({
       success: false,
       error: error.message
