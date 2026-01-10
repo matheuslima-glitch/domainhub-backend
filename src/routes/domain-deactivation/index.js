@@ -105,7 +105,7 @@ router.post('/step/wordpress', async (req, res) => {
     }
     
     // Desinstalar
-    const result = await deactivationService.uninstallWordPress(installation.insid);
+    const result = await deactivationService.uninstallWordPress(installation.insid, domainName);
     
     res.json({
       success: result.success,
