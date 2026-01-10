@@ -99,26 +99,67 @@ class DomainDeactivationService {
 
   /**
    * BUSCAR INSTALAÇÃO WORDPRESS NO SOFTACULOUS
+   * Busca no cPanel individual da conta WHM
    */
   async findWordPressInstallation(domainName) {
     try {
-      const response = await axios.get(
-        `${config.CPANEL_URL}${this.softaculousPath}?act=installations&soft=26&api=json`,
+      console.log(`   🔍 [WP] Iniciando busca de WordPress para ${domainName}...`);
+      
+      // Primeiro, encontrar a conta WHM do domínio para obter o username
+      const whmAccount = await this.findWHMAccount(domainName);
+      
+      if (!whmAccount) {
+        console.log(`   ⚪ [WP] Conta WHM não encontrada para ${domainName} - não é possível verificar WordPress`);
+        return null;
+      }
+
+      const username = whmAccount.user;
+      console.log(`   🔍 [WP] Buscando WordPress no cPanel do usuário: ${username}`);
+
+      // Criar sessão no cPanel do usuário via WHM
+      console.log(`   🔑 [WP] Criando sessão no cPanel...`);
+      const sessionResponse = await axios.get(
+        `${config.WHM_URL}/json-api/create_user_session?api.version=1&user=${username}&service=cpaneld`,
         {
-          auth: {
-            username: config.CPANEL_USERNAME,
-            password: config.CPANEL_PASSWORD
+          headers: {
+            'Authorization': `whm ${config.WHM_USERNAME}:${config.WHM_API_TOKEN}`
           },
           timeout: this.defaultTimeout,
           httpsAgent: new (require('https').Agent)({ rejectUnauthorized: false })
         }
       );
 
+      const sessionData = sessionResponse.data?.data;
+      const cpSecurityToken = sessionData?.cp_security_token;
+
+      if (!cpSecurityToken) {
+        console.log(`   ⚠️ [WP] Não foi possível criar sessão no cPanel do usuário ${username}`);
+        return null;
+      }
+
+      console.log(`   ✅ [WP] Sessão criada com sucesso`);
+
+      // Buscar instalações do Softaculous no cPanel do usuário
+      const baseUrl = config.WHM_URL.replace(':2087', ':2083').replace(/\/$/, '');
+      const softUrl = `${baseUrl}${cpSecurityToken}${this.softaculousPath}?act=installations&soft=26&api=json`;
+
+      const response = await axios.get(softUrl, {
+        headers: {
+          'Cookie': `cpsession=${sessionData.session}`
+        },
+        timeout: this.defaultTimeout,
+        httpsAgent: new (require('https').Agent)({ rejectUnauthorized: false })
+      });
+
       const installations = response.data?.installations?.['26'] || {};
+      const installCount = Object.keys(installations).length;
       
+      console.log(`   📋 [WP] Total de instalações WordPress encontradas: ${installCount}`);
+
       for (const [insid, installation] of Object.entries(installations)) {
         if (installation.softdomain === domainName) {
-          return { ...installation, insid };
+          console.log(`   ✅ [WP] WordPress encontrado! insid=${insid}`);
+          return { ...installation, insid, cPanelUsername: username };
         }
       }
 
@@ -210,23 +251,56 @@ class DomainDeactivationService {
 
   /**
    * DESINSTALAR WORDPRESS VIA SOFTACULOUS
+   * Desinstala no cPanel individual da conta WHM
    */
-  async uninstallWordPress(insid) {
+  async uninstallWordPress(insid, domainName) {
     console.log(`\n🗑️ [WORDPRESS] Desinstalando WordPress (insid: ${insid})...`);
 
     try {
+      // Primeiro, encontrar a conta WHM do domínio para obter o username
+      const whmAccount = await this.findWHMAccount(domainName);
+      
+      if (!whmAccount) {
+        console.log(`   ⚠️ Conta WHM não encontrada - não é possível desinstalar WordPress`);
+        return { success: false, message: 'Conta WHM não encontrada' };
+      }
+
+      const username = whmAccount.user;
+      console.log(`   📌 Desinstalando do cPanel do usuário: ${username}`);
+
+      // Criar sessão no cPanel do usuário via WHM
+      const sessionResponse = await axios.get(
+        `${config.WHM_URL}/json-api/create_user_session?api.version=1&user=${username}&service=cpaneld`,
+        {
+          headers: {
+            'Authorization': `whm ${config.WHM_USERNAME}:${config.WHM_API_TOKEN}`
+          },
+          timeout: this.defaultTimeout,
+          httpsAgent: new (require('https').Agent)({ rejectUnauthorized: false })
+        }
+      );
+
+      const sessionData = sessionResponse.data?.data;
+      const cpSecurityToken = sessionData?.cp_security_token;
+
+      if (!cpSecurityToken) {
+        console.log(`   ⚠️ Não foi possível criar sessão no cPanel`);
+        return { success: false, message: 'Não foi possível criar sessão no cPanel' };
+      }
+
+      // Desinstalar WordPress via Softaculous
+      const baseUrl = config.WHM_URL.replace(':2087', ':2083').replace(/\/$/, '');
+      const softUrl = `${baseUrl}${cpSecurityToken}${this.softaculousPath}?act=remove&insid=${insid}&api=json`;
+
       const response = await axios.post(
-        `${config.CPANEL_URL}${this.softaculousPath}?act=remove&insid=${insid}&api=json`,
+        softUrl,
         'removeins=1&remove_dir=1&remove_db=1',
         {
-          auth: {
-            username: config.CPANEL_USERNAME,
-            password: config.CPANEL_PASSWORD
-          },
           headers: {
-            'Content-Type': 'application/x-www-form-urlencoded'
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'Cookie': `cpsession=${sessionData.session}`
           },
-          timeout: 90000, // 90 segundos para WordPress (pode demorar mais)
+          timeout: 90000,
           httpsAgent: new (require('https').Agent)({ rejectUnauthorized: false })
         }
       );
@@ -454,7 +528,7 @@ class DomainDeactivationService {
       // ETAPA 2: Desinstalar WordPress (se existir)
       if (integrations.wordpress.exists) {
         results.steps.wordpress.executed = true;
-        const wpResult = await this.uninstallWordPress(integrations.wordpress.insid);
+        const wpResult = await this.uninstallWordPress(integrations.wordpress.insid, domainName);
         results.steps.wordpress.success = wpResult.success;
         results.steps.wordpress.message = wpResult.message;
         
