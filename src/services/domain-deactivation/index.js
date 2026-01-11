@@ -336,7 +336,7 @@ class DomainDeactivationService {
 
     try {
       const response = await axios.get(
-        `${config.WHM_URL}/json-api/terminateacct?api.version=1&user=${username}`,
+        `${config.WHM_URL}/json-api/removeacct?api.version=1&username=${username}`,
         {
           headers: {
             'Authorization': `whm ${config.WHM_USERNAME}:${config.WHM_API_TOKEN}`
