@@ -573,8 +573,8 @@ class WordPressDomainPurchase {
         AuxBillingEmailAddress: this.registrantInfo.EmailAddress,
         AuxBillingOrganizationName: this.registrantInfo.OrganizationName,
         
-        AddFreeWhoisguard: 'no',
-        WGEnabled: 'no',
+        AddFreeWhoisguard: 'yes',
+        WGEnabled: 'yes',
         GenerateAdminOrderRefId: 'False',
         IsPremiumDomain: 'False'
       };
@@ -619,6 +619,102 @@ class WordPressDomainPurchase {
         console.error(`   Data:`, error.response.data);
       }
       return { success: false, error: error.message };
+    }
+  }
+
+  /**
+   * CONFIGURAR WHOISGUARD AUTO-RENEW (1 ANO)
+   */
+  async configureWhoisGuard(domain) {
+    try {
+      console.log(`🔒 [WHOISGUARD] Configurando WhoisGuard para ${domain}...`);
+      
+      // Passo 1: Buscar WhoisGuard ID associado ao domínio
+      const listParams = {
+        ApiUser: config.NAMECHEAP_API_USER,
+        ApiKey: config.NAMECHEAP_API_KEY,
+        UserName: config.NAMECHEAP_API_USER,
+        Command: 'namecheap.whoisguard.getList',
+        ClientIp: config.NAMECHEAP_CLIENT_IP,
+        PageSize: 100
+      };
+      
+      const listResponse = await axios.get(this.namecheapAPI, { params: listParams, timeout: 30000 });
+      const listXml = listResponse.data;
+      
+      // Buscar o WhoisGuard ID que corresponde ao domínio
+      let whoisguardId = null;
+      
+      // Tentar formato: <Whoisguard ID="123456" DomainName="exemplo.online" ...>
+      const regex = new RegExp(`<Whoisguard[^>]*ID="(\\d+)"[^>]*DomainName="${domain.replace('.', '\\.')}"`, 'i');
+      const match = listXml.match(regex);
+      
+      if (match) {
+        whoisguardId = match[1];
+      } else {
+        // Tentar formato inverso (DomainName antes de ID)
+        const regexAlt = new RegExp(`<Whoisguard[^>]*DomainName="${domain.replace('.', '\\.')}"[^>]*ID="(\\d+)"`, 'i');
+        const matchAlt = listXml.match(regexAlt);
+        if (matchAlt) {
+          whoisguardId = matchAlt[1];
+        }
+      }
+      
+      // Método alternativo: buscar qualquer WhoisGuard que contenha o domínio
+      if (!whoisguardId) {
+        const allMatches = listXml.match(/<Whoisguard[^>]+>/gi);
+        if (allMatches) {
+          for (const wgMatch of allMatches) {
+            if (wgMatch.toLowerCase().includes(domain.toLowerCase())) {
+              const idMatch = wgMatch.match(/ID="(\d+)"/i);
+              if (idMatch) {
+                whoisguardId = idMatch[1];
+                break;
+              }
+            }
+          }
+        }
+      }
+      
+      if (!whoisguardId) {
+        console.log(`⚠️ [WHOISGUARD] ID não encontrado para ${domain}`);
+        console.log(`   XML Response (primeiros 1000 chars): ${listXml.substring(0, 1000)}`);
+        return false;
+      }
+      
+      console.log(`✅ [WHOISGUARD] ID encontrado: ${whoisguardId}`);
+      
+      // Passo 2: Ativar auto-renew (duração padrão: 1 ano)
+      console.log(`🔄 [WHOISGUARD] Ativando renovação automática...`);
+      const autoRenewParams = {
+        ApiUser: config.NAMECHEAP_API_USER,
+        ApiKey: config.NAMECHEAP_API_KEY,
+        UserName: config.NAMECHEAP_API_USER,
+        Command: 'namecheap.whoisguard.autorenew',
+        ClientIp: config.NAMECHEAP_CLIENT_IP,
+        WhoisguardID: whoisguardId,
+        Autorenew: 'true'
+      };
+      
+      const autoRenewResponse = await axios.get(this.namecheapAPI, { params: autoRenewParams, timeout: 30000 });
+      const autoRenewXml = autoRenewResponse.data;
+      
+      if (autoRenewXml.includes('Status="OK"')) {
+        console.log(`✅ [WHOISGUARD] Auto-renew ativado com sucesso!`);
+      } else {
+        console.log(`⚠️ [WHOISGUARD] Erro ao ativar auto-renew:`);
+        console.log(`   XML: ${autoRenewXml.substring(0, 500)}`);
+      }
+      
+      console.log(`🎉 [WHOISGUARD] Configuração completa!`);
+      console.log(`   - Duração: 1 ano`);
+      console.log(`   - Auto-renew: Ativado`);
+      
+      return true;
+      
+    } catch (error) {
+      console.error(`❌ [WHOISGUARD] Erro ao configurar:`, error.message);
+      return false;
     }
   }
 
@@ -672,7 +768,22 @@ class WordPressDomainPurchase {
       }
       
       // ========================
-      // ETAPA 3: SUPABASE (SEMPRE EXECUTA - mesmo se cancelado)
+      // ETAPA 3: WHOISGUARD (1 ano + auto-renew)
+      // ========================
+      if (!isCancelled) {
+        console.log(`🔒 [WHOISGUARD] Configurando proteção de privacidade...`);
+        await this.updateProgress(sessionId, 'whoisguard', 'in_progress', 
+          `Configurando WhoisGuard para ${domain}...`, domain);
+        await this.delay(5000); // Aguardar propagação do WhoisGuard na Namecheap
+        const whoisResult = await this.configureWhoisGuard(domain);
+        if (whoisResult) {
+          await this.updateProgress(sessionId, 'whoisguard', 'completed', 
+            `WhoisGuard configurado: 1 ano + auto-renew`, domain);
+        }
+      }
+      
+      // ========================
+      // ETAPA 4: SUPABASE (SEMPRE EXECUTA - mesmo se cancelado)
       // O domínio foi comprado, precisa estar no banco!
       // ========================
       console.log(`💾 [SUPABASE] Salvando domínio no banco de dados...`);
@@ -686,7 +797,7 @@ class WordPressDomainPurchase {
           `Domínio ${domain} salvo no banco de dados!`, domain);
         
         // ========================
-        // ETAPA 4: LOG
+        // ETAPA 5: LOG
         // ========================
         console.log(`📝 [LOG] Registrando atividade...`);
         await this.saveActivityLog(savedDomain.id, userId, trafficSource, isManual);
@@ -696,7 +807,7 @@ class WordPressDomainPurchase {
       }
       
       // ========================
-      // ETAPA 5: WORDPRESS (WHM + Softaculous + Plugins)
+      // ETAPA 6: WORDPRESS (WHM + Softaculous + Plugins)
       // ========================
       // Verificar cancelamento antes do WordPress
       if (!isCancelled && await this.isSessionCancelled(sessionId)) {
@@ -724,7 +835,7 @@ class WordPressDomainPurchase {
       }
       
       // ========================
-      // ETAPA 6: WHATSAPP
+      // ETAPA 7: WHATSAPP
       // ========================
       console.log(`📱 [WHATSAPP] Enviando notificação...`);
       await this.sendWhatsAppNotification(domain, 'success');
