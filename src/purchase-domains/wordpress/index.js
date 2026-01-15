@@ -1105,7 +1105,7 @@ try {
       console.log(`🎉 [CLOUDFLARE] Configuração completa finalizada!`);
       console.log(`   Zone ID: ${zoneId}`);
       console.log(`   Custom Hostname: ${domain}`);
-      console.log(`   DNS: A raiz, CNAME track`);
+      console.log(`   DNS: CNAME raiz, CNAME track`);
       console.log(`   SSL: Full`);
       console.log(`   WAF: 2 filtros + 2 regras de bloqueio (sitemap, ?s=)`);
       
