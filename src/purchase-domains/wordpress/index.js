@@ -934,30 +934,30 @@ class WordPressDomainPurchase {
       
       await this.delay(2000);
       
-      // ETAPA 4: Criar registro A (raiz)
-      console.log(`📍 [CLOUDFLARE] Criando DNS A...`);
-      try {
-        await axios.post(
-          `${this.cloudflareAPI}/zones/${zoneId}/dns_records`,
-          {
-            type: 'A',
-            name: domain,
-            content: config.HOSTING_SERVER_HOSTNAME || '192.211.60.58',
-            ttl: 1,
-            proxied: true
-          },
-          {
-            headers: {
-              'X-Auth-Email': config.CLOUDFLARE_EMAIL,
-              'X-Auth-Key': config.CLOUDFLARE_API_KEY,
-              'Content-Type': 'application/json'
-            }
-          }
-        );
-        console.log(`✅ [CLOUDFLARE] DNS A criado`);
-      } catch (error) {
-        console.error(`⚠️ [CLOUDFLARE] Erro DNS A:`, error.message);
+     // ETAPA 4: Criar registro CNAME (raiz)
+console.log(`📍 [CLOUDFLARE] Criando DNS CNAME...`);
+try {
+  await axios.post(
+    `${this.cloudflareAPI}/zones/${zoneId}/dns_records`,
+    {
+      type: 'CNAME',
+      name: '@',
+      content: 'servidor.institutoexperience.com.br',
+      ttl: 1,
+      proxied: false
+    },
+    {
+      headers: {
+        'X-Auth-Email': config.CLOUDFLARE_EMAIL,
+        'X-Auth-Key': config.CLOUDFLARE_API_KEY,
+        'Content-Type': 'application/json'
       }
+    }
+  );
+  console.log(`✅ [CLOUDFLARE] DNS CNAME criado`);
+} catch (error) {
+  console.error(`⚠️ [CLOUDFLARE] Erro DNS CNAME:`, error.message);
+}
       
       await this.delay(2000);
       
