@@ -75,36 +75,60 @@ class NotificationService {
 
   /**
    * Lista todos os contatos configurados para notificações
+   * Retorna tanto usuários do sistema quanto contatos externos
    * @returns {Promise<array>}
    */
   async listContacts() {
     try {
-      const { data, error } = await this.client
+      // Buscar todos os notification_settings
+      const { data: settings, error } = await this.client
         .from('notification_settings')
         .select(`
-          id, user_id, is_active, display_name,
+          id, user_id, is_active, display_name, whatsapp_number,
           notification_days, notification_interval_hours,
-          alert_expired, alert_suspended, alert_expiring_soon, created_at,
-          profiles:user_id ( full_name, whatsapp_number )
+          alert_expired, alert_suspended, alert_expiring_soon, created_at
         `)
         .order('created_at', { ascending: false });
 
       if (error) throw error;
 
-      return data.map(item => ({
-        id: item.id,
-        user_id: item.user_id,
-        full_name: item.profiles?.full_name || null,
-        whatsapp_number: item.profiles?.whatsapp_number || null,
-        is_active: item.is_active ?? true,
-        display_name: item.display_name,
-        notification_days: item.notification_days || [],
-        notification_interval_hours: item.notification_interval_hours || 6,
-        alert_expired: item.alert_expired ?? true,
-        alert_suspended: item.alert_suspended ?? true,
-        alert_expiring_soon: item.alert_expiring_soon ?? true,
-        created_at: item.created_at
+      // Para cada registro, buscar o nome/telefone do profiles se tiver user_id
+      const contacts = await Promise.all((settings || []).map(async (item) => {
+        let fullName = item.display_name;
+        let phoneNumber = item.whatsapp_number;
+
+        // Se tem user_id, busca dados do profiles
+        if (item.user_id) {
+          const { data: profile } = await this.client
+            .from('profiles')
+            .select('full_name, whatsapp_number')
+            .eq('id', item.user_id)
+            .maybeSingle();
+
+          if (profile) {
+            fullName = fullName || profile.full_name;
+            phoneNumber = phoneNumber || profile.whatsapp_number;
+          }
+        }
+
+        return {
+          id: item.id,
+          user_id: item.user_id,
+          full_name: fullName || null,
+          whatsapp_number: phoneNumber || null,
+          is_active: item.is_active ?? true,
+          display_name: item.display_name,
+          notification_days: item.notification_days || [],
+          notification_interval_hours: item.notification_interval_hours || 6,
+          alert_expired: item.alert_expired ?? true,
+          alert_suspended: item.alert_suspended ?? true,
+          alert_expiring_soon: item.alert_expiring_soon ?? true,
+          created_at: item.created_at,
+          is_external: !item.user_id // Flag para identificar contato externo
+        };
       }));
+
+      return contacts;
     } catch (error) {
       console.error('❌ [NOTIF] Erro ao listar contatos:', error.message);
       throw error;
@@ -113,6 +137,7 @@ class NotificationService {
 
   /**
    * Adiciona um novo contato para receber notificações
+   * Pode ser usuário do sistema ou contato externo
    * @param {string} phoneNumber - Número de telefone
    * @param {string} displayName - Nome de exibição (opcional)
    * @param {object} settings - Configurações de notificação
@@ -129,56 +154,58 @@ class NotificationService {
         throw new Error('Número não está registrado no WhatsApp');
       }
 
-      // Verificar se já existe um perfil com esse número
-      let { data: existingProfile } = await this.client
-        .from('profiles')
-        .select('id, full_name')
+      // Verificar se já existe um contato com esse número
+      const { data: existingByPhone } = await this.client
+        .from('notification_settings')
+        .select('id')
         .eq('whatsapp_number', cleanNumber)
         .maybeSingle();
 
-      let userId, fullName;
-
-      if (existingProfile) {
-        userId = existingProfile.id;
-        fullName = existingProfile.full_name;
-        console.log('✅ [NOTIF] Perfil existente encontrado');
-      } else {
-        // Criar novo perfil
-        const { data: newProfile, error: createError } = await this.client
-          .from('profiles')
-          .insert({
-            whatsapp_number: cleanNumber,
-            full_name: displayName || `Contato ${cleanNumber.slice(-4)}`,
-            is_admin: false,
-            is_owner: false
-          })
-          .select('id, full_name')
-          .single();
-
-        if (createError) throw createError;
-        userId = newProfile.id;
-        fullName = newProfile.full_name;
-        console.log('✅ [NOTIF] Novo perfil criado');
+      if (existingByPhone) {
+        throw new Error('Este número já está cadastrado para receber notificações');
       }
 
-      // Verificar se já existe notification_settings
-      const { data: existingSettings } = await this.client
-        .from('notification_settings')
-        .select('id')
-        .eq('user_id', userId)
+      // Verificar se existe um usuário do sistema com esse número
+      const { data: existingProfile } = await this.client
+        .from('profiles')
+        .select('id, full_name, whatsapp_number')
+        .eq('whatsapp_number', cleanNumber)
         .maybeSingle();
 
-      if (existingSettings) {
-        throw new Error('Contato já está cadastrado para receber notificações');
+      let userId = null;
+      let fullName = displayName;
+
+      if (existingProfile) {
+        // É um usuário do sistema
+        userId = existingProfile.id;
+        fullName = displayName || existingProfile.full_name;
+
+        // Verificar se já tem notification_settings para esse user_id
+        const { data: existingSettings } = await this.client
+          .from('notification_settings')
+          .select('id')
+          .eq('user_id', userId)
+          .maybeSingle();
+
+        if (existingSettings) {
+          throw new Error('Este usuário já está cadastrado para receber notificações');
+        }
+
+        console.log('✅ [NOTIF] Usuário do sistema encontrado:', fullName);
+      } else {
+        // Contato externo (não tem conta no sistema)
+        fullName = displayName || `Contato ${cleanNumber.slice(-4)}`;
+        console.log('✅ [NOTIF] Adicionando contato externo');
       }
 
       // Criar notification_settings
       const { data: newSettings, error: settingsError } = await this.client
         .from('notification_settings')
         .insert({
-          user_id: userId,
+          user_id: userId, // NULL para contatos externos
+          whatsapp_number: cleanNumber, // Sempre salvar o número
+          display_name: fullName,
           is_active: true,
-          display_name: displayName,
           notification_days: settings.notification_days || ['segunda', 'terca', 'quarta', 'quinta', 'sexta'],
           notification_interval_hours: settings.notification_interval_hours || 6,
           alert_expired: settings.alert_expired ?? true,
@@ -199,7 +226,8 @@ class NotificationService {
           user_id: userId,
           full_name: fullName,
           whatsapp_number: cleanNumber,
-          display_name: displayName,
+          display_name: fullName,
+          is_external: !userId,
           ...newSettings
         }
       };
@@ -220,7 +248,7 @@ class NotificationService {
       const allowedFields = [
         'is_active', 'display_name', 'notification_days',
         'notification_interval_hours', 'alert_expired',
-        'alert_suspended', 'alert_expiring_soon'
+        'alert_suspended', 'alert_expiring_soon', 'whatsapp_number'
       ];
 
       const filteredUpdates = {};
@@ -358,6 +386,43 @@ class NotificationService {
   }
 
   /**
+   * Busca estatísticas globais de domínios críticos (para contatos externos)
+   * @returns {Promise<object>}
+   */
+  async getGlobalCriticalDomainsStats() {
+    try {
+      const { count: suspended } = await this.client
+        .from('domains')
+        .select('*', { count: 'exact', head: true })
+        .eq('status', 'suspended');
+
+      const { count: expired } = await this.client
+        .from('domains')
+        .select('*', { count: 'exact', head: true })
+        .eq('status', 'expired');
+
+      const fifteenDaysFromNow = new Date();
+      fifteenDaysFromNow.setDate(fifteenDaysFromNow.getDate() + 15);
+
+      const { count: expiringSoon } = await this.client
+        .from('domains')
+        .select('*', { count: 'exact', head: true })
+        .eq('status', 'active')
+        .lte('expiration_date', fifteenDaysFromNow.toISOString())
+        .gte('expiration_date', new Date().toISOString());
+
+      return {
+        suspended: suspended || 0,
+        expired: expired || 0,
+        expiringSoon: expiringSoon || 0
+      };
+    } catch (error) {
+      console.error('❌ [NOTIF] Erro ao buscar estatísticas globais:', error.message);
+      return { suspended: 0, expired: 0, expiringSoon: 0 };
+    }
+  }
+
+  /**
    * Verifica se deve enviar notificação com base na última notificação enviada
    * @param {string} userId - ID do usuário
    * @param {number} intervalHours - Intervalo em horas entre notificações
@@ -436,17 +501,17 @@ class NotificationService {
 
   /**
    * Registra log de notificação com todos os detalhes
-   * @param {string} userId - ID do usuário
+   * @param {string} recipientId - ID do usuário ou null para contatos externos
    * @param {string} notificationType - Tipo (whatsapp, email, etc)
    * @param {string} alertType - Tipo de alerta (domain_expired, domain_suspended, etc)
    * @param {string} status - Status (pending, sending, sent, delivered, read, failed)
    * @param {object} details - Detalhes adicionais
    * @returns {Promise<object>}
    */
-  async logNotificationComplete(userId, notificationType, alertType, status, details = {}) {
+  async logNotificationComplete(recipientId, notificationType, alertType, status, details = {}) {
     try {
       const logData = {
-        user_id: userId,
+        user_id: recipientId,
         notification_type: notificationType,
         alert_type: alertType,
         status: status,
@@ -555,16 +620,16 @@ class NotificationService {
 
   /**
    * Busca logs de notificação de um usuário
-   * @param {string} userId - ID do usuário
+   * @param {string} recipientId - ID do usuário ou settingsId
    * @param {number} limit - Limite de registros
    * @returns {Promise<array>}
    */
-  async getNotificationLogs(userId, limit = 100) {
+  async getNotificationLogs(recipientId, limit = 100) {
     try {
       const { data, error } = await this.client
         .from('notification_logs')
         .select('*')
-        .eq('user_id', userId)
+        .eq('user_id', recipientId)
         .order('created_at', { ascending: false })
         .limit(limit);
 
@@ -577,7 +642,7 @@ class NotificationService {
   }
 
   // ============================================================
-  // ENVIO DE ALERTAS (EXISTENTES - ATUALIZADOS COM LOG COMPLETO)
+  // ENVIO DE ALERTAS (EXISTENTES - MANTIDOS + LOG COMPLETO)
   // ============================================================
 
   /**
@@ -895,6 +960,113 @@ class NotificationService {
 
     } catch (error) {
       console.error('❌ [TEST] Erro:', error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * Envia alerta de teste para um contato (por settingsId)
+   * Funciona tanto para usuários do sistema quanto contatos externos
+   * @param {string} settingsId - ID do notification_settings
+   * @returns {Promise<object>}
+   */
+  async sendTestAlertToContact(settingsId) {
+    try {
+      console.log('🧪 [TEST-CONTACT] Iniciando mensagem de verificação para contato:', settingsId);
+
+      // Buscar o contato
+      const { data: settings, error: settingsError } = await this.client
+        .from('notification_settings')
+        .select('*')
+        .eq('id', settingsId)
+        .single();
+
+      if (settingsError) throw settingsError;
+
+      let phoneNumber = settings.whatsapp_number;
+      let displayName = settings.display_name;
+
+      // Se tem user_id, buscar dados do profile
+      if (settings.user_id) {
+        const { data: profile } = await this.client
+          .from('profiles')
+          .select('full_name, whatsapp_number')
+          .eq('id', settings.user_id)
+          .maybeSingle();
+
+        if (profile) {
+          phoneNumber = phoneNumber || profile.whatsapp_number;
+          displayName = displayName || profile.full_name;
+        }
+      }
+
+      if (!phoneNumber) {
+        throw new Error('Contato não possui número de WhatsApp cadastrado');
+      }
+
+      const firstName = whatsappService.getFirstName(displayName);
+      console.log('✅ [TEST-CONTACT] Contato encontrado:', firstName);
+
+      // Buscar estatísticas globais (para contatos externos)
+      const stats = settings.user_id 
+        ? await this.getCriticalDomainsStats(settings.user_id)
+        : await this.getGlobalCriticalDomainsStats();
+
+      console.log(`📊 [TEST-CONTACT] Domínios: ${stats.suspended} suspensos, ${stats.expired} expirados, ${stats.expiringSoon} expirando`);
+
+      // Gerar mensagem
+      let message;
+      if (stats.suspended === 0 && stats.expired === 0 && stats.expiringSoon === 0) {
+        message = `🤖 *DOMAIN HUB*\n\n⚠️ *MENSAGEM DE VERIFICAÇÃO*\n\n${firstName}! Esta é uma mensagem de verificação.\n\n✅ *Configuração concluída com sucesso!*\n\n*Ótima notícia:* Não há domínios com problemas no momento! 🎉\n\n📊 Status atual: Todos os domínios OK\n\n━━━━━━━━━━━━━━━━━━━━━\n\n📋 *Configuração da recorrência:*\n\n${settings.notification_days && settings.notification_days.length > 0 
+  ? this.formatDays(settings.notification_days) 
+  : 'Não configurado'}\nA cada ${settings.notification_interval_hours || 6} hora${(settings.notification_interval_hours || 6) > 1 ? 's' : ''}\n\n━━━━━━━━━━━━━━━━━━━━━\n\n_Sistema ativo e monitorando 24/7_`;
+      } else {
+        let statusLines = '';
+        if (stats.suspended > 0) statusLines += `🔴 *${stats.suspended} Domínio${stats.suspended > 1 ? 's' : ''} Suspenso${stats.suspended > 1 ? 's' : ''}*\n`;
+        if (stats.expired > 0) statusLines += `🟠 *${stats.expired} Domínio${stats.expired > 1 ? 's' : ''} Expirado${stats.expired > 1 ? 's' : ''}*\n`;
+        if (stats.expiringSoon > 0) statusLines += `🟡 *${stats.expiringSoon} Domínio${stats.expiringSoon > 1 ? 's' : ''} Expirando em 15 dias*\n`;
+
+        message = `🤖 *DOMAIN HUB*\n\n⚠️ *MENSAGEM DE VERIFICAÇÃO*\n\n${firstName}! Esta é uma mensagem de verificação.\n\nHá domínios que precisam de atenção:\n\n${statusLines}\n━━━━━━━━━━━━━━━━━━━━━\n\n⚠️ *Possíveis Consequências:*\n\n• Sites offline\n• Perda de escala\n• Bloqueio de acesso ao painel ADMIN\n\n━━━━━━━━━━━━━━━━━━━━━\n\n👉 *Ação Necessária:*\nAcesse o painel Domain Hub para resolver!\n\n━━━━━━━━━━━━━━━━━━━━━\n\n➡️ *Configuração da recorrência:*\n\n${settings.notification_days && settings.notification_days.length > 0 
+  ? this.formatDays(settings.notification_days) 
+  : 'Não configurado'}\nA cada ${settings.notification_interval_hours || 6} hora${(settings.notification_interval_hours || 6) > 1 ? 's' : ''}\n\n━━━━━━━━━━━━━━━━━━━━━\n\n✅ _Sistema ativo e monitorando 24/7_`;
+      }
+
+      console.log('📤 [TEST-CONTACT] Enviando mensagem');
+      const result = await whatsappService.sendMessage(phoneNumber, message);
+
+      if (!result.success) {
+        console.error('❌ [TEST-CONTACT] Falha ao enviar:', result.error);
+        throw new Error(result.error || 'Erro ao enviar mensagem');
+      }
+
+      // Atualizar last_notification_sent
+      await this.client
+        .from('notification_settings')
+        .update({ last_notification_sent: new Date().toISOString() })
+        .eq('id', settingsId);
+
+      // Log completo
+      await this.logNotificationComplete(settings.user_id, 'whatsapp', 'test_message', 'sent', {
+        phoneNumber: phoneNumber,
+        messageContent: message,
+        messageId: result.messageId,
+        metadata: { ...stats, displayName, isTest: true, settingsId }
+      });
+
+      console.log('✅ [TEST-CONTACT] Mensagem enviada com sucesso');
+
+      return {
+        success: true,
+        phoneNumber: whatsappService.maskPhone(phoneNumber),
+        alertsSent: stats.suspended + stats.expired + stats.expiringSoon,
+        suspended: stats.suspended,
+        expired: stats.expired,
+        expiringSoon: stats.expiringSoon,
+        messageId: result.messageId
+      };
+
+    } catch (error) {
+      console.error('❌ [TEST-CONTACT] Erro:', error.message);
       throw error;
     }
   }

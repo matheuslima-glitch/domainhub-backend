@@ -156,6 +156,32 @@ router.patch('/contacts/:id/toggle', async (req, res, next) => {
   }
 });
 
+/**
+ * POST /api/whatsapp/contacts/:id/test
+ * Envia mensagem de teste para um contato específico (por settingsId)
+ */
+router.post('/contacts/:id/test', async (req, res, next) => {
+  try {
+    const { id } = req.params;
+
+    console.log('🧪 [WHATSAPP] Enviando teste para contato:', id);
+
+    const result = await notificationService.sendTestAlertToContact(id);
+
+    res.json({
+      success: true,
+      message: 'Mensagem de teste enviada com sucesso!',
+      ...result
+    });
+  } catch (error) {
+    console.error('❌ [WHATSAPP] Erro ao enviar teste:', error.message);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
 // ============================================================
 // LOGS DE NOTIFICAÇÃO
 // ============================================================
@@ -191,10 +217,6 @@ router.get('/logs/:userId', async (req, res, next) => {
 /**
  * POST /api/whatsapp/webhook
  * Recebe atualizações de status de mensagens da ZAPI
- * 
- * Tipos de eventos da ZAPI:
- * - message-status-update: Atualização de status (sent, delivered, read)
- * - on-message-received: Mensagem recebida (não usamos aqui)
  */
 router.post('/webhook', async (req, res) => {
   try {
@@ -202,7 +224,6 @@ router.post('/webhook', async (req, res) => {
 
     console.log('🔔 [WEBHOOK] Recebido:', JSON.stringify(payload).substring(0, 200));
 
-    // Verificar tipo de evento
     const eventType = payload.event || payload.type;
     
     if (eventType === 'message-status-update' || eventType === 'MessageStatusCallback') {
@@ -214,7 +235,6 @@ router.post('/webhook', async (req, res) => {
         return res.status(200).json({ success: true, message: 'No messageId' });
       }
 
-      // Mapear status da ZAPI para nosso padrão
       let mappedStatus;
       switch (status) {
         case 'SENT':
@@ -255,18 +275,16 @@ router.post('/webhook', async (req, res) => {
       }
     }
 
-    // Sempre retornar 200 para o webhook
     res.status(200).json({ success: true });
   } catch (error) {
     console.error('❌ [WEBHOOK] Erro:', error.message);
-    // Ainda retornar 200 para não causar retry
     res.status(200).json({ success: false, error: error.message });
   }
 });
 
 /**
  * GET /api/whatsapp/webhook
- * Verificação de saúde do webhook (algumas APIs fazem GET para verificar)
+ * Verificação de saúde do webhook
  */
 router.get('/webhook', (req, res) => {
   res.json({
@@ -277,7 +295,7 @@ router.get('/webhook', (req, res) => {
 });
 
 // ============================================================
-// ENVIO DE MENSAGENS
+// ENVIO DE MENSAGENS (EXISTENTES - MANTIDOS)
 // ============================================================
 
 /**
@@ -316,7 +334,7 @@ Você receberá alertas importantes sobre seus domínios neste número.`;
 
 /**
  * POST /api/whatsapp/send-test-alert
- * Envia notificação de teste com alertas de domínios
+ * Envia notificação de teste com alertas de domínios (por userId)
  */
 router.post('/send-test-alert', async (req, res, next) => {
   try {
