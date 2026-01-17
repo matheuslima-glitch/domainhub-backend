@@ -222,13 +222,24 @@ router.post('/webhook', async (req, res) => {
   try {
     const payload = req.body;
 
-    console.log('🔔 [WEBHOOK] Recebido:', JSON.stringify(payload).substring(0, 200));
+    // DEBUG: Log completo do payload
+    console.log('🔔 [WEBHOOK] ========== PAYLOAD COMPLETO ==========');
+    console.log('🔔 [WEBHOOK] JSON:', JSON.stringify(payload, null, 2));
+    console.log('🔔 [WEBHOOK] ======================================');
 
     const eventType = payload.event || payload.type;
+    const status = payload.status || payload.ack;
     
-    if (eventType === 'message-status-update' || eventType === 'MessageStatusCallback') {
+    // DEBUG: Log dos campos importantes
+    console.log('🔔 [WEBHOOK] eventType:', eventType);
+    console.log('🔔 [WEBHOOK] status:', status);
+    console.log('🔔 [WEBHOOK] typeof status:', typeof status);
+    
+    // Aceitar qualquer evento que tenha status de mensagem
+    if (eventType === 'message-status-update' || eventType === 'MessageStatusCallback' || status) {
       const messageId = payload.messageId || payload.id?.id || payload.ids?.[0];
-      const status = payload.status || payload.ack;
+
+      console.log('🔔 [WEBHOOK] messageId extraído:', messageId);
 
       if (!messageId) {
         console.log('⚠️ [WEBHOOK] MessageId não encontrado no payload');
@@ -251,11 +262,13 @@ router.post('/webhook', async (req, res) => {
         case 'READ':
         case 'VIEWED':
         case 'read':
+        case 'viewed':
         case 3:
         case 4:
           mappedStatus = 'read';
           break;
         case 'PLAYED':
+        case 'played':
         case 5:
           mappedStatus = 'read';
           break;
@@ -267,9 +280,11 @@ router.post('/webhook', async (req, res) => {
           mappedStatus = 'failed';
           break;
         default:
-          console.log('⚠️ [WEBHOOK] Status desconhecido:', status);
+          console.log('⚠️ [WEBHOOK] Status desconhecido:', status, '- tipo:', typeof status);
           mappedStatus = null;
       }
+
+      console.log('🔔 [WEBHOOK] mappedStatus:', mappedStatus);
 
       if (mappedStatus) {
         console.log(`📝 [WEBHOOK] Atualizando status: ${messageId} -> ${mappedStatus}`);
@@ -280,6 +295,8 @@ router.post('/webhook', async (req, res) => {
           errorMessage
         });
       }
+    } else {
+      console.log('⚠️ [WEBHOOK] Evento não reconhecido - eventType:', eventType);
     }
 
     res.status(200).json({ success: true });
