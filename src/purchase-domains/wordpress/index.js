@@ -403,19 +403,43 @@ class WordPressDomainPurchase {
           console.log(`💰 [PRICING DEBUG] XML completo:`);
           console.log(pricingXml);
           
-          // Tentar extrair YourPrice (preço promocional)
-          const yourPriceMatch = pricingXml.match(/YourPrice="([0-9.]+)"/);
-          if (yourPriceMatch && parseFloat(yourPriceMatch[1]) > 0) {
-            price = parseFloat(yourPriceMatch[1]);
-            console.log(`✅ [PRICING] YourPrice encontrado: $${price}`);
-          } else {
-            // Tentar Price normal
-            const priceMatch = pricingXml.match(/Price="([0-9.]+)"/);
-            if (priceMatch && parseFloat(priceMatch[1]) > 0) {
-              price = parseFloat(priceMatch[1]);
-              console.log(`✅ [PRICING] Price encontrado: $${price}`);
+          // IMPORTANTE: Buscar especificamente na categoria "register" (não renew, reactivate, etc.)
+          // O XML tem várias categorias e precisamos pegar o preço de REGISTRO
+          const registerCategoryMatch = pricingXml.match(/<ProductCategory Name="register">([\s\S]*?)<\/ProductCategory>/i);
+          
+          if (registerCategoryMatch) {
+            const registerBlock = registerCategoryMatch[1];
+            console.log(`💰 [PRICING DEBUG] Bloco register encontrado`);
+            
+            // Buscar YourPrice dentro do bloco de register (Duration="1" para 1 ano)
+            const yourPriceMatch = registerBlock.match(/Duration="1"[^>]*YourPrice="([0-9.]+)"/);
+            if (yourPriceMatch && parseFloat(yourPriceMatch[1]) > 0) {
+              price = parseFloat(yourPriceMatch[1]);
+              console.log(`✅ [PRICING] YourPrice (register, 1 ano) encontrado: $${price}`);
             } else {
-              console.log(`⚠️ [PRICING] Nenhum preço encontrado no XML`);
+              // Fallback: pegar qualquer YourPrice no bloco register
+              const fallbackMatch = registerBlock.match(/YourPrice="([0-9.]+)"/);
+              if (fallbackMatch && parseFloat(fallbackMatch[1]) > 0) {
+                price = parseFloat(fallbackMatch[1]);
+                console.log(`✅ [PRICING] YourPrice (register) encontrado: $${price}`);
+              } else {
+                // Último fallback: Price normal
+                const priceMatch = registerBlock.match(/Price="([0-9.]+)"/);
+                if (priceMatch && parseFloat(priceMatch[1]) > 0) {
+                  price = parseFloat(priceMatch[1]);
+                  console.log(`✅ [PRICING] Price (register) encontrado: $${price}`);
+                } else {
+                  console.log(`⚠️ [PRICING] Nenhum preço encontrado no bloco register`);
+                }
+              }
+            }
+          } else {
+            console.log(`⚠️ [PRICING] Categoria 'register' não encontrada no XML`);
+            // Fallback antigo (menos preciso)
+            const yourPriceMatch = pricingXml.match(/YourPrice="([0-9.]+)"/);
+            if (yourPriceMatch && parseFloat(yourPriceMatch[1]) > 0) {
+              price = parseFloat(yourPriceMatch[1]);
+              console.log(`⚠️ [PRICING] Usando primeiro YourPrice encontrado (fallback): $${price}`);
             }
           }
         } catch (pricingError) {

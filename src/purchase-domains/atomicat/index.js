@@ -436,13 +436,28 @@ class AtomiCatDomainPurchase {
           const pricingResponse = await axios.get(this.namecheapAPI, { params: pricingParams, timeout: 15000 });
           const pricingXml = pricingResponse.data;
           
-          const priceMatch = pricingXml.match(/Duration="1"[^>]*Price="([^"]+)"/);
-          if (priceMatch) {
-            price = parseFloat(priceMatch[1]);
+          // IMPORTANTE: Buscar especificamente na categoria "register"
+          const registerCategoryMatch = pricingXml.match(/<ProductCategory Name="register">([\s\S]*?)<\/ProductCategory>/i);
+          
+          if (registerCategoryMatch) {
+            const registerBlock = registerCategoryMatch[1];
+            
+            // Buscar YourPrice dentro do bloco de register (Duration="1" para 1 ano)
+            const yourPriceMatch = registerBlock.match(/Duration="1"[^>]*YourPrice="([0-9.]+)"/);
+            if (yourPriceMatch && parseFloat(yourPriceMatch[1]) > 0) {
+              price = parseFloat(yourPriceMatch[1]);
+            } else {
+              // Fallback: Price normal no bloco register
+              const priceMatch = registerBlock.match(/Duration="1"[^>]*Price="([0-9.]+)"/);
+              if (priceMatch && parseFloat(priceMatch[1]) > 0) {
+                price = parseFloat(priceMatch[1]);
+              }
+            }
           } else {
-            const altMatch = pricingXml.match(/Price="([0-9.]+)"[^>]*Duration="1"/);
-            if (altMatch) {
-              price = parseFloat(altMatch[1]);
+            // Fallback antigo caso categoria não seja encontrada
+            const priceMatch = pricingXml.match(/Duration="1"[^>]*Price="([^"]+)"/);
+            if (priceMatch) {
+              price = parseFloat(priceMatch[1]);
             }
           }
         } catch (pricingError) {
