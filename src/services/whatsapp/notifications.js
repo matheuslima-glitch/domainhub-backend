@@ -1044,8 +1044,7 @@ class NotificationService {
 
       // Domínios Expirando
       if (counts.expiringSoon > 0) {
-        message += `\n\n🟡 *${counts.expiringSoon} Domínio${counts.expiringSoon > 1 ? 's' : ''} Expirando em Breve*\n_Expiram em até 15 dias_\n\n`;
-        message += this.formatDomainList(domainsData.expiringSoon);
+        message += `\n\n🟡 *${counts.expiringSoon} Domínio${counts.expiringSoon > 1 ? 's' : ''} Expirando em Breve*\n_Expiram em até 15 dias_`;
       }
 
       message += `\n\n━━━━━━━━━━━━━━━━━━━━━\n\n⚡ Verifique AGORA na *Gestão de Domínios* e tome ação imediata!\n\n━━━━━━━━━━━━━━━━━━━━━`;
@@ -1159,8 +1158,7 @@ class NotificationService {
 
         // Domínios Expirando
         if (counts.expiringSoon > 0) {
-          message += `\n\n🟡 *${counts.expiringSoon} Domínio${counts.expiringSoon > 1 ? 's' : ''} Expirando em Breve*\n_Expiram em até 15 dias_\n\n`;
-          message += this.formatDomainList(domainsData.expiringSoon);
+          message += `\n\n🟡 *${counts.expiringSoon} Domínio${counts.expiringSoon > 1 ? 's' : ''} Expirando em Breve*\n_Expiram em até 15 dias_`;
         }
 
         message += `\n\n━━━━━━━━━━━━━━━━━━━━━\n\n⚡ Verifique AGORA na *Gestão de Domínios* e tome ação imediata!\n\n━━━━━━━━━━━━━━━━━━━━━`;
