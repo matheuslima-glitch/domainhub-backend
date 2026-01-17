@@ -242,14 +242,21 @@ router.post('/webhook', async (req, res) => {
         case 1:
           mappedStatus = 'sent';
           break;
+        case 'RECEIVED':
         case 'DELIVERED':
         case 'delivered':
         case 2:
           mappedStatus = 'delivered';
           break;
         case 'READ':
+        case 'VIEWED':
         case 'read':
         case 3:
+        case 4:
+          mappedStatus = 'read';
+          break;
+        case 'PLAYED':
+        case 5:
           mappedStatus = 'read';
           break;
         case 'FAILED':
@@ -263,6 +270,15 @@ router.post('/webhook', async (req, res) => {
           console.log('⚠️ [WEBHOOK] Status desconhecido:', status);
           mappedStatus = null;
       }
+```
+
+---
+
+## 🔧 Correção do MessageId:
+
+Preciso ver como o messageId é salvo. Me envia o arquivo:
+```
+src/services/whatsapp/messages.js
 
       if (mappedStatus) {
         console.log(`📝 [WEBHOOK] Atualizando status: ${messageId} -> ${mappedStatus}`);

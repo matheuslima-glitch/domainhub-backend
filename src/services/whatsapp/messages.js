@@ -115,7 +115,7 @@ class WhatsAppService {
 
       return {
         success: true,
-        messageId: response.data.messageId,
+        messageId: response.data.zapiMessageId || response.data.messageId,
         data: response.data
       };
     } catch (error) {
