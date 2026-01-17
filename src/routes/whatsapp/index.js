@@ -270,15 +270,6 @@ router.post('/webhook', async (req, res) => {
           console.log('⚠️ [WEBHOOK] Status desconhecido:', status);
           mappedStatus = null;
       }
-```
-
----
-
-## 🔧 Correção do MessageId:
-
-Preciso ver como o messageId é salvo. Me envia o arquivo:
-```
-src/services/whatsapp/messages.js
 
       if (mappedStatus) {
         console.log(`📝 [WEBHOOK] Atualizando status: ${messageId} -> ${mappedStatus}`);
