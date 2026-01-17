@@ -505,13 +505,14 @@ class NotificationService {
    * @param {string} notificationType - Tipo (whatsapp, email, etc)
    * @param {string} alertType - Tipo de alerta (domain_expired, domain_suspended, etc)
    * @param {string} status - Status (pending, sending, sent, delivered, read, failed)
-   * @param {object} details - Detalhes adicionais
+   * @param {object} details - Detalhes adicionais (settingsId, phoneNumber, messageId, etc)
    * @returns {Promise<object>}
    */
   async logNotificationComplete(recipientId, notificationType, alertType, status, details = {}) {
     try {
       const logData = {
-        user_id: recipientId,
+        user_id: recipientId || null, // Permite NULL para contatos externos
+        settings_id: details.settingsId || null, // ID do notification_settings
         notification_type: notificationType,
         alert_type: alertType,
         status: status,
@@ -522,6 +523,12 @@ class NotificationService {
         metadata: details.metadata || {},
         sent_at: ['sent', 'delivered', 'read'].includes(status) ? new Date().toISOString() : null
       };
+
+      console.log('📝 [NOTIF] Salvando log:', { 
+        user_id: logData.user_id, 
+        settings_id: logData.settings_id,
+        alert_type: logData.alert_type 
+      });
 
       const { data, error } = await this.client
         .from('notification_logs')
@@ -1047,10 +1054,11 @@ class NotificationService {
 
       // Log completo
       await this.logNotificationComplete(settings.user_id, 'whatsapp', 'test_message', 'sent', {
+        settingsId: settingsId, // ID do notification_settings
         phoneNumber: phoneNumber,
         messageContent: message,
         messageId: result.messageId,
-        metadata: { ...stats, displayName, isTest: true, settingsId }
+        metadata: { ...stats, displayName, isTest: true }
       });
 
       console.log('✅ [TEST-CONTACT] Mensagem enviada com sucesso');
