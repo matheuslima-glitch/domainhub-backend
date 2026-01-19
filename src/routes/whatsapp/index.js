@@ -63,6 +63,27 @@ router.get('/contacts', async (req, res, next) => {
 });
 
 /**
+ * GET /api/whatsapp/available-users
+ * Lista usuários do sistema que ainda não estão cadastrados para notificações
+ */
+router.get('/available-users', async (req, res, next) => {
+  try {
+    console.log('📋 [WHATSAPP] Listando usuários disponíveis');
+
+    const users = await notificationService.listAvailableUsers();
+
+    res.json({
+      success: true,
+      users,
+      total: users.length
+    });
+  } catch (error) {
+    console.error('❌ [WHATSAPP] Erro ao listar usuários disponíveis:', error.message);
+    next(error);
+  }
+});
+
+/**
  * POST /api/whatsapp/contacts
  * Adiciona um novo contato para receber notificações
  */

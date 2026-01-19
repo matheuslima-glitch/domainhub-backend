@@ -136,6 +136,61 @@ class NotificationService {
   }
 
   /**
+   * Lista usuários do sistema que ainda NÃO estão cadastrados para notificações
+   * @returns {Promise<array>}
+   */
+  async listAvailableUsers() {
+    try {
+      // Buscar todos os user_ids que já têm notification_settings
+      const { data: existingSettings, error: settingsError } = await this.client
+        .from('notification_settings')
+        .select('user_id, whatsapp_number');
+
+      if (settingsError) throw settingsError;
+
+      // Criar lista de user_ids e números já cadastrados
+      const existingUserIds = (existingSettings || [])
+        .filter(s => s.user_id)
+        .map(s => s.user_id);
+      
+      const existingNumbers = (existingSettings || [])
+        .filter(s => s.whatsapp_number)
+        .map(s => s.whatsapp_number);
+
+      // Buscar todos os profiles que têm whatsapp_number
+      const { data: profiles, error: profilesError } = await this.client
+        .from('profiles')
+        .select('id, full_name, whatsapp_number, email')
+        .not('whatsapp_number', 'is', null)
+        .order('full_name', { ascending: true });
+
+      if (profilesError) throw profilesError;
+
+      // Filtrar apenas os que NÃO estão cadastrados
+      const availableUsers = (profiles || []).filter(profile => {
+        // Não está na lista de user_ids já cadastrados
+        const userIdNotRegistered = !existingUserIds.includes(profile.id);
+        // Número não está cadastrado diretamente
+        const numberNotRegistered = !existingNumbers.includes(profile.whatsapp_number);
+        
+        return userIdNotRegistered && numberNotRegistered;
+      });
+
+      console.log(`📋 [NOTIF] ${availableUsers.length} usuários disponíveis para cadastro`);
+
+      return availableUsers.map(user => ({
+        id: user.id,
+        full_name: user.full_name,
+        whatsapp_number: user.whatsapp_number,
+        email: user.email
+      }));
+    } catch (error) {
+      console.error('❌ [NOTIF] Erro ao listar usuários disponíveis:', error.message);
+      throw error;
+    }
+  }
+
+  /**
    * Adiciona um novo contato para receber notificações
    * Pode ser usuário do sistema ou contato externo
    * @param {string} phoneNumber - Número de telefone
