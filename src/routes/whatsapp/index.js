@@ -89,15 +89,16 @@ router.get('/available-users', async (req, res, next) => {
  */
 router.post('/contacts', async (req, res, next) => {
   try {
-    const { phoneNumber, displayName, settings } = req.body;
+    const { phoneNumber, displayName, settings, userId } = req.body;
 
     console.log('➕ [WHATSAPP] Adicionando contato:', phoneNumber);
+    console.log('➕ [WHATSAPP] UserId:', userId || 'externo');
 
     if (!phoneNumber) {
       return res.status(400).json({ error: 'Número de telefone é obrigatório' });
     }
 
-    const result = await notificationService.addContact(phoneNumber, displayName, settings || {});
+    const result = await notificationService.addContact(phoneNumber, displayName, settings || {}, userId || null);
 
     res.json(result);
   } catch (error) {
