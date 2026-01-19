@@ -142,16 +142,15 @@ class NotificationService {
    */
   async listAvailableUsers() {
     try {
-      // Buscar todos os notification_settings que TÊM número de WhatsApp cadastrado
-      const { data: settingsWithNumber, error: settingsError } = await this.client
+      // Buscar TODOS os notification_settings para ver quem já tem número
+      const { data: allSettings, error: settingsError } = await this.client
         .from('notification_settings')
-        .select('user_id, whatsapp_number')
-        .not('whatsapp_number', 'is', null);
+        .select('user_id, whatsapp_number');
 
       if (settingsError) throw settingsError;
 
       // Criar lista de user_ids que JÁ TÊM número cadastrado em notification_settings
-      const userIdsWithNumber = (settingsWithNumber || [])
+      const userIdsWithNumber = (allSettings || [])
         .filter(s => s.user_id && s.whatsapp_number && s.whatsapp_number.trim() !== '')
         .map(s => s.user_id);
 
@@ -166,18 +165,24 @@ class NotificationService {
 
       if (profilesError) throw profilesError;
 
+      console.log(`📋 [NOTIF] Total de profiles: ${(profiles || []).length}`);
+
       // Filtrar apenas os que NÃO têm número cadastrado em notification_settings
       const availableUsers = (profiles || []).filter(profile => {
-        return !userIdsWithNumber.includes(profile.id);
+        const hasNumberInSettings = userIdsWithNumber.includes(profile.id);
+        
+        console.log(`📋 [NOTIF] ${profile.full_name}: hasNumberInSettings=${hasNumberInSettings}`);
+        
+        // Retorna apenas quem NÃO tem número em notification_settings
+        return !hasNumberInSettings;
       });
 
-      console.log(`📋 [NOTIF] ${availableUsers.length} usuários disponíveis para adicionar/atualizar número`);
+      console.log(`📋 [NOTIF] ${availableUsers.length} usuários SEM número disponíveis para cadastro`);
 
       return availableUsers.map(user => ({
         id: user.id,
         full_name: user.full_name || user.email?.split('@')[0] || 'Sem nome',
-        email: user.email,
-        settings_id: null // Será preenchido se já tiver registro em notification_settings
+        email: user.email
       }));
     } catch (error) {
       console.error('❌ [NOTIF] Erro ao listar usuários disponíveis:', error.message);
