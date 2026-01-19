@@ -228,59 +228,75 @@ router.post('/webhook', async (req, res) => {
     console.log('🔔 [WEBHOOK] ======================================');
 
     const eventType = payload.event || payload.type;
-    const status = payload.status || payload.ack;
+    // Usar hasOwnProperty para detectar status 0 corretamente
+    const status = payload.hasOwnProperty('status') ? payload.status : payload.ack;
     
     // DEBUG: Log dos campos importantes
     console.log('🔔 [WEBHOOK] eventType:', eventType);
     console.log('🔔 [WEBHOOK] status:', status);
     console.log('🔔 [WEBHOOK] typeof status:', typeof status);
     
-    // Aceitar qualquer evento que tenha status de mensagem
-    if (eventType === 'message-status-update' || eventType === 'MessageStatusCallback' || status) {
-      const messageId = payload.messageId || payload.id?.id || payload.ids?.[0];
+    // Aceitar eventos de status de mensagem
+    const isStatusEvent = eventType === 'message-status-update' || 
+                          eventType === 'MessageStatusCallback' || 
+                          status !== undefined;
+    
+    if (isStatusEvent) {
+      // Extrair messageId de diferentes formatos possíveis da Z-API
+      let messageId = null;
+      
+      if (payload.messageId) {
+        messageId = payload.messageId;
+      } else if (payload.id && payload.id.id) {
+        messageId = payload.id.id;
+      } else if (payload.ids && Array.isArray(payload.ids) && payload.ids.length > 0) {
+        messageId = payload.ids[0];
+      } else if (payload.id && typeof payload.id === 'string') {
+        messageId = payload.id;
+      }
 
       console.log('🔔 [WEBHOOK] messageId extraído:', messageId);
+      console.log('🔔 [WEBHOOK] payload.ids:', payload.ids);
+      console.log('🔔 [WEBHOOK] payload.messageId:', payload.messageId);
 
       if (!messageId) {
         console.log('⚠️ [WEBHOOK] MessageId não encontrado no payload');
         return res.status(200).json({ success: true, message: 'No messageId' });
       }
 
+      // Normalizar status para string maiúscula para comparação
+      const normalizedStatus = typeof status === 'string' ? status.toUpperCase() : status;
+
       let mappedStatus;
-      switch (status) {
+      switch (normalizedStatus) {
         case 'SENT':
-        case 'sent':
         case 1:
           mappedStatus = 'sent';
           break;
         case 'RECEIVED':
         case 'DELIVERED':
-        case 'delivered':
         case 2:
           mappedStatus = 'delivered';
           break;
         case 'READ':
+        case 'READ_BY_ME':
         case 'VIEWED':
-        case 'read':
-        case 'viewed':
         case 3:
         case 4:
           mappedStatus = 'read';
           break;
         case 'PLAYED':
-        case 'played':
         case 5:
           mappedStatus = 'read';
           break;
         case 'FAILED':
-        case 'failed':
         case 'ERROR':
-        case 'error':
         case -1:
+        case 0:
           mappedStatus = 'failed';
           break;
         default:
-          console.log('⚠️ [WEBHOOK] Status desconhecido:', status, '- tipo:', typeof status);
+          console.log('⚠️ [WEBHOOK] Status desconhecido:', status, '- normalizado:', normalizedStatus, '- tipo:', typeof status);
           mappedStatus = null;
       }
 
@@ -291,9 +307,11 @@ router.post('/webhook', async (req, res) => {
         
         const errorMessage = payload.error || payload.errorMessage || null;
         
-        await notificationService.updateLogStatusByMessageId(messageId, mappedStatus, {
+        const updateResult = await notificationService.updateLogStatusByMessageId(messageId, mappedStatus, {
           errorMessage
         });
+        
+        console.log('📝 [WEBHOOK] Resultado da atualização:', updateResult ? 'sucesso' : 'não encontrado');
       }
     } else {
       console.log('⚠️ [WEBHOOK] Evento não reconhecido - eventType:', eventType);

@@ -701,15 +701,40 @@ class NotificationService {
    */
   async updateLogStatusByMessageId(messageId, status, additionalData = {}) {
     try {
+      console.log('🔍 [NOTIF] Buscando log com messageId:', messageId);
+      
       const updateData = { status, updated_at: new Date().toISOString() };
 
-      if (status === 'delivered') updateData.delivered_at = new Date().toISOString();
+      if (status === 'sent') updateData.sent_at = new Date().toISOString();
+      else if (status === 'delivered') updateData.delivered_at = new Date().toISOString();
       else if (status === 'read') updateData.read_at = new Date().toISOString();
       else if (status === 'failed') {
         updateData.failed_at = new Date().toISOString();
         updateData.error_message = additionalData.errorMessage || null;
       }
 
+      console.log('🔍 [NOTIF] Dados de atualização:', JSON.stringify(updateData));
+
+      // Primeiro, verificar se o registro existe
+      const { data: existingLog, error: findError } = await this.client
+        .from('notification_logs')
+        .select('id, status, whatsapp_message_id')
+        .eq('whatsapp_message_id', messageId)
+        .maybeSingle();
+
+      if (findError) {
+        console.error('❌ [NOTIF] Erro ao buscar log:', findError.message);
+        return null;
+      }
+
+      if (!existingLog) {
+        console.log('⚠️ [NOTIF] MessageId não encontrado na base:', messageId);
+        return null;
+      }
+
+      console.log('✅ [NOTIF] Log encontrado:', existingLog.id, '- Status atual:', existingLog.status);
+
+      // Atualizar o registro
       const { data, error } = await this.client
         .from('notification_logs')
         .update(updateData)
@@ -718,10 +743,7 @@ class NotificationService {
         .single();
 
       if (error) {
-        if (error.code === 'PGRST116') {
-          console.log('⚠️ [NOTIF] MessageId não encontrado:', messageId);
-          return null;
-        }
+        console.error('❌ [NOTIF] Erro ao atualizar:', error.message);
         throw error;
       }
 
