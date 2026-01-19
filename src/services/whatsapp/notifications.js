@@ -142,42 +142,42 @@ class NotificationService {
    */
   async listAvailableUsers() {
     try {
-      // Buscar todos os user_ids que já têm notification_settings
-      const { data: existingSettings, error: settingsError } = await this.client
+      // Buscar todos os notification_settings que TÊM número de WhatsApp cadastrado
+      const { data: settingsWithNumber, error: settingsError } = await this.client
         .from('notification_settings')
-        .select('user_id');
+        .select('user_id, whatsapp_number')
+        .not('whatsapp_number', 'is', null);
 
       if (settingsError) throw settingsError;
 
-      // Criar lista de user_ids já cadastrados nas notificações
-      const existingUserIds = (existingSettings || [])
-        .filter(s => s.user_id)
+      // Criar lista de user_ids que JÁ TÊM número cadastrado em notification_settings
+      const userIdsWithNumber = (settingsWithNumber || [])
+        .filter(s => s.user_id && s.whatsapp_number && s.whatsapp_number.trim() !== '')
         .map(s => s.user_id);
 
-      // Buscar todos os profiles que NÃO têm whatsapp_number (ou é null/vazio)
+      console.log(`📋 [NOTIF] ${userIdsWithNumber.length} usuários JÁ possuem número em notification_settings`);
+
+      // Buscar TODOS os profiles
       const { data: profiles, error: profilesError } = await this.client
         .from('profiles')
         .select('id, full_name, whatsapp_number, email')
+        .not('full_name', 'is', null)
         .order('full_name', { ascending: true });
 
       if (profilesError) throw profilesError;
 
-      // Filtrar apenas os que:
-      // 1. NÃO têm whatsapp_number cadastrado no profile
-      // 2. NÃO estão cadastrados nas notification_settings
+      // Filtrar apenas os que NÃO têm número cadastrado em notification_settings
       const availableUsers = (profiles || []).filter(profile => {
-        const hasNoWhatsapp = !profile.whatsapp_number || profile.whatsapp_number.trim() === '';
-        const notInNotifications = !existingUserIds.includes(profile.id);
-        
-        return hasNoWhatsapp && notInNotifications;
+        return !userIdsWithNumber.includes(profile.id);
       });
 
-      console.log(`📋 [NOTIF] ${availableUsers.length} usuários sem WhatsApp disponíveis para cadastro`);
+      console.log(`📋 [NOTIF] ${availableUsers.length} usuários disponíveis para adicionar/atualizar número`);
 
       return availableUsers.map(user => ({
         id: user.id,
-        full_name: user.full_name,
-        email: user.email
+        full_name: user.full_name || user.email?.split('@')[0] || 'Sem nome',
+        email: user.email,
+        settings_id: null // Será preenchido se já tiver registro em notification_settings
       }));
     } catch (error) {
       console.error('❌ [NOTIF] Erro ao listar usuários disponíveis:', error.message);
@@ -188,6 +188,7 @@ class NotificationService {
   /**
    * Adiciona um novo contato para receber notificações
    * Pode ser usuário do sistema ou contato externo
+   * Se o usuário já existe em notification_settings mas sem número, ATUALIZA
    * @param {string} phoneNumber - Número de telefone
    * @param {string} displayName - Nome de exibição (obrigatório para externos)
    * @param {object} settings - Configurações de notificação
@@ -197,7 +198,7 @@ class NotificationService {
   async addContact(phoneNumber, displayName = null, settings = {}, userId = null) {
     try {
       const cleanNumber = phoneNumber.replace(/\D/g, '');
-      console.log('📱 [NOTIF] Adicionando contato:', whatsappService.maskPhone(cleanNumber));
+      console.log('📱 [NOTIF] Adicionando/Atualizando contato:', whatsappService.maskPhone(cleanNumber));
       console.log('📱 [NOTIF] UserId fornecido:', userId || 'nenhum (externo)');
 
       // Verificar se número existe no WhatsApp
@@ -206,15 +207,15 @@ class NotificationService {
         throw new Error('Número não está registrado no WhatsApp');
       }
 
-      // Verificar se já existe um contato com esse número
+      // Verificar se já existe outro contato com esse número
       const { data: existingByPhone } = await this.client
         .from('notification_settings')
-        .select('id')
+        .select('id, user_id')
         .eq('whatsapp_number', cleanNumber)
         .maybeSingle();
 
-      if (existingByPhone) {
-        throw new Error('Este número já está cadastrado para receber notificações');
+      if (existingByPhone && existingByPhone.user_id !== userId) {
+        throw new Error('Este número já está cadastrado para outro contato');
       }
 
       let finalUserId = userId;
@@ -244,7 +245,44 @@ class NotificationService {
           .maybeSingle();
 
         if (existingSettings) {
-          throw new Error('Este usuário já está cadastrado para receber notificações');
+          // ATUALIZAR o registro existente com o número
+          const { data: updatedSettings, error: updateError } = await this.client
+            .from('notification_settings')
+            .update({
+              whatsapp_number: cleanNumber,
+              display_name: fullName,
+              notification_days: settings.notification_days || ['segunda', 'terca', 'quarta', 'quinta', 'sexta'],
+              notification_interval_hours: settings.notification_interval_hours || 6,
+              alert_expired: settings.alert_expired ?? true,
+              alert_suspended: settings.alert_suspended ?? true,
+              alert_expiring_soon: settings.alert_expiring_soon ?? true
+            })
+            .eq('id', existingSettings.id)
+            .select()
+            .single();
+
+          if (updateError) throw updateError;
+
+          // Atualizar também o whatsapp_number no profile do usuário
+          await this.client
+            .from('profiles')
+            .update({ whatsapp_number: cleanNumber })
+            .eq('id', userId);
+
+          console.log('✅ [NOTIF] Contato ATUALIZADO com número:', whatsappService.maskPhone(cleanNumber));
+
+          return {
+            success: true,
+            contact: {
+              id: updatedSettings.id,
+              user_id: userId,
+              full_name: fullName,
+              whatsapp_number: cleanNumber,
+              display_name: fullName,
+              is_external: false,
+              ...updatedSettings
+            }
+          };
         }
 
         // Atualizar o whatsapp_number no profile do usuário
@@ -296,7 +334,7 @@ class NotificationService {
       const { data: newSettings, error: settingsError } = await this.client
         .from('notification_settings')
         .insert({
-          user_id: finalUserId, // NULL para contatos externos
+          user_id: finalUserId,
           whatsapp_number: cleanNumber,
           display_name: fullName,
           is_active: true,
