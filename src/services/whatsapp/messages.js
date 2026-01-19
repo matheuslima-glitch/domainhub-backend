@@ -52,11 +52,13 @@ class WhatsAppService {
       const cleanNumber = phoneNumber.replace(/\D/g, '');
       console.log('🔍 [ZAPI] Verificando número:', this.maskPhone(cleanNumber));
 
-      // Tentar endpoint padrão de verificação
-      const checkUrl = this.zapiUrl.replace('/send-text', '/phone-exists');
+      // Endpoint correto: /phone-exists/{numero} - número na URL, não como param
+      const baseUrl = this.zapiUrl.replace('/send-text', '');
+      const checkUrl = `${baseUrl}/phone-exists/${cleanNumber}`;
       
+      console.log('🔍 [ZAPI] URL de verificação:', checkUrl.replace(cleanNumber, '***'));
+
       const response = await axios.get(checkUrl, {
-        params: { phone: cleanNumber },
         headers: {
           'Client-Token': this.clientToken,
           'Content-Type': 'application/json'
@@ -64,12 +66,19 @@ class WhatsAppService {
         timeout: 10000
       });
 
-      const exists = response.data.exists || response.data.isRegistered || false;
+      console.log('🔍 [ZAPI] Resposta:', JSON.stringify(response.data));
+
+      // A Z-API retorna { exists: true/false } ou pode retornar como string "true"/"false"
+      const exists = response.data.exists === true || response.data.exists === 'true' || response.data.isRegistered === true;
       console.log(`${exists ? '✅' : '❌'} [ZAPI] Número ${exists ? 'existe' : 'não existe'}`);
 
       return exists;
     } catch (error) {
       console.error('❌ [ZAPI] Erro ao verificar número:', error.message);
+      if (error.response) {
+        console.error('❌ [ZAPI] Status:', error.response.status);
+        console.error('❌ [ZAPI] Data:', JSON.stringify(error.response.data));
+      }
       // Em caso de erro, assumir que existe (para não bloquear)
       return true;
     }
