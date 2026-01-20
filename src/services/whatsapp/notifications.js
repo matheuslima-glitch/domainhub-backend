@@ -1293,38 +1293,74 @@ class NotificationService {
 
       console.log(`📊 [TEST-CONTACT] Domínios: ${counts.suspended} suspensos, ${counts.expired} expirados, ${counts.expiringSoon} expirando`);
 
-      // Gerar mensagem
-      let message;
-      if (totalCritical === 0) {
-        message = `🤖 *DOMAIN HUB*\n\n✅ *CADASTRO REALIZADO COM SUCESSO!*\n\n${firstName}, seu número foi cadastrado com sucesso no sistema de monitoramento de alertas para domínios do Domain Hub! 🎉\n\nA partir de agora você receberá alertas em tempo real sobre o status dos seus domínios.\n\n━━━━━━━━━━━━━━━━━━━━━\n\n📋 *Configuração da recorrência:*\n${settings.notification_days && settings.notification_days.length > 0 
+           // MENSAGEM 1: Sempre enviar boas-vindas primeiro
+      const welcomeMessage = `🤖 *DOMAIN HUB*\n\n✅ *CADASTRO REALIZADO COM SUCESSO!*\n\n${firstName}, seu número foi cadastrado com sucesso no sistema de monitoramento de alertas para domínios do Domain Hub! 🎉\n\nA partir de agora você receberá alertas em tempo real sobre o status dos seus domínios.\n\n━━━━━━━━━━━━━━━━━━━━━\n\n📋 *Configuração da recorrência:*\n${settings.notification_days && settings.notification_days.length > 0 
   ? this.formatDays(settings.notification_days) 
-  : 'Não configurado'}\nA cada ${settings.notification_interval_hours || 6} hora${(settings.notification_interval_hours || 6) > 1 ? 's' : ''}\n\n━━━━━━━━━━━━━━━━━━━━━\n\n⚠️ *IMPORTANTE:* Salve este número nos seus contatos para garantir o recebimento dos alertas.\n\n_Sistema ativo e monitorando 24/7_`;
-      } else {
-        // Construir mensagem com lista de domínios
-        message = `🤖 *DOMAIN HUB*\n\n⚠️ *ALERTA URGENTE*\n\n${firstName}, você tem ${totalCritical} domínio${totalCritical > 1 ? 's' : ''} que precisa${totalCritical > 1 ? 'm' : ''} de atenção imediata!\n\n━━━━━━━━━━━━━━━━━━━━━`;
+  : 'Não configurado'}\nA cada ${settings.notification_interval_hours || 6} hora${(settings.notification_interval_hours || 6) > 1 ? 's' : ''}\n\n━━━━━━━━━━━━━━━━━━━━━\n\n⚠️ *IMPORTANTE:* Salve este número nos seus contatos para garantir o recebimento dos alertas.${totalCritical > 0 ? '\n\n⏳ _Em poucos segundos você receberá um relatório com o status atual dos seus domínios..._' : '\n\n_Sistema ativo e monitorando 24/7_'}`;
+
+      console.log('📤 [TEST-CONTACT] Enviando mensagem de boas-vindas');
+      const welcomeResult = await whatsappService.sendMessage(phoneNumber, welcomeMessage);
+
+      if (!welcomeResult.success) {
+        console.error('❌ [TEST-CONTACT] Falha ao enviar boas-vindas:', welcomeResult.error);
+        throw new Error(welcomeResult.error || 'Erro ao enviar mensagem de boas-vindas');
+      }
+
+      // Log da mensagem de boas-vindas
+      await this.logNotificationComplete(settings.user_id, 'whatsapp', 'welcome_message', 'sent', {
+        settingsId: settingsId,
+        phoneNumber: phoneNumber,
+        messageContent: welcomeMessage,
+        messageId: welcomeResult.messageId,
+        metadata: { displayName, isTest: true, isWelcome: true }
+      });
+
+      // MENSAGEM 2: Se houver domínios críticos, enviar relatório
+      let result = welcomeResult;
+      if (totalCritical > 0) {
+        // Aguardar 2 segundos antes de enviar o relatório
+        await new Promise(resolve => setTimeout(resolve, 2000));
+
+        let reportMessage = `🤖 *DOMAIN HUB*\n\n⚠️ *ALERTA URGENTE*\n\n${firstName}, você tem ${totalCritical} domínio${totalCritical > 1 ? 's' : ''} que precisa${totalCritical > 1 ? 'm' : ''} de atenção imediata!\n\n━━━━━━━━━━━━━━━━━━━━━`;
 
         // Domínios Suspensos
         if (counts.suspended > 0) {
-          message += `\n\n🔴 *${counts.suspended} Domínio${counts.suspended > 1 ? 's' : ''} Suspenso${counts.suspended > 1 ? 's' : ''}*\n_Requer ação imediata_\n\n`;
-          message += this.formatDomainList(domainsData.suspended);
+          reportMessage += `\n\n🔴 *${counts.suspended} Domínio${counts.suspended > 1 ? 's' : ''} Suspenso${counts.suspended > 1 ? 's' : ''}*\n_Requer ação imediata_\n\n`;
+          reportMessage += this.formatDomainList(domainsData.suspended);
         }
 
         // Domínios Expirados
         if (counts.expired > 0) {
-          message += `\n\n🟠 *${counts.expired} Domínio${counts.expired > 1 ? 's' : ''} Expirado${counts.expired > 1 ? 's' : ''}*\n_Requer renovação urgente_\n\n`;
-          message += this.formatDomainList(domainsData.expired);
+          reportMessage += `\n\n🟠 *${counts.expired} Domínio${counts.expired > 1 ? 's' : ''} Expirado${counts.expired > 1 ? 's' : ''}*\n_Requer renovação urgente_\n\n`;
+          reportMessage += this.formatDomainList(domainsData.expired);
         }
 
         // Domínios Expirando
         if (counts.expiringSoon > 0) {
-          message += `\n\n🟡 *${counts.expiringSoon} Domínio${counts.expiringSoon > 1 ? 's' : ''} Expirando em Breve*\n_Expiram em até 15 dias_`;
+          reportMessage += `\n\n🟡 *${counts.expiringSoon} Domínio${counts.expiringSoon > 1 ? 's' : ''} Expirando em Breve*\n_Expiram em até 15 dias_`;
         }
 
-        message += `\n\n━━━━━━━━━━━━━━━━━━━━━\n\n⚡ Verifique AGORA na *Gestão de Domínios* e tome ação imediata!\n\n━━━━━━━━━━━━━━━━━━━━━`;
+        reportMessage += `\n\n━━━━━━━━━━━━━━━━━━━━━\n\n⚡ Verifique AGORA na *Gestão de Domínios* e tome ação imediata!\n\n━━━━━━━━━━━━━━━━━━━━━`;
+
+        console.log('📤 [TEST-CONTACT] Enviando relatório de domínios críticos');
+        result = await whatsappService.sendMessage(phoneNumber, reportMessage);
+
+        if (!result.success) {
+          console.error('❌ [TEST-CONTACT] Falha ao enviar relatório:', result.error);
+          // Não lançar erro aqui pois a boas-vindas já foi enviada
+        } else {
+          // Log do relatório
+          await this.logNotificationComplete(settings.user_id, 'whatsapp', 'test_message', 'sent', {
+            settingsId: settingsId,
+            phoneNumber: phoneNumber,
+            messageContent: reportMessage,
+            messageId: result.messageId,
+            metadata: { ...counts, displayName, isTest: true, isReport: true }
+          });
+        }
       }
 
-      console.log('📤 [TEST-CONTACT] Enviando mensagem');
-      const result = await whatsappService.sendMessage(phoneNumber, message);
+      console.log('📤 [TEST-CONTACT] Processo finalizado');
 
       if (!result.success) {
         console.error('❌ [TEST-CONTACT] Falha ao enviar:', result.error);
