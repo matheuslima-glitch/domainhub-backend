@@ -1333,12 +1333,14 @@ class NotificationService {
         metadata: { displayName, isTest: true, isWelcome: true }
       });
 
-      // MENSAGEM 2: Se houver domínios críticos, enviar relatório
-      let result = welcomeResult;
+      // MENSAGEM 2: Se houver domínios críticos, enviar relatório EM SEGUNDO PLANO
       if (totalCritical > 0) {
-        // Aguardar 60 segundos antes de enviar o relatório
-        console.log('⏳ [TEST-CONTACT] Aguardando 60 segundos para enviar relatório...');
-        await new Promise(resolve => setTimeout(resolve, 60000));
+        // Executar em segundo plano (não bloqueia a resposta)
+        setImmediate(async () => {
+          try {
+            // Aguardar 60 segundos antes de enviar o relatório
+            console.log('⏳ [TEST-CONTACT] Aguardando 60 segundos para enviar relatório em segundo plano...');
+            await new Promise(resolve => setTimeout(resolve, 60000));
 
         let reportMessage = `🤖 *DOMAIN HUB*\n\n⚠️ *ALERTA URGENTE*\n\n${firstName}, você tem ${totalCritical} domínio${totalCritical > 1 ? 's' : ''} que precisa${totalCritical > 1 ? 'm' : ''} de atenção imediata!\n\n━━━━━━━━━━━━━━━━━━━━━`;
 
@@ -1362,21 +1364,25 @@ class NotificationService {
         reportMessage += `\n\n━━━━━━━━━━━━━━━━━━━━━\n\n⚡ Verifique AGORA na *Gestão de Domínios* e tome ação imediata!\n\n━━━━━━━━━━━━━━━━━━━━━`;
 
         console.log('📤 [TEST-CONTACT] Enviando relatório de domínios críticos');
-        result = await whatsappService.sendMessage(phoneNumber, reportMessage);
+            const reportResult = await whatsappService.sendMessage(phoneNumber, reportMessage);
 
-        if (!result.success) {
-          console.error('❌ [TEST-CONTACT] Falha ao enviar relatório:', result.error);
-          // Não lançar erro aqui pois a boas-vindas já foi enviada
-        } else {
-          // Log do relatório
-          await this.logNotificationComplete(settings.user_id, 'whatsapp', 'test_message', 'sent', {
-            settingsId: settingsId,
-            phoneNumber: phoneNumber,
-            messageContent: reportMessage,
-            messageId: result.messageId,
-            metadata: { ...counts, displayName, isTest: true, isReport: true }
-          });
-        }
+        if (!reportResult.success) {
+              console.error('❌ [TEST-CONTACT] Falha ao enviar relatório:', reportResult.error);
+            } else {
+              // Log do relatório
+              await this.logNotificationComplete(settings.user_id, 'whatsapp', 'test_message', 'sent', {
+                settingsId: settingsId,
+                phoneNumber: phoneNumber,
+                messageContent: reportMessage,
+                messageId: reportResult.messageId,
+                metadata: { ...counts, displayName, isTest: true, isReport: true }
+              });
+              console.log('✅ [TEST-CONTACT] Relatório enviado com sucesso em segundo plano');
+            }
+          } catch (error) {
+            console.error('❌ [TEST-CONTACT] Erro ao enviar relatório em segundo plano:', error.message);
+          }
+        });
       }
 
       // Atualizar last_notification_sent
