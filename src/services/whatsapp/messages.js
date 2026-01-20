@@ -151,8 +151,10 @@ class WhatsAppService {
    * @param {string} userName - Nome do usuário
    * @returns {Promise<object>}
    */
-  async sendSuspendedDomainAlert(phoneNumber, domainName, userName = 'Cliente') {
+  async sendSuspendedDomainAlert(phoneNumber, domainName, userName = 'Cliente', monthlyVisits = 0, trafficSource = null) {
     const firstName = this.getFirstName(userName);
+    const visitsFormatted = monthlyVisits ? monthlyVisits.toLocaleString('pt-BR') + ' acessos/mês' : 'Nenhum acesso mensal';
+    const sourceFormatted = trafficSource || 'Não definido';
     
     const message = `🤖 *DOMAIN HUB*
 
@@ -163,6 +165,8 @@ class WhatsAppService {
 ━━━━━━━━━━━━━━━━━━━━━
 
 🔴 *Status:* SUSPENSO
+📊 *Acessos:* ${visitsFormatted}
+📢 *Fonte:* ${sourceFormatted}
 ⏰ *Detectado em:* ${new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}
 
 ━━━━━━━━━━━━━━━━━━━━━
@@ -237,8 +241,10 @@ ${suspended > 0 ? `🔴 *${suspended} Domínio${suspended > 1 ? 's' : ''} Suspen
    * @param {string} userName - Nome do usuário
    * @returns {Promise<object>}
    */
-  async sendExpiredDomainAlert(phoneNumber, domainName, userName = 'Cliente') {
+  async sendExpiredDomainAlert(phoneNumber, domainName, userName = 'Cliente', monthlyVisits = 0, trafficSource = null) {
     const firstName = this.getFirstName(userName);
+    const visitsFormatted = monthlyVisits ? monthlyVisits.toLocaleString('pt-BR') + ' acessos/mês' : 'Nenhum acesso mensal';
+    const sourceFormatted = trafficSource || 'Não definido';
     
     const message = `🤖 *DOMAIN HUB*
 
@@ -249,6 +255,8 @@ ${suspended > 0 ? `🔴 *${suspended} Domínio${suspended > 1 ? 's' : ''} Suspen
 ━━━━━━━━━━━━━━━━━━━━━
 
 🟠 *Status:* EXPIRADO
+📊 *Acessos:* ${visitsFormatted}
+📢 *Fonte:* ${sourceFormatted}
 ⏰ *Detectado em:* ${new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}
 
 ━━━━━━━━━━━━━━━━━━━━━

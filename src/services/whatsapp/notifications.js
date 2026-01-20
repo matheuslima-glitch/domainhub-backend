@@ -945,10 +945,19 @@ class NotificationService {
         };
       }
 
+      // Buscar dados do domínio (acessos e fonte de tráfego)
+      const { data: domainData } = await this.client
+        .from('domains')
+        .select('monthly_visits, traffic_source')
+        .eq('domain_name', domainName)
+        .maybeSingle();
+
       const result = await whatsappService.sendSuspendedDomainAlert(
         profile.whatsapp_number,
         domainName,
-        profile.full_name || 'Cliente'
+        profile.full_name || 'Cliente',
+        domainData?.monthly_visits || 0,
+        domainData?.traffic_source || null
       );
 
       // Log original (mantido para compatibilidade)
@@ -1002,10 +1011,19 @@ class NotificationService {
         };
       }
 
+      // Buscar dados do domínio (acessos e fonte de tráfego)
+      const { data: domainData } = await this.client
+        .from('domains')
+        .select('monthly_visits, traffic_source')
+        .eq('domain_name', domainName)
+        .maybeSingle();
+
       const result = await whatsappService.sendExpiredDomainAlert(
         profile.whatsapp_number,
         domainName,
-        profile.full_name || 'Cliente'
+        profile.full_name || 'Cliente',
+        domainData?.monthly_visits || 0,
+        domainData?.traffic_source || null
       );
 
       // Log original (mantido para compatibilidade)
@@ -1296,7 +1314,7 @@ class NotificationService {
            // MENSAGEM 1: Sempre enviar boas-vindas primeiro
       const welcomeMessage = `🤖 *DOMAIN HUB*\n\n✅ *CADASTRO REALIZADO COM SUCESSO!*\n\n${firstName}, seu número foi cadastrado com sucesso no sistema de monitoramento de alertas para domínios do Domain Hub! 🎉\n\nA partir de agora você receberá alertas em tempo real sobre o status dos seus domínios.\n\n━━━━━━━━━━━━━━━━━━━━━\n\n📋 *Configuração da recorrência:*\n${settings.notification_days && settings.notification_days.length > 0 
   ? this.formatDays(settings.notification_days) 
-  : 'Não configurado'}\nA cada ${settings.notification_interval_hours || 6} hora${(settings.notification_interval_hours || 6) > 1 ? 's' : ''}\n\n━━━━━━━━━━━━━━━━━━━━━\n\n⚠️ *IMPORTANTE:* Salve este número nos seus contatos para garantir o recebimento dos alertas.${totalCritical > 0 ? '\n\n⏳ _Em poucos segundos você receberá um relatório com o status atual dos seus domínios..._' : '\n\n_Sistema ativo e monitorando 24/7_'}`;
+  : 'Não configurado'}\nA cada ${settings.notification_interval_hours || 6} hora${(settings.notification_interval_hours || 6) > 1 ? 's' : ''}\n\n━━━━━━━━━━━━━━━━━━━━━\n\n⚠️ *IMPORTANTE:* Salve este número nos seus contatos para garantir o recebimento dos alertas.${totalCritical > 0 ? '\n\n⏳ _Em breve você receberá um relatório com o status atual dos seus domínios..._' : '\n\n_Sistema ativo e monitorando 24/7_'}`;
 
       console.log('📤 [TEST-CONTACT] Enviando mensagem de boas-vindas');
       const welcomeResult = await whatsappService.sendMessage(phoneNumber, welcomeMessage);
@@ -1318,8 +1336,9 @@ class NotificationService {
       // MENSAGEM 2: Se houver domínios críticos, enviar relatório
       let result = welcomeResult;
       if (totalCritical > 0) {
-        // Aguardar 2 segundos antes de enviar o relatório
-        await new Promise(resolve => setTimeout(resolve, 2000));
+        // Aguardar 60 segundos antes de enviar o relatório
+        console.log('⏳ [TEST-CONTACT] Aguardando 60 segundos para enviar relatório...');
+        await new Promise(resolve => setTimeout(resolve, 60000));
 
         let reportMessage = `🤖 *DOMAIN HUB*\n\n⚠️ *ALERTA URGENTE*\n\n${firstName}, você tem ${totalCritical} domínio${totalCritical > 1 ? 's' : ''} que precisa${totalCritical > 1 ? 'm' : ''} de atenção imediata!\n\n━━━━━━━━━━━━━━━━━━━━━`;
 
@@ -1360,29 +1379,13 @@ class NotificationService {
         }
       }
 
-      console.log('📤 [TEST-CONTACT] Processo finalizado');
-
-      if (!result.success) {
-        console.error('❌ [TEST-CONTACT] Falha ao enviar:', result.error);
-        throw new Error(result.error || 'Erro ao enviar mensagem');
-      }
-
       // Atualizar last_notification_sent
       await this.client
         .from('notification_settings')
         .update({ last_notification_sent: new Date().toISOString() })
         .eq('id', settingsId);
 
-      // Log completo
-      await this.logNotificationComplete(settings.user_id, 'whatsapp', 'test_message', 'sent', {
-        settingsId: settingsId,
-        phoneNumber: phoneNumber,
-        messageContent: message,
-        messageId: result.messageId,
-        metadata: { ...counts, displayName, isTest: true }
-      });
-
-      console.log('✅ [TEST-CONTACT] Mensagem enviada com sucesso');
+      console.log('✅ [TEST-CONTACT] Processo finalizado com sucesso');
 
       return {
         success: true,
