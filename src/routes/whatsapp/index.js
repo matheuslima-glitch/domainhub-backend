@@ -374,15 +374,19 @@ router.post('/send-test', async (req, res, next) => {
       return res.status(400).json({ error: 'Número de telefone é obrigatório' });
     }
 
-    const message = `🤖 Domain Hub
+    const message = `🤖 *DOMAIN HUB*
 
-Olá ${userName || 'Cliente'}!
+✅ *CADASTRO REALIZADO COM SUCESSO!*
 
-Esta é uma mensagem de teste para confirmar que suas notificações via WhatsApp estão funcionando corretamente.
+${userName || 'Cliente'}, seu número foi cadastrado com sucesso no sistema de monitoramento de alertas para domínios do Domain Hub! 🎉
 
-✅ Configuração concluída com sucesso!
+A partir de agora você receberá alertas em tempo real sobre o status dos seus domínios.
 
-Você receberá alertas importantes sobre seus domínios neste número.`;
+━━━━━━━━━━━━━━━━━━━━━
+
+⚠️ *IMPORTANTE:* Salve este número nos seus contatos para garantir o recebimento dos alertas.
+
+_Sistema ativo e monitorando 24/7_`;
 
     const result = await whatsappService.sendMessage(phoneNumber, message);
 

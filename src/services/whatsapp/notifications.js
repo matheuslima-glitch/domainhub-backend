@@ -1154,9 +1154,9 @@ class NotificationService {
 
       // Se não tem domínios críticos
       if (totalCritical === 0) {
-        const testMessage = `🤖 *DOMAIN HUB*\n\n✅ *TUDO CERTO!*\n\n${firstName}, seus domínios estão em dia! 🎉\n\n━━━━━━━━━━━━━━━━━━━━━\n\n📋 *Configuração da recorrência:*\n${settings && settings.notification_days && settings.notification_days.length > 0 
+        const testMessage = `🤖 *DOMAIN HUB*\n\n✅ *CADASTRO REALIZADO COM SUCESSO!*\n\n${firstName}, seu número foi cadastrado com sucesso no sistema de monitoramento de alertas para domínios do Domain Hub! 🎉\n\nA partir de agora você receberá alertas em tempo real sobre o status dos seus domínios.\n\n━━━━━━━━━━━━━━━━━━━━━\n\n📋 *Configuração da recorrência:*\n${settings && settings.notification_days && settings.notification_days.length > 0 
   ? this.formatDays(settings.notification_days) 
-  : 'Não configurado'}\nA cada ${settings?.notification_interval_hours || 6} hora${(settings?.notification_interval_hours || 6) > 1 ? 's' : ''}\n\n━━━━━━━━━━━━━━━━━━━━━\n\n_Sistema ativo e monitorando 24/7_`;
+  : 'Não configurado'}\nA cada ${settings?.notification_interval_hours || 6} hora${(settings?.notification_interval_hours || 6) > 1 ? 's' : ''}\n\n━━━━━━━━━━━━━━━━━━━━━\n\n⚠️ *IMPORTANTE:* Salve este número nos seus contatos para garantir o recebimento dos alertas.\n\n_Sistema ativo e monitorando 24/7_`;
 
         console.log('📤 [TEST] Enviando mensagem (sem domínios críticos)');
         const result = await whatsappService.sendMessage(profile.whatsapp_number, testMessage);
@@ -1296,9 +1296,9 @@ class NotificationService {
       // Gerar mensagem
       let message;
       if (totalCritical === 0) {
-        message = `🤖 *DOMAIN HUB*\n\n✅ *TUDO CERTO!*\n\n${firstName}, seus domínios estão em dia! 🎉\n\n━━━━━━━━━━━━━━━━━━━━━\n\n📋 *Configuração da recorrência:*\n${settings.notification_days && settings.notification_days.length > 0 
+        message = `🤖 *DOMAIN HUB*\n\n✅ *CADASTRO REALIZADO COM SUCESSO!*\n\n${firstName}, seu número foi cadastrado com sucesso no sistema de monitoramento de alertas para domínios do Domain Hub! 🎉\n\nA partir de agora você receberá alertas em tempo real sobre o status dos seus domínios.\n\n━━━━━━━━━━━━━━━━━━━━━\n\n📋 *Configuração da recorrência:*\n${settings.notification_days && settings.notification_days.length > 0 
   ? this.formatDays(settings.notification_days) 
-  : 'Não configurado'}\nA cada ${settings.notification_interval_hours || 6} hora${(settings.notification_interval_hours || 6) > 1 ? 's' : ''}\n\n━━━━━━━━━━━━━━━━━━━━━\n\n_Sistema ativo e monitorando 24/7_`;
+  : 'Não configurado'}\nA cada ${settings.notification_interval_hours || 6} hora${(settings.notification_interval_hours || 6) > 1 ? 's' : ''}\n\n━━━━━━━━━━━━━━━━━━━━━\n\n⚠️ *IMPORTANTE:* Salve este número nos seus contatos para garantir o recebimento dos alertas.\n\n_Sistema ativo e monitorando 24/7_`;
       } else {
         // Construir mensagem com lista de domínios
         message = `🤖 *DOMAIN HUB*\n\n⚠️ *ALERTA URGENTE*\n\n${firstName}, você tem ${totalCritical} domínio${totalCritical > 1 ? 's' : ''} que precisa${totalCritical > 1 ? 'm' : ''} de atenção imediata!\n\n━━━━━━━━━━━━━━━━━━━━━`;
