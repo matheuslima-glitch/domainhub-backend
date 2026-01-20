@@ -1400,7 +1400,7 @@ class NotificationService {
         suspended: counts.suspended,
         expired: counts.expired,
         expiringSoon: counts.expiringSoon,
-        messageId: result.messageId
+        messageId: welcomeResult.messageId
       };
 
     } catch (error) {
