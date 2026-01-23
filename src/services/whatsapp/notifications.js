@@ -926,63 +926,8 @@ class NotificationService {
    * @returns {Promise<object>}
    */
   async sendSuspendedDomainAlert(userId, domainName) {
-    try {
-      const settings = await this.getNotificationSettings(userId);
-      
-      if (!settings || !settings.alert_suspended) {
-        return {
-          success: false,
-          message: 'Notificações de domínios suspensos desativadas'
-        };
-      }
-
-      const profile = await this.getUserProfile(userId);
-      
-      if (!profile.whatsapp_number) {
-        return {
-          success: false,
-          message: 'Usuário não possui número de WhatsApp cadastrado'
-        };
-      }
-
-      // Buscar dados do domínio (acessos e fonte de tráfego)
-      const { data: domainData } = await this.client
-        .from('domains')
-        .select('monthly_visits, traffic_source')
-        .eq('domain_name', domainName)
-        .maybeSingle();
-
-      const result = await whatsappService.sendSuspendedDomainAlert(
-        profile.whatsapp_number,
-        domainName,
-        profile.full_name || 'Cliente',
-        domainData?.monthly_visits || 0,
-        domainData?.traffic_source || null
-      );
-
-      // Log original (mantido para compatibilidade)
-      if (result.success) {
-        await this.logNotification(userId, 'suspended_domain_alert', {
-          domain_name: domainName
-        });
-      }
-
-      // Log completo (novo)
-      await this.logNotificationComplete(userId, 'whatsapp', 'domain_suspended', result.success ? 'sent' : 'failed', {
-        phoneNumber: profile.whatsapp_number,
-        domainName: domainName,
-        messageId: result.messageId,
-        metadata: { domainName, userName: profile.full_name }
-      });
-
-      return result;
-    } catch (error) {
-      console.error('❌ [NOTIF] Erro ao enviar alerta de suspenso:', error.message);
-      return {
-        success: false,
-        error: error.message
-      };
-    }
+    // Redireciona para a função global
+    return this.sendGlobalSuspendedAlert(domainName);
   }
 
   /**
@@ -992,62 +937,245 @@ class NotificationService {
    * @returns {Promise<object>}
    */
   async sendExpiredDomainAlert(userId, domainName) {
+    // Redireciona para a função global
+    return this.sendGlobalExpiredAlert(domainName);
+  }
+
+  /**
+   * Envia alerta de domínio SUSPENSO para TODOS os contatos cadastrados
+   * @param {string} domainName - Nome do domínio
+   * @returns {Promise<object>}
+   */
+  async sendGlobalSuspendedAlert(domainName) {
     try {
-      const settings = await this.getNotificationSettings(userId);
-      
-      if (!settings || !settings.alert_expired) {
-        return {
-          success: false,
-          message: 'Notificações de domínios expirados desativadas'
-        };
-      }
+      console.log(`🚨 [GLOBAL-SUSPENDED] Enviando alerta de domínio suspenso: ${domainName}`);
 
-      const profile = await this.getUserProfile(userId);
-      
-      if (!profile.whatsapp_number) {
-        return {
-          success: false,
-          message: 'Usuário não possui número de WhatsApp cadastrado'
-        };
-      }
-
-      // Buscar dados do domínio (acessos e fonte de tráfego)
+      // Buscar dados do domínio
       const { data: domainData } = await this.client
         .from('domains')
         .select('monthly_visits, traffic_source')
         .eq('domain_name', domainName)
         .maybeSingle();
 
-      const result = await whatsappService.sendExpiredDomainAlert(
-        profile.whatsapp_number,
-        domainName,
-        profile.full_name || 'Cliente',
-        domainData?.monthly_visits || 0,
-        domainData?.traffic_source || null
-      );
+      // Buscar TODOS os contatos com alerta de suspenso ativo
+      const { data: contacts, error } = await this.client
+        .from('notification_settings')
+        .select(`
+          id,
+          user_id,
+          display_name,
+          whatsapp_number,
+          alert_suspended
+        `)
+        .eq('is_active', true)
+        .eq('alert_suspended', true);
 
-      // Log original (mantido para compatibilidade)
-      if (result.success) {
-        await this.logNotification(userId, 'expired_domain_alert', {
-          domain_name: domainName
-        });
+      if (error) {
+        console.error('❌ [GLOBAL-SUSPENDED] Erro ao buscar contatos:', error.message);
+        return { success: false, error: error.message };
       }
 
-      // Log completo (novo)
-      await this.logNotificationComplete(userId, 'whatsapp', 'domain_expired', result.success ? 'sent' : 'failed', {
-        phoneNumber: profile.whatsapp_number,
-        domainName: domainName,
-        messageId: result.messageId,
-        metadata: { domainName, userName: profile.full_name }
-      });
+      if (!contacts || contacts.length === 0) {
+        console.log('ℹ️ [GLOBAL-SUSPENDED] Nenhum contato com alerta de suspenso ativo');
+        return { success: false, message: 'Nenhum contato configurado' };
+      }
 
-      return result;
-    } catch (error) {
-      console.error('❌ [NOTIF] Erro ao enviar alerta de expirado:', error.message);
+      console.log(`📊 [GLOBAL-SUSPENDED] ${contacts.length} contato(s) para notificar`);
+
+      let successCount = 0;
+      let failCount = 0;
+
+      for (const contact of contacts) {
+        try {
+          // Determinar número e nome
+          let phoneNumber = contact.whatsapp_number;
+          let displayName = contact.display_name;
+
+          if (contact.user_id) {
+            const { data: profile } = await this.client
+              .from('profiles')
+              .select('full_name, whatsapp_number')
+              .eq('id', contact.user_id)
+              .maybeSingle();
+
+            if (profile) {
+              phoneNumber = phoneNumber || profile.whatsapp_number;
+              displayName = displayName || profile.full_name;
+            }
+          }
+
+          if (phoneNumber) {
+            phoneNumber = phoneNumber.replace(/\D/g, '');
+          }
+
+          if (!phoneNumber) {
+            console.log(`⏭️ [GLOBAL-SUSPENDED] ${displayName || contact.id}: Sem WhatsApp`);
+            continue;
+          }
+
+          // Enviar alerta
+          const result = await whatsappService.sendSuspendedDomainAlert(
+            phoneNumber,
+            domainName,
+            displayName || 'Cliente',
+            domainData?.monthly_visits || 0,
+            domainData?.traffic_source || null
+          );
+
+          if (result.success) {
+            successCount++;
+            console.log(`✅ [GLOBAL-SUSPENDED] Enviado para ${displayName}`);
+          } else {
+            failCount++;
+            console.log(`❌ [GLOBAL-SUSPENDED] Falha para ${displayName}: ${result.error}`);
+          }
+
+          // Log
+          await this.logNotificationComplete(contact.user_id, 'whatsapp', 'domain_suspended', result.success ? 'sent' : 'failed', {
+            settingsId: contact.id,
+            phoneNumber: phoneNumber,
+            domainName: domainName,
+            messageId: result.messageId,
+            metadata: { domainName, displayName, isGlobal: true }
+          });
+
+        } catch (contactError) {
+          failCount++;
+          console.error(`❌ [GLOBAL-SUSPENDED] Erro para ${contact.id}:`, contactError.message);
+        }
+      }
+
+      console.log(`📊 [GLOBAL-SUSPENDED] Concluído: ${successCount} enviados, ${failCount} falhas`);
+
       return {
-        success: false,
-        error: error.message
+        success: successCount > 0,
+        sent: successCount,
+        failed: failCount,
+        domainName: domainName
       };
+
+    } catch (error) {
+      console.error('❌ [GLOBAL-SUSPENDED] Erro:', error.message);
+      return { success: false, error: error.message };
+    }
+  }
+
+  /**
+   * Envia alerta de domínio EXPIRADO para TODOS os contatos cadastrados
+   * @param {string} domainName - Nome do domínio
+   * @returns {Promise<object>}
+   */
+  async sendGlobalExpiredAlert(domainName) {
+    try {
+      console.log(`🚨 [GLOBAL-EXPIRED] Enviando alerta de domínio expirado: ${domainName}`);
+
+      // Buscar dados do domínio
+      const { data: domainData } = await this.client
+        .from('domains')
+        .select('monthly_visits, traffic_source')
+        .eq('domain_name', domainName)
+        .maybeSingle();
+
+      // Buscar TODOS os contatos com alerta de expirado ativo
+      const { data: contacts, error } = await this.client
+        .from('notification_settings')
+        .select(`
+          id,
+          user_id,
+          display_name,
+          whatsapp_number,
+          alert_expired
+        `)
+        .eq('is_active', true)
+        .eq('alert_expired', true);
+
+      if (error) {
+        console.error('❌ [GLOBAL-EXPIRED] Erro ao buscar contatos:', error.message);
+        return { success: false, error: error.message };
+      }
+
+      if (!contacts || contacts.length === 0) {
+        console.log('ℹ️ [GLOBAL-EXPIRED] Nenhum contato com alerta de expirado ativo');
+        return { success: false, message: 'Nenhum contato configurado' };
+      }
+
+      console.log(`📊 [GLOBAL-EXPIRED] ${contacts.length} contato(s) para notificar`);
+
+      let successCount = 0;
+      let failCount = 0;
+
+      for (const contact of contacts) {
+        try {
+          // Determinar número e nome
+          let phoneNumber = contact.whatsapp_number;
+          let displayName = contact.display_name;
+
+          if (contact.user_id) {
+            const { data: profile } = await this.client
+              .from('profiles')
+              .select('full_name, whatsapp_number')
+              .eq('id', contact.user_id)
+              .maybeSingle();
+
+            if (profile) {
+              phoneNumber = phoneNumber || profile.whatsapp_number;
+              displayName = displayName || profile.full_name;
+            }
+          }
+
+          if (phoneNumber) {
+            phoneNumber = phoneNumber.replace(/\D/g, '');
+          }
+
+          if (!phoneNumber) {
+            console.log(`⏭️ [GLOBAL-EXPIRED] ${displayName || contact.id}: Sem WhatsApp`);
+            continue;
+          }
+
+          // Enviar alerta
+          const result = await whatsappService.sendExpiredDomainAlert(
+            phoneNumber,
+            domainName,
+            displayName || 'Cliente',
+            domainData?.monthly_visits || 0,
+            domainData?.traffic_source || null
+          );
+
+          if (result.success) {
+            successCount++;
+            console.log(`✅ [GLOBAL-EXPIRED] Enviado para ${displayName}`);
+          } else {
+            failCount++;
+            console.log(`❌ [GLOBAL-EXPIRED] Falha para ${displayName}: ${result.error}`);
+          }
+
+          // Log
+          await this.logNotificationComplete(contact.user_id, 'whatsapp', 'domain_expired', result.success ? 'sent' : 'failed', {
+            settingsId: contact.id,
+            phoneNumber: phoneNumber,
+            domainName: domainName,
+            messageId: result.messageId,
+            metadata: { domainName, displayName, isGlobal: true }
+          });
+
+        } catch (contactError) {
+          failCount++;
+          console.error(`❌ [GLOBAL-EXPIRED] Erro para ${contact.id}:`, contactError.message);
+        }
+      }
+
+      console.log(`📊 [GLOBAL-EXPIRED] Concluído: ${successCount} enviados, ${failCount} falhas`);
+
+      return {
+        success: successCount > 0,
+        sent: successCount,
+        failed: failCount,
+        domainName: domainName
+      };
+
+    } catch (error) {
+      console.error('❌ [GLOBAL-EXPIRED] Erro:', error.message);
+      return { success: false, error: error.message };
     }
   }
 
@@ -1406,6 +1534,156 @@ class NotificationService {
     } catch (error) {
       console.error('❌ [TEST-CONTACT] Erro:', error.message);
       throw error;
+    }
+  }
+
+  /**
+   * Envia relatório GLOBAL de domínios críticos para um contato
+   * Funciona para usuários do sistema E contatos externos
+   * @param {string} settingsId - ID do notification_settings
+   * @returns {Promise<object>}
+   */
+  async sendGlobalCriticalReport(settingsId) {
+    try {
+      console.log(`📤 [GLOBAL-REPORT] Iniciando envio para settings: ${settingsId}`);
+
+      // 1. Buscar dados do contato
+      const { data: settings, error: settingsError } = await this.client
+        .from('notification_settings')
+        .select('*')
+        .eq('id', settingsId)
+        .single();
+
+      if (settingsError) {
+        console.error('❌ [GLOBAL-REPORT] Erro ao buscar settings:', settingsError.message);
+        return { success: false, message: 'Configurações não encontradas' };
+      }
+
+      if (!settings.is_active) {
+        return { success: false, message: 'Notificações desativadas para este contato' };
+      }
+
+      // 2. Determinar número de WhatsApp e nome
+      let phoneNumber = settings.whatsapp_number;
+      let displayName = settings.display_name;
+
+      if (settings.user_id) {
+        const { data: profile } = await this.client
+          .from('profiles')
+          .select('full_name, whatsapp_number')
+          .eq('id', settings.user_id)
+          .maybeSingle();
+
+        if (profile) {
+          phoneNumber = phoneNumber || profile.whatsapp_number;
+          displayName = displayName || profile.full_name;
+        }
+      }
+
+      if (phoneNumber) {
+        phoneNumber = phoneNumber.replace(/\D/g, '');
+      }
+
+      if (!phoneNumber) {
+        console.log(`⚠️ [GLOBAL-REPORT] Contato ${displayName || settingsId} sem número de WhatsApp`);
+        return { success: false, message: 'Contato não possui número de WhatsApp cadastrado' };
+      }
+
+      // 3. Verificar intervalo mínimo entre notificações
+      const intervalHours = settings.notification_interval_hours || 6;
+      if (settings.last_notification_sent) {
+        const lastSent = new Date(settings.last_notification_sent);
+        const now = new Date();
+        const hoursDiff = (now - lastSent) / (1000 * 60 * 60);
+
+        if (hoursDiff < intervalHours) {
+          console.log(`⏭️ [GLOBAL-REPORT] ${displayName}: Intervalo mínimo não atingido (${hoursDiff.toFixed(1)}h < ${intervalHours}h)`);
+          return { success: false, message: 'Intervalo mínimo entre notificações não atingido' };
+        }
+      }
+
+      // 4. Buscar estatísticas GLOBAIS de domínios
+      const stats = await this.getGlobalCriticalDomainsStats();
+      const totalCritical = stats.suspended + stats.expired + stats.expiringSoon;
+
+      if (totalCritical === 0) {
+        console.log(`ℹ️ [GLOBAL-REPORT] ${displayName}: Nenhum domínio crítico`);
+        return { success: false, message: 'Nenhum domínio crítico para reportar' };
+      }
+
+      console.log(`📊 [GLOBAL-REPORT] ${displayName}: ${stats.suspended} suspensos, ${stats.expired} expirados, ${stats.expiringSoon} expirando`);
+
+      // 5. Buscar detalhes dos domínios
+      const domainsData = await this.getCriticalDomainsWithDetails(null);
+
+      // 6. Montar mensagem
+      const firstName = whatsappService.getFirstName(displayName || 'Cliente');
+      
+      let message = `🤖 *DOMAIN HUB*\n\n⚠️ *RELATÓRIO DE DOMÍNIOS CRÍTICOS*\n\n${firstName}, segue o status atual dos domínios que precisam de atenção:\n\n━━━━━━━━━━━━━━━━━━━━━`;
+
+      if (stats.suspended > 0 && settings.alert_suspended) {
+        message += `\n\n🔴 *${stats.suspended} Domínio${stats.suspended > 1 ? 's' : ''} Suspenso${stats.suspended > 1 ? 's' : ''}*\n_Requer ação imediata_\n\n`;
+        message += this.formatDomainList(domainsData.suspended);
+      }
+
+      if (stats.expired > 0 && settings.alert_expired) {
+        message += `\n\n🟠 *${stats.expired} Domínio${stats.expired > 1 ? 's' : ''} Expirado${stats.expired > 1 ? 's' : ''}*\n_Requer renovação urgente_\n\n`;
+        message += this.formatDomainList(domainsData.expired);
+      }
+
+      if (stats.expiringSoon > 0 && settings.alert_expiring_soon) {
+        message += `\n\n🟡 *${stats.expiringSoon} Domínio${stats.expiringSoon > 1 ? 's' : ''} Expirando em Breve*\n_Expiram em até 15 dias_\n\n`;
+        message += this.formatDomainList(domainsData.expiringSoon);
+      }
+
+      message += `\n\n━━━━━━━━━━━━━━━━━━━━━\n\n⚡ Verifique AGORA na *Gestão de Domínios* e tome ação imediata!\n\n━━━━━━━━━━━━━━━━━━━━━`;
+
+      // 7. Enviar mensagem
+      console.log(`📤 [GLOBAL-REPORT] Enviando para ${whatsappService.maskPhone(phoneNumber)}`);
+      const result = await whatsappService.sendMessage(phoneNumber, message);
+
+      if (!result.success) {
+        console.error(`❌ [GLOBAL-REPORT] Falha ao enviar para ${displayName}:`, result.error);
+        
+        await this.logNotificationComplete(settings.user_id, 'whatsapp', 'critical_report', 'failed', {
+          settingsId: settingsId,
+          phoneNumber: phoneNumber,
+          metadata: { ...stats, displayName, error: result.error }
+        });
+
+        return { success: false, message: result.error || 'Erro ao enviar mensagem' };
+      }
+
+      // 8. Atualizar last_notification_sent
+      await this.client
+        .from('notification_settings')
+        .update({ last_notification_sent: new Date().toISOString() })
+        .eq('id', settingsId);
+
+      // 9. Registrar log de sucesso
+      await this.logNotificationComplete(settings.user_id, 'whatsapp', 'critical_report', 'sent', {
+        settingsId: settingsId,
+        phoneNumber: phoneNumber,
+        messageContent: message,
+        messageId: result.messageId,
+        metadata: { ...stats, displayName, isGlobal: true }
+      });
+
+      console.log(`✅ [GLOBAL-REPORT] Relatório enviado com sucesso para ${displayName}`);
+
+      return {
+        success: true,
+        phoneNumber: whatsappService.maskPhone(phoneNumber),
+        messageId: result.messageId,
+        stats: stats
+      };
+
+    } catch (error) {
+      console.error('❌ [GLOBAL-REPORT] Erro:', error.message);
+      return {
+        success: false,
+        error: error.message
+      };
     }
   }
 }
