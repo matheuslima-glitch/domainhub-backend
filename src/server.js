@@ -62,7 +62,6 @@ app.use(errorHandler);
 
 // ============================================
 // CRON: Notificações WhatsApp Recorrentes
-// Processa TODOS os contatos e envia relatório GLOBAL
 // ============================================
 cron.schedule('0 * * * *', async () => {
   console.log('📱 [CRON] Verificando notificações WhatsApp programadas...');
@@ -83,135 +82,83 @@ cron.schedule('0 * * * *', async () => {
       }
     );
 
-    // Buscar TODOS os contatos com notificações ativas (com ou sem user_id)
-    const { data: contacts, error } = await supabase
+    // Buscar todos os usuários com notificações ativas
+    const { data: users, error } = await supabase
       .from('notification_settings')
-      .select(`
-        id,
-        user_id,
-        display_name,
-        whatsapp_number,
-        notification_days,
-        notification_interval_hours,
-        notification_frequency,
-        alert_suspended,
-        alert_expired,
-        alert_expiring_soon,
-        last_notification_sent,
-        is_active
-      `)
-      .eq('is_active', true)
+      .select('user_id, notification_days, notification_interval_hours, notification_frequency, alert_suspended, alert_expired, alert_expiring_soon')
       .or('alert_suspended.eq.true,alert_expired.eq.true,alert_expiring_soon.eq.true');
 
     if (error) {
-      console.error('❌ [CRON] Erro ao buscar contatos:', error.message);
+      console.error('❌ [CRON] Erro ao buscar usuários:', error.message);
       return;
     }
 
-    if (!contacts || contacts.length === 0) {
-      console.log('ℹ️ [CRON] Nenhum contato com notificações ativas');
+    if (!users || users.length === 0) {
+      console.log('ℹ️ [CRON] Nenhum usuário com notificações ativas');
       return;
     }
 
-    console.log(`📊 [CRON] ${contacts.length} contato(s) com notificações ativas`);
+    console.log(`📊 [CRON] ${users.length} usuário(s) com notificações ativas`);
 
     const now = new Date();
-    const currentDay = now.getDay();
+    const currentDay = now.getDay(); // 0 = Domingo, 1 = Segunda, ..., 6 = Sábado
     const currentHour = now.getHours();
 
+    // Mapear dias da semana
     const dayNames = ['domingo', 'segunda', 'terca', 'quarta', 'quinta', 'sexta', 'sabado'];
     const currentDayName = dayNames[currentDay];
 
-    // Buscar estatísticas GLOBAIS uma única vez
-    const globalStats = await notificationService.getGlobalCriticalDomainsStats();
-    const totalCritical = globalStats.suspended + globalStats.expired + globalStats.expiringSoon;
-
-    if (totalCritical === 0) {
-      console.log('ℹ️ [CRON] Nenhum domínio crítico para reportar. Pulando envios.');
-      return;
-    }
-
-    console.log(`📊 [CRON] Domínios críticos: ${globalStats.suspended} suspensos, ${globalStats.expired} expirados, ${globalStats.expiringSoon} expirando`);
-
-    for (const contact of contacts) {
+    for (const user of users) {
       try {
-        const contactName = contact.display_name || contact.user_id || contact.id;
-        
-        // Verificar se tem número de WhatsApp
-        let hasPhone = !!contact.whatsapp_number;
-        
-        if (!hasPhone && contact.user_id) {
-          const { data: profile } = await supabase
-            .from('profiles')
-            .select('whatsapp_number')
-            .eq('id', contact.user_id)
-            .maybeSingle();
-          
-          hasPhone = !!profile?.whatsapp_number;
-        }
-        
-        if (!hasPhone) {
-          console.log(`⏭️ [CRON] ${contactName}: Sem número de WhatsApp`);
-          continue;
-        }
-
         // Verificar se hoje é um dia de notificação
-        const notificationDays = contact.notification_days || [];
+        const notificationDays = user.notification_days || [];
         if (!notificationDays.includes(currentDayName)) {
-          console.log(`⏭️ [CRON] ${contactName}: Hoje não é dia de notificação`);
+          console.log(`⏭️ [CRON] Usuário ${user.user_id}: Hoje não é dia de notificação`);
           continue;
         }
 
         // Verificar intervalo de horas
-        const intervalHours = contact.notification_interval_hours || 6;
+        const intervalHours = user.notification_interval_hours || 6;
+        
+        // Verificar se é hora de enviar (baseado no intervalo)
         if (currentHour % intervalHours !== 0) {
-          console.log(`⏭️ [CRON] ${contactName}: Não está no intervalo de ${intervalHours}h`);
+          console.log(`⏭️ [CRON] Usuário ${user.user_id}: Não está no intervalo de ${intervalHours}h`);
           continue;
         }
 
-        // Verificar frequência diária
-        const todayStart = new Date();
-        todayStart.setHours(0, 0, 0, 0);
-
-        let logsQuery = supabase
+        // Verificar frequência diária já atingida
+        const { data: todayLogs, error: logsError } = await supabase
           .from('notification_logs')
           .select('id')
-          .eq('alert_type', 'critical_report')
-          .gte('sent_at', todayStart.toISOString());
-
-        if (contact.user_id) {
-          logsQuery = logsQuery.eq('user_id', contact.user_id);
-        } else {
-          logsQuery = logsQuery.eq('settings_id', contact.id);
-        }
-
-        const { data: todayLogs, error: logsError } = await logsQuery;
+          .eq('user_id', user.user_id)
+          .eq('notification_type', 'critical_domains_report')
+          .gte('sent_at', new Date(now.setHours(0, 0, 0, 0)).toISOString());
 
         if (logsError) {
-          console.error(`❌ [CRON] Erro ao verificar logs de ${contactName}:`, logsError.message);
+          console.error(`❌ [CRON] Erro ao verificar logs do usuário ${user.user_id}:`, logsError.message);
           continue;
         }
 
-        const maxFrequency = contact.notification_frequency || 3;
+        const maxFrequency = user.notification_frequency || 3;
         const sentToday = todayLogs?.length || 0;
 
         if (sentToday >= maxFrequency) {
-          console.log(`⏭️ [CRON] ${contactName}: Frequência diária atingida (${sentToday}/${maxFrequency})`);
+          console.log(`⏭️ [CRON] Usuário ${user.user_id}: Frequência diária atingida (${sentToday}/${maxFrequency})`);
           continue;
         }
 
-        // Enviar relatório GLOBAL
-        console.log(`📤 [CRON] Enviando relatório global para ${contactName}...`);
-        const result = await notificationService.sendGlobalCriticalReport(contact.id);
+        // Enviar relatório
+        console.log(`📤 [CRON] Enviando relatório para usuário ${user.user_id}...`);
+        const result = await notificationService.sendCriticalDomainsReport(user.user_id);
 
         if (result.success) {
-          console.log(`✅ [CRON] Relatório enviado com sucesso para ${contactName}`);
+          console.log(`✅ [CRON] Relatório enviado com sucesso para ${user.user_id}`);
         } else {
-          console.log(`⚠️ [CRON] Não foi possível enviar para ${contactName}: ${result.message}`);
+          console.log(`⚠️ [CRON] Não foi possível enviar para ${user.user_id}: ${result.message}`);
         }
 
-      } catch (contactError) {
-        console.error(`❌ [CRON] Erro ao processar contato ${contact.id}:`, contactError.message);
+      } catch (userError) {
+        console.error(`❌ [CRON] Erro ao processar usuário ${user.user_id}:`, userError.message);
       }
     }
 
