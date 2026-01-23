@@ -149,8 +149,8 @@ class AtomiCatDomainPurchase {
         await this.updateProgress(sessionId, 'purchasing', 'completed', 
           `Domínio ${domainManual} comprado com sucesso!`, domainManual);
         
-        // Processar pós-compra com fonte de tráfego, sessionId e plataforma
-        await this.processPostPurchase(domainManual, userId, sessionId, trafficSource, plataforma, true);
+        // Processar pós-compra com fonte de tráfego, sessionId, plataforma e PREÇO
+        await this.processPostPurchase(domainManual, userId, sessionId, trafficSource, plataforma, true, availabilityCheck.price);
       } else {
         await this.updateProgress(sessionId, 'error', 'error', 
           `Erro na compra: ${purchaseResult.error}`);
@@ -244,8 +244,8 @@ class AtomiCatDomainPurchase {
               await this.updateProgress(sessionId, 'purchasing', 'completed', 
                 `Domínio ${generatedDomain} comprado com sucesso!`, generatedDomain);
               
-              // Processar pós-compra com sessionId, trafficSource e plataforma
-              await this.processPostPurchase(domain, userId, sessionId, trafficSource, plataforma, false);
+              // Processar pós-compra com sessionId, trafficSource, plataforma e PREÇO
+              await this.processPostPurchase(domain, userId, sessionId, trafficSource, plataforma, false, availabilityCheck.price);
               
             } else {
               console.error(`❌ Erro na compra: ${purchaseResult.error}`);
@@ -328,7 +328,7 @@ class AtomiCatDomainPurchase {
    * - Salvar log de atividade
    * - Enviar notificação WhatsApp
    */
-  async processPostPurchase(domain, userId, sessionId = null, trafficSource = null, plataforma = null, isManual = false) {
+  async processPostPurchase(domain, userId, sessionId = null, trafficSource = null, plataforma = null, isManual = false, purchasePrice = null) {
     try {
       console.log(`🔧 [POST-PURCHASE-ATOMICAT] Iniciando para ${domain}`);
       if (trafficSource) {
@@ -336,6 +336,9 @@ class AtomiCatDomainPurchase {
       }
       if (plataforma) {
         console.log(`   Plataforma: ${plataforma}`);
+      }
+      if (purchasePrice) {
+        console.log(`   💰 Preço de compra: $${purchasePrice}`);
       }
       
       // Aguardar 5 segundos para domínio ser processado na Namecheap
@@ -345,8 +348,8 @@ class AtomiCatDomainPurchase {
       // Buscar informações do domínio na Namecheap
       const namecheapInfo = await this.getDomainInfoFromNamecheap(domain);
       
-      // Salvar no Supabase com dados reais, fonte de tráfego e plataforma
-      const savedDomain = await this.saveDomainToSupabase(domain, userId, namecheapInfo, trafficSource, plataforma);
+      // Salvar no Supabase com dados reais, fonte de tráfego, plataforma e preço
+      const savedDomain = await this.saveDomainToSupabase(domain, userId, namecheapInfo, trafficSource, plataforma, purchasePrice);
       
       // Salvar log de atividade
       if (savedDomain?.id) {
@@ -768,9 +771,12 @@ class AtomiCatDomainPurchase {
    * SALVAR NO SUPABASE - VERSÃO MELHORADA
    * Usa informações REAIS da Namecheap
    */
-  async saveDomainToSupabase(domain, userId, namecheapInfo, trafficSource = null, plataforma = null) {
+  async saveDomainToSupabase(domain, userId, namecheapInfo, trafficSource = null, plataforma = null, purchasePrice = null) {
     try {
       console.log(`💾 [SUPABASE-ATOMICAT] Salvando ${domain}...`);
+      if (purchasePrice) {
+        console.log(`   💰 Preço de compra: $${purchasePrice}`);
+      }
       
       const currentDate = new Date().toISOString();
       
@@ -839,13 +845,16 @@ class AtomiCatDomainPurchase {
       // Criar objeto para retorno compatível
       const domainData = { id: domainId };
       
-      // Atualizar traffic_source e platform separadamente se fornecidos
+      // Atualizar traffic_source, platform e purchase_price separadamente se fornecidos
       const updateFields = {};
       if (trafficSource) {
         updateFields.traffic_source = trafficSource;
       }
       if (plataforma) {
         updateFields.platform = plataforma;
+      }
+      if (purchasePrice !== null && purchasePrice !== undefined) {
+        updateFields.purchase_price = purchasePrice;
       }
       
       if (Object.keys(updateFields).length > 0) {
@@ -863,6 +872,9 @@ class AtomiCatDomainPurchase {
           }
           if (plataforma) {
             console.log(`✅ [SUPABASE-ATOMICAT] Plataforma atualizada: ${plataforma}`);
+          }
+          if (purchasePrice !== null && purchasePrice !== undefined) {
+            console.log(`✅ [SUPABASE-ATOMICAT] Preço de compra salvo: $${purchasePrice}`);
           }
         }
       }

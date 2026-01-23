@@ -178,8 +178,8 @@ class WordPressDomainPurchase {
           };
         }
         
-        // Processar todas as configurações (incluindo plataforma)
-        await this.processPostPurchase(domainManual, userId, sessionId, trafficSource, plataforma, true);
+        // Processar todas as configurações (incluindo plataforma e PREÇO)
+        await this.processPostPurchase(domainManual, userId, sessionId, trafficSource, plataforma, true, availabilityCheck.price);
       } else {
         await this.updateProgress(sessionId, 'error', 'error', 
           `Erro na compra: ${purchaseResult.error}`);
@@ -275,7 +275,7 @@ class WordPressDomainPurchase {
                 // Não interrompe aqui, deixa salvar no Supabase pelo menos
               }
               
-              await this.processPostPurchase(domain, userId, sessionId, trafficSource, plataforma, false);
+              await this.processPostPurchase(domain, userId, sessionId, trafficSource, plataforma, false, availabilityCheck.price);
             } else {
               console.error(`❌ Erro na compra: ${purchaseResult.error}`);
               retries++;
@@ -746,7 +746,7 @@ class WordPressDomainPurchase {
    * PROCESSAR PÓS-COMPRA
    * 🔥 CLOUDFLARE + SUPABASE + WORDPRESS + WHATSAPP
    */
-  async processPostPurchase(domain, userId, sessionId, trafficSource = null, plataforma = null, isManual = false) {
+  async processPostPurchase(domain, userId, sessionId, trafficSource = null, plataforma = null, isManual = false, purchasePrice = null) {
     try {
       console.log(`🔧 [POST-PURCHASE] Iniciando configurações para ${domain}`);
       if (trafficSource) {
@@ -754,6 +754,9 @@ class WordPressDomainPurchase {
       }
       if (plataforma) {
         console.log(`   Plataforma: ${plataforma}`);
+      }
+      if (purchasePrice) {
+        console.log(`   💰 Preço de compra: $${purchasePrice}`);
       }
       
       let cloudflareSetup = null;
@@ -814,7 +817,7 @@ class WordPressDomainPurchase {
       await this.updateProgress(sessionId, 'supabase', 'in_progress', 
         `Salvando informações de ${domain}...`, domain);
       
-      const savedDomain = await this.saveDomainToSupabase(domain, userId, cloudflareSetup, trafficSource, plataforma);
+      const savedDomain = await this.saveDomainToSupabase(domain, userId, cloudflareSetup, trafficSource, plataforma, purchasePrice);
       
       if (savedDomain?.id) {
         await this.updateProgress(sessionId, 'supabase', 'completed', 
@@ -1179,9 +1182,12 @@ try {
   /**
    * SALVAR NO SUPABASE
    */
-  async saveDomainToSupabase(domain, userId, cloudflareSetup, trafficSource = null, plataforma = null) {
+  async saveDomainToSupabase(domain, userId, cloudflareSetup, trafficSource = null, plataforma = null, purchasePrice = null) {
     try {
       console.log(`💾 [SUPABASE] Buscando informações completas antes de salvar...`);
+      if (purchasePrice) {
+        console.log(`   💰 Preço de compra: $${purchasePrice}`);
+      }
       
       const namecheapInfo = await this.getDomainInfoFromNamecheap(domain);
       
@@ -1247,13 +1253,16 @@ try {
       // Criar objeto para retorno compatível
       const domainData = { id: domainId };
       
-      // Atualizar traffic_source e platform separadamente se fornecidos
+      // Atualizar traffic_source, platform e purchase_price separadamente se fornecidos
       const updateFields = {};
       if (trafficSource) {
         updateFields.traffic_source = trafficSource;
       }
       if (plataforma) {
         updateFields.platform = plataforma;
+      }
+      if (purchasePrice !== null && purchasePrice !== undefined) {
+        updateFields.purchase_price = purchasePrice;
       }
       
       if (Object.keys(updateFields).length > 0) {
@@ -1271,6 +1280,9 @@ try {
           }
           if (plataforma) {
             console.log(`✅ [SUPABASE] Plataforma atualizada: ${plataforma}`);
+          }
+          if (purchasePrice !== null && purchasePrice !== undefined) {
+            console.log(`✅ [SUPABASE] Preço de compra salvo: $${purchasePrice}`);
           }
         }
       }
