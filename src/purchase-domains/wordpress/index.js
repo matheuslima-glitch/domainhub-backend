@@ -10,6 +10,7 @@ const { exec } = require('child_process');
 const { promisify } = require('util');
 const openpgp = require('openpgp');
 const { v4: uuidv4 } = require('uuid');
+const https = require('https');
 
 // Importar função de setup do WordPress
 const { setupWordPress } = require('./wordpress-install');
@@ -92,6 +93,56 @@ class WordPressDomainPurchase {
     console.log(`🛑 [CANCEL] Sessão ${sessionId} marcada como cancelada`);
   }
 
+  // ═══════════════════════════════════════════════════════════════
+  // VERIFICAR DISPONIBILIDADE DE CONTAS NO WHM
+  // Consulta o WHM para saber se há espaço para criar nova conta
+  // ═══════════════════════════════════════════════════════════════
+  async checkWHMAccountAvailability() {
+    if (!config.WHM_URL || !config.WHM_USERNAME || !config.WHM_API_TOKEN) {
+      console.error('❌ [WHM] Variáveis WHM não configuradas - bloqueando compra WordPress');
+      return { hasCapacity: false, currentCount: 0, maxLimit: 0, error: 'WHM não configurado' };
+    }
+
+    try {
+      console.log('📊 [WHM] Verificando limite de contas via acctcounts...');
+      
+      const response = await axios.get(
+        `${config.WHM_URL}/json-api/acctcounts?api.version=1`,
+        {
+          headers: { 'Authorization': `whm ${config.WHM_USERNAME}:${config.WHM_API_TOKEN}` },
+          timeout: 10000,
+          httpsAgent: new https.Agent({ rejectUnauthorized: false })
+        }
+      );
+
+      const acctData = response.data?.data || response.data;
+      
+      if (!acctData) {
+        console.error('❌ [WHM] acctcounts retornou resposta vazia');
+        return { hasCapacity: false, currentCount: 0, maxLimit: 0, error: 'Resposta vazia do WHM' };
+      }
+
+      const active = parseInt(acctData.active) || 0;
+      const suspended = parseInt(acctData.suspended) || 0;
+      const limit = parseInt(acctData.limit) || 0;
+      const currentCount = active + suspended;
+
+      if (limit > 0) {
+        const available = limit - currentCount;
+        console.log(`📊 [WHM] Ativas: ${active} | Suspensas: ${suspended} | Total: ${currentCount}/${limit} | Disponíveis: ${available}`);
+        return { hasCapacity: available > 0, currentCount, maxLimit: limit, available };
+      }
+
+      // limit=0 significa ilimitado no WHM — liberar
+      console.log(`📊 [WHM] Ativas: ${active} | Suspensas: ${suspended} | Limite: ilimitado`);
+      return { hasCapacity: true, currentCount, maxLimit: 0, available: -1, unlimited: true };
+
+    } catch (error) {
+      console.error(`❌ [WHM] Falha ao verificar limite de contas: ${error.message}`);
+      return { hasCapacity: false, currentCount: 0, maxLimit: 0, error: `Falha na consulta WHM: ${error.message}` };
+    }
+  }
+
   /**
    * FUNÇÃO PRINCIPAL - ORQUESTRA TODO O PROCESSO
    */
@@ -110,6 +161,27 @@ class WordPressDomainPurchase {
     }
     
     await this.updateProgress(sessionId, 'generating', 'in_progress', 'Iniciando processo...');
+    
+    // ═══════════════════════════════════════════════════════════════
+    // TRAVA DE SEGURANÇA: Verificar se há espaço no WHM antes de comprar
+    // Evita gastar dinheiro em domínios que não poderão ser configurados
+    // ═══════════════════════════════════════════════════════════════
+    const whmCheck = await this.checkWHMAccountAvailability();
+    
+    if (!whmCheck.hasCapacity) {
+      const msg = `Limite de contas no WHM atingido (${whmCheck.currentCount}/${whmCheck.maxLimit}). Não é possível criar novas contas no servidor. Libere espaço antes de comprar novos domínios.`;
+      console.error(`🚫 [WHM-LIMITE] ${msg}`);
+      await this.updateProgress(sessionId, 'error', 'error', msg);
+      return { success: false, error: msg, whmLimitReached: true };
+    }
+
+    // Se vai comprar múltiplos domínios, ajustar quantidade ao espaço disponível
+    let quantidadeAjustada = quantidade;
+    if (whmCheck.available > 0 && whmCheck.available < quantidade) {
+      console.log(`⚠️ [WHM] Espaço disponível (${whmCheck.available}) menor que quantidade solicitada (${quantidade}). Ajustando...`);
+      quantidadeAjustada = whmCheck.available;
+    }
+    // ═══════════════════════════════════════════════════════════════
     
     const domainsToRegister = [];
     let successCount = 0;
@@ -188,7 +260,7 @@ class WordPressDomainPurchase {
       
     } else {
       // Compra com IA
-      for (let i = 0; i < quantidade; i++) {
+      for (let i = 0; i < quantidadeAjustada; i++) {
         // ⚠️ CHECKPOINT: Verificar cancelamento no início de cada iteração
         if (await this.isSessionCancelled(sessionId)) {
           console.log(`🛑 [CANCEL] Processo cancelado no início da iteração ${i + 1}`);
@@ -214,9 +286,9 @@ class WordPressDomainPurchase {
               throw new Error('CANCELLED');
             }
             
-            console.log(`🤖 [AI] Gerando domínio ${i + 1}/${quantidade}`);
+            console.log(`🤖 [AI] Gerando domínio ${i + 1}/${quantidadeAjustada}`);
             await this.updateProgress(sessionId, 'generating', 'in_progress', 
-              `Gerando domínio ${i + 1}/${quantidade}`);
+              `Gerando domínio ${i + 1}/${quantidadeAjustada}`);
             
             const generatedDomain = await this.generateDomainWithAI(nicho, idioma, retries > 0);
             
@@ -335,6 +407,22 @@ class WordPressDomainPurchase {
     }
 
     try {
+      // ═══════════════════════════════════════════════════════════════
+      // TRAVA DE SEGURANÇA: Verificar se domínio já existe no banco
+      // Evita comprar/renovar domínios que já são nossos
+      // ═══════════════════════════════════════════════════════════════
+      const { data: existingDomain } = await supabase
+        .from('domains')
+        .select('id, status, domain_name')
+        .eq('domain_name', domain)
+        .maybeSingle();
+
+      if (existingDomain) {
+        console.log(`🚫 [DUPLICATA] Domínio ${domain} já existe no banco (status: ${existingDomain.status})`);
+        return { available: false, error: `Domínio já existe no sistema (status: ${existingDomain.status})` };
+      }
+      // ═══════════════════════════════════════════════════════════════
+
       console.log(`🔍 [NAMECHEAP] Verificando disponibilidade de ${domain}...`);
       
       const checkParams = {
