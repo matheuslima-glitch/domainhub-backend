@@ -377,6 +377,22 @@ class AtomiCatDomainPurchase {
     }
 
     try {
+      // ═══════════════════════════════════════════════════════════════
+      // TRAVA DE SEGURANÇA: Verificar se domínio já existe no banco
+      // Evita comprar/renovar domínios que já são nossos
+      // ═══════════════════════════════════════════════════════════════
+      const { data: existingDomain } = await supabase
+        .from('domains')
+        .select('id, status, domain_name')
+        .eq('domain_name', domain)
+        .maybeSingle();
+
+      if (existingDomain) {
+        console.log(`🚫 [DUPLICATA] Domínio ${domain} já existe no banco (status: ${existingDomain.status})`);
+        return { available: false, error: `Domínio já existe no sistema (status: ${existingDomain.status})` };
+      }
+      // ═══════════════════════════════════════════════════════════════
+
       console.log(`🔍 [NAMECHEAP-ATOMICAT] Verificando: ${domain}...`);
       
       const checkParams = {
