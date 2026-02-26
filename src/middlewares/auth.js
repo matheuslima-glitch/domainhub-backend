@@ -1,6 +1,4 @@
 // =====================================================
-// src/middlewares/auth.js
-// =====================================================
 // Middleware de autenticação que valida o token JWT do Supabase.
 // Qualquer requisição às rotas /api/* precisa enviar:
 //   Authorization: Bearer <token_jwt_do_supabase>
