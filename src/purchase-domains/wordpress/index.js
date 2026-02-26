@@ -35,7 +35,7 @@ class WordPressDomainPurchase {
     
     // Configurações de compra
     this.maxRetries = 10;
-    this.priceLimit = 1.00;
+    this.priceLimit = 5.00;
     
 
     
@@ -521,6 +521,28 @@ class WordPressDomainPurchase {
                 }
               }
             }
+            
+            // ═══════════════════════════════════════════════════════════════
+            // ICANN FEE: Extrair taxa adicional (ICANN fee) automaticamente
+            // A Namecheap retorna "YourAdditonalCost" (com typo deles) no XML
+            // Isso garante que se o valor mudar, o sistema pega automaticamente
+            // ═══════════════════════════════════════════════════════════════
+            const icannMatch = registerBlock.match(/Duration="1"[^>]*YourAdditonalCost="([0-9.]+)"/);
+            if (!icannMatch) {
+              // Fallback: tentar com grafia correta caso Namecheap corrija o typo
+              const icannMatchAlt = registerBlock.match(/Duration="1"[^>]*YourAdditionalCost="([0-9.]+)"/);
+              if (icannMatchAlt && parseFloat(icannMatchAlt[1]) > 0) {
+                const icannFee = parseFloat(icannMatchAlt[1]);
+                price = parseFloat((price + icannFee).toFixed(2));
+                console.log(`✅ [PRICING] ICANN fee: $${icannFee} | Preço total: $${price}`);
+              }
+            } else if (parseFloat(icannMatch[1]) > 0) {
+              const icannFee = parseFloat(icannMatch[1]);
+              price = parseFloat((price + icannFee).toFixed(2));
+              console.log(`✅ [PRICING] ICANN fee: $${icannFee} | Preço total: $${price}`);
+            }
+            // ═══════════════════════════════════════════════════════════════
+            
           } else {
             console.log(`⚠️ [PRICING] Categoria 'register' não encontrada no XML`);
             // Fallback antigo (menos preciso)
@@ -528,6 +550,21 @@ class WordPressDomainPurchase {
             if (yourPriceMatch && parseFloat(yourPriceMatch[1]) > 0) {
               price = parseFloat(yourPriceMatch[1]);
               console.log(`⚠️ [PRICING] Usando primeiro YourPrice encontrado (fallback): $${price}`);
+              
+              // Tentar pegar ICANN fee mesmo no fallback
+              const icannFallback = pricingXml.match(/YourAdditonalCost="([0-9.]+)"/);
+              if (!icannFallback) {
+                const icannFallbackAlt = pricingXml.match(/YourAdditionalCost="([0-9.]+)"/);
+                if (icannFallbackAlt && parseFloat(icannFallbackAlt[1]) > 0) {
+                  const icannFee = parseFloat(icannFallbackAlt[1]);
+                  price = parseFloat((price + icannFee).toFixed(2));
+                  console.log(`✅ [PRICING] ICANN fee (fallback): $${icannFee} | Preço total: $${price}`);
+                }
+              } else if (parseFloat(icannFallback[1]) > 0) {
+                const icannFee = parseFloat(icannFallback[1]);
+                price = parseFloat((price + icannFee).toFixed(2));
+                console.log(`✅ [PRICING] ICANN fee (fallback): $${icannFee} | Preço total: $${price}`);
+              }
             }
           }
         } catch (pricingError) {
