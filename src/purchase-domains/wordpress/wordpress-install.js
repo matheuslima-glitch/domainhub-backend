@@ -1431,6 +1431,9 @@ exit;
 // ========== FUNÇÃO PRINCIPAL - EXPORTADA ==========
 
 async function setupWordPress(domain, sessionId = null) {
+  // Normalizar domínio para lowercase (cPanel/Softaculous são case-sensitive)
+  domain = domain.toLowerCase();
+  
   console.log('\n' + '='.repeat(70));
   console.log('🚀 [WORDPRESS] INICIANDO SETUP COMPLETO');
   console.log('   Domínio:', domain);
