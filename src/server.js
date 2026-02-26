@@ -7,6 +7,7 @@ const compression = require('compression');
 const cron = require('node-cron');
 const config = require('./config/env');
 const errorHandler = require('./middlewares/error');
+const authMiddleware = require('./middlewares/auth');
 const balanceRoutes = require('./routes/balance');
 
 const app = express();
@@ -44,6 +45,14 @@ app.get('/api/ip', async (req, res) => {
   } catch (error) {
     res.status(500).json({ error: 'Erro ao obter IP' });
   }
+});
+
+// Autenticação obrigatória para todas as rotas /api/*
+// EXCETO: webhook (Z-API), ip e test (utilitários)
+app.use('/api', (req, res, next) => {
+  const publicPaths = ['/whatsapp/webhook', '/ip', '/test'];
+  if (publicPaths.some(p => req.path.startsWith(p))) return next();
+  authMiddleware(req, res, next);
 });
 
 app.use('/api/balance', balanceRoutes);
