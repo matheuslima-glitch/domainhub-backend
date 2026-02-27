@@ -162,27 +162,6 @@ class WordPressDomainPurchase {
     
     await this.updateProgress(sessionId, 'generating', 'in_progress', 'Iniciando processo...');
     
-    // ═══════════════════════════════════════════════════════════════
-    // TRAVA DE SEGURANÇA: Verificar se há espaço no WHM antes de comprar
-    // Evita gastar dinheiro em domínios que não poderão ser configurados
-    // ═══════════════════════════════════════════════════════════════
-    const whmCheck = await this.checkWHMAccountAvailability();
-    
-    if (!whmCheck.hasCapacity) {
-      const msg = `Limite de contas no WHM atingido (${whmCheck.currentCount}/${whmCheck.maxLimit}). Não é possível criar novas contas no servidor. Libere espaço antes de comprar novos domínios.`;
-      console.error(`🚫 [WHM-LIMITE] ${msg}`);
-      await this.updateProgress(sessionId, 'error', 'error', msg);
-      return { success: false, error: msg, whmLimitReached: true };
-    }
-
-    // Se vai comprar múltiplos domínios, ajustar quantidade ao espaço disponível
-    let quantidadeAjustada = quantidade;
-    if (whmCheck.available > 0 && whmCheck.available < quantidade) {
-      console.log(`⚠️ [WHM] Espaço disponível (${whmCheck.available}) menor que quantidade solicitada (${quantidade}). Ajustando...`);
-      quantidadeAjustada = whmCheck.available;
-    }
-    // ═══════════════════════════════════════════════════════════════
-    
     const domainsToRegister = [];
     let successCount = 0;
     
@@ -260,7 +239,7 @@ class WordPressDomainPurchase {
       
     } else {
       // Compra com IA
-      for (let i = 0; i < quantidadeAjustada; i++) {
+      for (let i = 0; i < quantidade; i++) {
         // ⚠️ CHECKPOINT: Verificar cancelamento no início de cada iteração
         if (await this.isSessionCancelled(sessionId)) {
           console.log(`🛑 [CANCEL] Processo cancelado no início da iteração ${i + 1}`);
@@ -286,9 +265,9 @@ class WordPressDomainPurchase {
               throw new Error('CANCELLED');
             }
             
-            console.log(`🤖 [AI] Gerando domínio ${i + 1}/${quantidadeAjustada}`);
+            console.log(`🤖 [AI] Gerando domínio ${i + 1}/${quantidade}`);
             await this.updateProgress(sessionId, 'generating', 'in_progress', 
-              `Gerando domínio ${i + 1}/${quantidadeAjustada}`);
+              `Gerando domínio ${i + 1}/${quantidade}`);
             
             const generatedDomain = await this.generateDomainWithAI(nicho, idioma, retries > 0);
             
