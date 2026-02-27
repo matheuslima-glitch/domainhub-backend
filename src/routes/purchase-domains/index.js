@@ -185,8 +185,8 @@ router.post('/', async (req, res) => {
       const whmChecker = new WordPressForWHM();
       const whmCheck = await whmChecker.checkWHMAccountAvailability();
       
-      if (!whmCheck.hasCapacity) {
-        const msg = `Limite de contas no WHM atingido (${whmCheck.currentCount}/${whmCheck.maxLimit}). Não é possível criar novas contas no servidor. Libere espaço antes de comprar novos domínios.`;
+      if (!whmCheck.error && !whmCheck.hasCapacity) {
+        const msg = `Limite de contas atingido no WHM (${whmCheck.currentCount}/${whmCheck.maxLimit}). Libere espaço para comprar novos domínios.`;
         console.log(`🚫 [WHM] ${msg}`);
         return res.status(400).json({
           success: false,
@@ -197,8 +197,7 @@ router.post('/', async (req, res) => {
         });
       }
       
-      // Se vai comprar múltiplos, verificar se tem espaço suficiente
-      if (whmCheck.available > 0 && whmCheck.available < quantidade) {
+      if (!whmCheck.error && whmCheck.available > 0 && whmCheck.available < quantidade) {
         const msg = `Espaço insuficiente no WHM. Disponível: ${whmCheck.available} conta(s), solicitado: ${quantidade}. Libere espaço ou reduza a quantidade.`;
         console.log(`🚫 [WHM] ${msg}`);
         return res.status(400).json({
@@ -372,8 +371,8 @@ router.post('/manual', async (req, res) => {
       const whmChecker = new WordPressForWHM();
       const whmCheck = await whmChecker.checkWHMAccountAvailability();
       
-      if (!whmCheck.hasCapacity) {
-        const msg = `Limite de contas no WHM atingido (${whmCheck.currentCount}/${whmCheck.maxLimit}). Não é possível criar novas contas no servidor. Libere espaço antes de comprar novos domínios.`;
+      if (!whmCheck.error && !whmCheck.hasCapacity) {
+        const msg = `Limite de contas atingido no WHM (${whmCheck.currentCount}/${whmCheck.maxLimit}). Libere espaço para comprar novos domínios.`;
         console.log(`🚫 [WHM] ${msg}`);
         return res.status(400).json({
           success: false,
