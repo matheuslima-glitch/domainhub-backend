@@ -174,6 +174,47 @@ router.post('/', async (req, res) => {
     
     console.log(`✅ [IA] Saldo suficiente para prosseguir`);
 
+    // ============================================
+    // VERIFICAÇÃO DE LIMITE WHM ANTES DE INICIAR
+    // Evita comprar domínios sem espaço no servidor
+    // ============================================
+    if (plataforma === 'wordpress') {
+      console.log(`📊 [WHM] Verificando limite de contas antes de iniciar compra...`);
+      
+      const WordPressForWHM = require('../../purchase-domains/wordpress');
+      const whmChecker = new WordPressForWHM();
+      const whmCheck = await whmChecker.checkWHMAccountAvailability();
+      
+      if (!whmCheck.hasCapacity) {
+        const msg = `Limite de contas no WHM atingido (${whmCheck.currentCount}/${whmCheck.maxLimit}). Não é possível criar novas contas no servidor. Libere espaço antes de comprar novos domínios.`;
+        console.log(`🚫 [WHM] ${msg}`);
+        return res.status(400).json({
+          success: false,
+          error: msg,
+          whmLimitReached: true,
+          currentCount: whmCheck.currentCount,
+          maxLimit: whmCheck.maxLimit
+        });
+      }
+      
+      // Se vai comprar múltiplos, verificar se tem espaço suficiente
+      if (whmCheck.available > 0 && whmCheck.available < quantidade) {
+        const msg = `Espaço insuficiente no WHM. Disponível: ${whmCheck.available} conta(s), solicitado: ${quantidade}. Libere espaço ou reduza a quantidade.`;
+        console.log(`🚫 [WHM] ${msg}`);
+        return res.status(400).json({
+          success: false,
+          error: msg,
+          whmLimitReached: true,
+          available: whmCheck.available,
+          requested: quantidade,
+          currentCount: whmCheck.currentCount,
+          maxLimit: whmCheck.maxLimit
+        });
+      }
+      
+      console.log(`✅ [WHM] Espaço disponível: ${whmCheck.available === -1 ? 'ilimitado' : whmCheck.available} conta(s)`);
+    }
+
     // Gerar session ID único
     sessionId = uuidv4();
     processingSessions.set(sessionId, {
@@ -319,6 +360,32 @@ router.post('/manual', async (req, res) => {
     }
     
     console.log(`✅ [MANUAL] Saldo suficiente para prosseguir`);
+    
+    // ============================================
+    // VERIFICAÇÃO DE LIMITE WHM ANTES DE INICIAR
+    // Evita comprar domínios sem espaço no servidor
+    // ============================================
+    if (platform.toLowerCase() === 'wordpress') {
+      console.log(`📊 [WHM] Verificando limite de contas antes de iniciar compra manual...`);
+      
+      const WordPressForWHM = require('../../purchase-domains/wordpress');
+      const whmChecker = new WordPressForWHM();
+      const whmCheck = await whmChecker.checkWHMAccountAvailability();
+      
+      if (!whmCheck.hasCapacity) {
+        const msg = `Limite de contas no WHM atingido (${whmCheck.currentCount}/${whmCheck.maxLimit}). Não é possível criar novas contas no servidor. Libere espaço antes de comprar novos domínios.`;
+        console.log(`🚫 [WHM] ${msg}`);
+        return res.status(400).json({
+          success: false,
+          error: msg,
+          whmLimitReached: true,
+          currentCount: whmCheck.currentCount,
+          maxLimit: whmCheck.maxLimit
+        });
+      }
+      
+      console.log(`✅ [WHM] Espaço disponível: ${whmCheck.available === -1 ? 'ilimitado' : whmCheck.available} conta(s)`);
+    }
     
     sessionId = uuidv4();
     processingSessions.set(sessionId, {
