@@ -763,10 +763,22 @@ router.get('/whm-debug', async (req, res) => {
       axiosConfig
     );
 
+    // Buscar info do reseller via resellerstats (API legada mas funcional)
+    let resellerStats = null;
+    try {
+      const resellerStatsRes = await axios.get(
+        `${config.WHM_URL}/json-api/resellerstats?api.version=1&reseller=${config.WHM_USERNAME}`,
+        axiosConfig
+      );
+      resellerStats = resellerStatsRes.data;
+    } catch (e) {
+      resellerStats = { error: e.message };
+    }
+
     res.json({
       success: true,
       acctcounts: acctResponse.data,
-      resellerinfo: resellerResponse.data,
+      resellerStats,
       packages: packagesResponse.data
     });
   } catch (error) {
