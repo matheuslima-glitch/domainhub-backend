@@ -730,4 +730,35 @@ setInterval(() => {
 
 
 
+/**
+ * GET /api/purchase-domains/whm-debug
+ * Diagnóstico temporário: retorna o raw da resposta WHM
+ */
+router.get('/whm-debug', async (req, res) => {
+  try {
+    const https = require('https');
+    const axios = require('axios');
+
+    const response = await axios.get(
+      `${config.WHM_URL}/json-api/acctcounts?api.version=1`,
+      {
+        headers: { 'Authorization': `whm ${config.WHM_USERNAME}:${config.WHM_API_TOKEN}` },
+        timeout: 10000,
+        httpsAgent: new https.Agent({ rejectUnauthorized: false })
+      }
+    );
+
+    res.json({
+      success: true,
+      raw: response.data
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      response: error.response?.data || null
+    });
+  }
+});
+
 module.exports = router;
