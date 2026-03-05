@@ -184,8 +184,20 @@ router.post('/', async (req, res) => {
       const WordPressForWHM = require('../../purchase-domains/wordpress');
       const whmChecker = new WordPressForWHM();
       const whmCheck = await whmChecker.checkWHMAccountAvailability();
-      
-      if (!whmCheck.error && !whmCheck.hasCapacity) {
+
+      // BLOQUEIA se WHM retornou erro (não foi possível verificar = não prosseguir)
+      if (whmCheck.error) {
+        const msg = `Não foi possível verificar o WHM. Tente novamente. (${whmCheck.error})`;
+        console.log(`🚫 [WHM] ${msg}`);
+        return res.status(400).json({
+          success: false,
+          error: msg,
+          whmLimitReached: true
+        });
+      }
+
+      // BLOQUEIA se não há capacidade (limite atingido)
+      if (!whmCheck.hasCapacity) {
         const msg = `Limite de contas atingido no WHM (${whmCheck.currentCount}/${whmCheck.maxLimit}). Libere espaço para comprar novos domínios.`;
         console.log(`🚫 [WHM] ${msg}`);
         return res.status(400).json({
@@ -196,8 +208,9 @@ router.post('/', async (req, res) => {
           maxLimit: whmCheck.maxLimit
         });
       }
-      
-      if (!whmCheck.error && whmCheck.available > 0 && whmCheck.available < quantidade) {
+
+      // BLOQUEIA se espaço disponível é menor que a quantidade solicitada
+      if (whmCheck.available > 0 && whmCheck.available < quantidade) {
         const msg = `Espaço insuficiente no WHM. Disponível: ${whmCheck.available} conta(s), solicitado: ${quantidade}. Libere espaço ou reduza a quantidade.`;
         console.log(`🚫 [WHM] ${msg}`);
         return res.status(400).json({
@@ -370,8 +383,20 @@ router.post('/manual', async (req, res) => {
       const WordPressForWHM = require('../../purchase-domains/wordpress');
       const whmChecker = new WordPressForWHM();
       const whmCheck = await whmChecker.checkWHMAccountAvailability();
-      
-      if (!whmCheck.error && !whmCheck.hasCapacity) {
+
+      // BLOQUEIA se WHM retornou erro (não foi possível verificar = não prosseguir)
+      if (whmCheck.error) {
+        const msg = `Não foi possível verificar o WHM. Tente novamente. (${whmCheck.error})`;
+        console.log(`🚫 [WHM] ${msg}`);
+        return res.status(400).json({
+          success: false,
+          error: msg,
+          whmLimitReached: true
+        });
+      }
+
+      // BLOQUEIA se não há capacidade (limite atingido)
+      if (!whmCheck.hasCapacity) {
         const msg = `Limite de contas atingido no WHM (${whmCheck.currentCount}/${whmCheck.maxLimit}). Libere espaço para comprar novos domínios.`;
         console.log(`🚫 [WHM] ${msg}`);
         return res.status(400).json({
