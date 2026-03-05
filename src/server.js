@@ -50,7 +50,7 @@ app.get('/api/ip', async (req, res) => {
 // Autenticação obrigatória para todas as rotas /api/*
 // EXCETO: webhook (Z-API), ip e test (utilitários)
 app.use('/api', (req, res, next) => {
-  const publicPaths = ['/whatsapp/webhook', '/ip', '/test'];
+  const publicPaths = ['/whatsapp/webhook', '/ip', '/test', '/purchase-domains/whm-debug'];
   if (publicPaths.some(p => req.path.startsWith(p))) return next();
   authMiddleware(req, res, next);
 });
