@@ -739,18 +739,35 @@ router.get('/whm-debug', async (req, res) => {
     const https = require('https');
     const axios = require('axios');
 
-    const response = await axios.get(
+    const axiosConfig = {
+      headers: { 'Authorization': `whm ${config.WHM_USERNAME}:${config.WHM_API_TOKEN}` },
+      timeout: 10000,
+      httpsAgent: new https.Agent({ rejectUnauthorized: false })
+    };
+
+    // Buscar contagem de contas
+    const acctResponse = await axios.get(
       `${config.WHM_URL}/json-api/acctcounts?api.version=1`,
-      {
-        headers: { 'Authorization': `whm ${config.WHM_USERNAME}:${config.WHM_API_TOKEN}` },
-        timeout: 10000,
-        httpsAgent: new https.Agent({ rejectUnauthorized: false })
-      }
+      axiosConfig
+    );
+
+    // Buscar info do reseller
+    const resellerResponse = await axios.get(
+      `${config.WHM_URL}/json-api/getresellerinfo?api.version=1&reseller=${config.WHM_USERNAME}`,
+      axiosConfig
+    );
+
+    // Buscar lista de pacotes
+    const packagesResponse = await axios.get(
+      `${config.WHM_URL}/json-api/listpkgs?api.version=1`,
+      axiosConfig
     );
 
     res.json({
       success: true,
-      raw: response.data
+      acctcounts: acctResponse.data,
+      resellerinfo: resellerResponse.data,
+      packages: packagesResponse.data
     });
   } catch (error) {
     res.status(500).json({
