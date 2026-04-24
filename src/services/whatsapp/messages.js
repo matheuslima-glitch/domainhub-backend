@@ -241,9 +241,10 @@ ${suspended > 0 ? `🔴 *${suspended} Domínio${suspended > 1 ? 's' : ''} Suspen
    * @param {string} userName - Nome do usuário
    * @returns {Promise<object>}
    */
-  async sendExpiredDomainAlert(phoneNumber, domainName, userName = 'Cliente', monthlyVisits = 0, trafficSource = null) {
+  async sendExpiredDomainAlert(phoneNumber, domainName, userName = 'Cliente', monthlyVisits = 0, trafficSource = null, weeklyVisits = 0) {
     const firstName = this.getFirstName(userName);
     const visitsFormatted = monthlyVisits ? monthlyVisits.toLocaleString('pt-BR') + ' acessos/mês' : 'Nenhum acesso mensal';
+    const weeklyFormatted = weeklyVisits ? weeklyVisits.toLocaleString('pt-BR') + ' acessos (últimos 7 dias)' : 'Nenhum acesso nos últimos 7 dias';
     const sourceFormatted = trafficSource || 'Não definido';
     
     const message = `🤖 *DOMAIN HUB*
@@ -256,6 +257,7 @@ ${suspended > 0 ? `🔴 *${suspended} Domínio${suspended > 1 ? 's' : ''} Suspen
 
 🟠 *Status:* EXPIRADO
 📊 *Acessos:* ${visitsFormatted}
+📈 *Últimos 7 dias:* ${weeklyFormatted}
 📢 *Fonte:* ${sourceFormatted}
 ⏰ *Detectado em:* ${new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}
 
