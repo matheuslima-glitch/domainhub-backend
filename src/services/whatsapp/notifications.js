@@ -1039,7 +1039,7 @@ class NotificationService {
       // Buscar dados do domínio (acessos e fonte de tráfego)
       const { data: domainData } = await this.client
         .from('domains')
-        .select('monthly_visits, traffic_source')
+        .select('monthly_visits, weekly_visits, traffic_source')
         .eq('domain_name', domainName)
         .maybeSingle();
 
@@ -1094,7 +1094,8 @@ class NotificationService {
             domainName,
             displayName || 'Cliente',
             domainData?.monthly_visits || 0,
-            domainData?.traffic_source || null
+            domainData?.traffic_source || null,
+            domainData?.weekly_visits || 0
           );
 
           if (result.success) {
