@@ -27,7 +27,6 @@ if (!process.env.OPENAI_API_KEY) {
 // Verificar variáveis importantes para WordPress
 const wordpressVars = [
   'WORDPRESS_DEFAULT_USER',
-  'WORDPRESS_DEFAULT_PASSWORD',
   'WORDPRESS_ADMIN_EMAIL',
   'CPANEL_URL',
   'CPANEL_USERNAME',
@@ -105,7 +104,6 @@ module.exports = {
 
   // WordPress Configurações
   WORDPRESS_DEFAULT_USER: process.env.WORDPRESS_DEFAULT_USER,
-  WORDPRESS_DEFAULT_PASSWORD: process.env.WORDPRESS_DEFAULT_PASSWORD,
   WORDPRESS_ADMIN_EMAIL: process.env.WORDPRESS_ADMIN_EMAIL,
 
   // Servidor de Hospedagem
@@ -115,11 +113,6 @@ module.exports = {
   ZAPI_INSTANCE: process.env.ZAPI_INSTANCE,
   ZAPI_CLIENT_TOKEN: process.env.ZAPI_CLIENT_TOKEN,
   WHATSAPP_PHONE_NUMBER: process.env.WHATSAPP_PHONE_NUMBER,
-
-  // WordPress
-  WORDPRESS_DEFAULT_USER: process.env.WORDPRESS_DEFAULT_USER,
-  WORDPRESS_DEFAULT_PASSWORD: process.env.WORDPRESS_DEFAULT_PASSWORD,
-  WORDPRESS_ADMIN_EMAIL: process.env.WORDPRESS_ADMIN_EMAIL,
 
   // cPanel Theme
   CPANEL_THEME: 'jupiter',
