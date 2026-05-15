@@ -250,7 +250,6 @@ async function createWHMAccount(domain) {
     maxpark: '0',
     maxaddon: '0',
     bwlimit: '0',
-    hasshell: '0',
     cgi: '1',
     cpmod: 'jupiter',
     ip: 'n',
