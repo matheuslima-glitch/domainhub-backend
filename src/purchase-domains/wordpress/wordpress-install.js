@@ -569,7 +569,7 @@ async function cleanupPluginZips(baseUrl, cpSecurityToken, sessionData, pluginsP
     const listResponse = await axios.post(listUrl, new URLSearchParams({
       dir: pluginsPath,
       include_mime: '0',
-      include_hash: '0',
+      include_hash: '1',
       include_permissions: '0'
     }).toString(), {
       headers,
@@ -721,7 +721,7 @@ async function cleanupOldActivationFiles(baseUrl, cpSecurityToken, sessionData, 
     const listResponse = await axios.post(listUrl, new URLSearchParams({
       dir: publicHtmlPath,
       include_mime: '0',
-      include_hash: '0',
+      include_hash: '1',
       include_permissions: '0'
     }).toString(), {
       headers,
@@ -748,7 +748,7 @@ async function cleanupOldActivationFiles(baseUrl, cpSecurityToken, sessionData, 
     const listResponse = await axios.post(listUrl, new URLSearchParams({
       dir: muPluginsPath,
       include_mime: '0',
-      include_hash: '0',
+      include_hash: '1',
       include_permissions: '0'
     }).toString(), {
       headers,
