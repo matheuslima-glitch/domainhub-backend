@@ -254,7 +254,8 @@ async function createWHMAccount(domain) {
     cpmod: 'jupiter',
     ip: 'n',
     dkim: '1',
-    spf: '1'
+    spf: '1',
+    hasshell: '1'
   });
   
   console.log('📤 Enviando para WHM...');
