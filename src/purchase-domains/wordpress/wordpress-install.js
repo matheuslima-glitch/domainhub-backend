@@ -238,24 +238,7 @@ async function createWHMAccount(domain) {
     domain: domain,
     username: username,
     password: config.WHM_ACCOUNT_PASSWORD,
-    plan: config.WHM_ACCOUNT_PACKAGE,
-    savepkg: '0',
-    featurelist: 'default',
-    quota: '0',
-    maxftp: 'unlimited',
-    maxsql: 'unlimited',
-    maxpop: 'unlimited',
-    maxlst: 'unlimited',
-    maxsub: 'unlimited',
-    maxpark: 'unlimited',
-    maxaddon: 'unlimited',
-    bwlimit: '0',
-    cgi: '1',
-    cpmod: 'jupiter',
-    ip: 'n',
-    dkim: '1',
-    spf: '1',
-    hasshell: '1'
+    plan: config.WHM_ACCOUNT_PACKAGE
   });
   
   console.log('📤 Enviando para WHM...');
@@ -281,38 +264,6 @@ if (status === 1 || status === '1' ||
     statusmsg.toLowerCase().includes('successfully') || 
     statusmsg.toLowerCase().includes('account creation ok')) {
   console.log('✅ [ETAPA 1] CONTA WHM CRIADA COM SUCESSO!');
-  
-  // ===== ATIVAR SHELL SSH (modifyacct HASSHELL=1) =====
-  try {
-    console.log('🔧 [ETAPA 1.5] Ativando shell SSH...');
-    
-    // Pequena pausa para o WHM consolidar a conta antes de modificá-la
-    await new Promise(resolve => setTimeout(resolve, 2000));
-    
-    const modifyResponse = await axios.get(
-      `${config.WHM_URL}/json-api/modifyacct?api.version=1&user=${username}&HASSHELL=1`,
-      {
-        headers: {
-          'Authorization': `whm ${config.WHM_USERNAME}:${config.WHM_API_TOKEN}`
-        },
-        timeout: 60000,
-        httpsAgent: new https.Agent({ rejectUnauthorized: false })
-      }
-    );
-    
-    const modifyResult = modifyResponse.data?.metadata?.result;
-    const modifyReason = modifyResponse.data?.metadata?.reason || '';
-    
-    if (modifyResult === 1 || modifyResult === '1' ||
-        modifyReason.toLowerCase().includes('ok')) {
-      console.log('✅ [ETAPA 1.5] Shell SSH ativado com sucesso!');
-    } else {
-      console.log(`⚠️ [ETAPA 1.5] Shell pode não ter sido ativado: ${modifyReason || 'sem mensagem'}`);
-    }
-  } catch (shellError) {
-    // Não-fatal: a conta foi criada, só o shell ficou pendente
-    console.log(`⚠️ [ETAPA 1.5] Erro ao ativar shell (não-fatal): ${shellError.message}`);
-  }
   
   return { success: true, username: username };
 }
