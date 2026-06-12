@@ -1150,6 +1150,15 @@ class NotificationService {
         };
       }
 
+      // Bloqueia envio para contatos INATIVOS
+      if (!settings.is_active) {
+        console.log(`⏭️ [REPORT] Usuário ${userId} está INATIVO - notificação NÃO enviada`);
+        return {
+          success: false,
+          message: 'Notificações desativadas para este usuário'
+        };
+      }
+
       const profile = await this.getUserProfile(userId);
       
       if (!profile.whatsapp_number) {

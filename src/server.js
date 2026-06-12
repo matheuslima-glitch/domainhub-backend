@@ -94,7 +94,8 @@ cron.schedule('0 * * * *', async () => {
     // Buscar todos os usuários com notificações ativas
     const { data: users, error } = await supabase
       .from('notification_settings')
-      .select('user_id, notification_days, notification_interval_hours, notification_frequency, alert_suspended, alert_expired, alert_expiring_soon')
+      .select('user_id, is_active, notification_days, notification_interval_hours, notification_frequency, alert_suspended, alert_expired, alert_expiring_soon')
+      .eq('is_active', true)
       .or('alert_suspended.eq.true,alert_expired.eq.true,alert_expiring_soon.eq.true');
 
     if (error) {
