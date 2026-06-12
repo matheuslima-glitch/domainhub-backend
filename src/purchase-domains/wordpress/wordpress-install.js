@@ -358,7 +358,8 @@ async function installWordPress(domain, username) {
       admin_pass: wpPassword,
       admin_email: config.WORDPRESS_ADMIN_EMAIL || 'domain@gexcorp.com.br',
       language: 'pt_BR',
-      noemail: '1'
+      noemail: '1',
+      overwrite_existing: '1'
     };
     
     console.log('📤 URL:', softUrl);
