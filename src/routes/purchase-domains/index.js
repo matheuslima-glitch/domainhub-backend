@@ -696,7 +696,7 @@ router.post('/search', async (req, res) => {
       available: availability.available,
       price: availability.price,
       message: availability.available 
-        ? `Domínio ${domain} está disponível por $${availability.price}`
+        ? `Domínio ${domain} está disponível`
         : `Domínio ${domain} não está disponível`
     });
     
