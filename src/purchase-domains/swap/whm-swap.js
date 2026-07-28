@@ -1,11 +1,15 @@
 /**
- * SWAP DE DOMÍNIO NO WHM
+ * SWAP DE DOMÍNIO NO WHM — FASE 2 (OPERAÇÕES DE SERVIDOR)
  * ----------------------------------------------------------------------------
  * Troca o domínio principal de uma conta cPanel JÁ EXISTENTE (modifyacct) para
- * o domínio novo, trazendo tudo junto (arquivos, banco, WordPress). Depois:
- *   - corrige as URLs do WordPress (siteurl/home + URLs absolutas no conteúdo,
- *     incluindo mídias e páginas do Elementor);
- *   - dispara o AutoSSL para emitir o certificado do novo domínio.
+ * o domínio novo. Como é a MESMA conta, tudo continua onde está — arquivos,
+ * mídias, banco de dados, e-mails — e passa a responder pelo domínio novo.
+ * Depois disso:
+ *   1. reescreve as URLs do WordPress no banco (siteurl/home + conteúdo,
+ *      páginas, mídias e dados serializados do Elementor);
+ *   2. limpa os caches que guardam o domínio antigo (CSS do Elementor,
+ *      wp-content/cache, transients);
+ *   3. dispara o AutoSSL para emitir o certificado do domínio novo.
  *
  * NÃO cria conta nova e NÃO apaga dados.
  *
@@ -85,7 +89,7 @@ async function modifyPrimaryDomain(username, newDomain) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Dispara o AutoSSL para a conta (emite/renova o certificado do novo domínio).
+ * Dispara o AutoSSL para a conta (emite/renova o certificado do domínio novo).
  */
 async function triggerAutoSSL(username) {
   try {
@@ -102,7 +106,7 @@ async function triggerAutoSSL(username) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CORREÇÃO DAS URLs DO WORDPRESS
+// SESSÃO cPANEL + SCRIPT TEMPORÁRIO
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
@@ -131,25 +135,19 @@ function safeJson(str) {
 }
 
 /**
- * Corrige as URLs do WordPress após a troca de domínio:
- *   - siteurl / home
- *   - URLs absolutas no conteúdo (posts, meta, Elementor, mídias)
- *
- * Faz upload de um script PHP temporário (auto-destrutivo) via Fileman e o
- * executa por HTTP. É DNS-independente: bate direto no IP/host do servidor
- * enviando o header `Host` do novo domínio (roteamento por name-based vhost do
- * Apache), então funciona mesmo antes do DNS propagar.
+ * Faz o upload do script PHP temporário do swap para o public_html da conta.
+ * O MESMO arquivo atende os dois modos (?mode=db e ?mode=cache) e se
+ * auto-destrói no último modo.
  */
-async function fixWordPressUrls({ username, oldDomain, newDomain }) {
+async function uploadSwapScript({ username, oldDomain, newDomain }) {
   const { baseUrl, cpSecurityToken, session } = await createCpanelSession(username);
   const publicHtmlPath = `/home/${username}/public_html`;
   const uniqueId = uuidv4().replace(/-/g, '').substring(0, 16);
   const phpFileName = `dh-swap-${uniqueId}.php`;
   const token = uuidv4().replace(/-/g, '');
 
-  const phpCode = buildWpFixPhp({ oldDomain, newDomain, token });
+  const phpCode = buildSwapPhp({ oldDomain, newDomain, token });
 
-  // 1) Upload do script (Fileman/upload_files — idêntico ao wordpress-install.js)
   const form = new FormData();
   form.append('dir', publicHtmlPath);
   form.append('overwrite', '1');
@@ -163,6 +161,7 @@ async function fixWordPressUrls({ username, oldDomain, newDomain }) {
     form,
     { headers: { ...form.getHeaders(), 'Cookie': `cpsession=${session}` }, timeout: 30000, httpsAgent }
   );
+
   if (uploadResponse.data?.data?.succeeded !== 1) {
     const reason = uploadResponse.data?.data?.uploads?.[0]?.reason || 'desconhecido';
     throw new Error(`Upload do script de correção falhou: ${reason}`);
@@ -170,15 +169,24 @@ async function fixWordPressUrls({ username, oldDomain, newDomain }) {
 
   await new Promise(r => setTimeout(r, 2000));
 
-  // 2) Executar o script.
+  return { baseUrl, phpFileName, token, username };
+}
+
+/**
+ * Executa o script já enviado, no modo pedido.
+ * É DNS-independente: bate direto no IP/host do servidor enviando o header
+ * `Host` do domínio novo (vhost name-based do Apache), então funciona mesmo
+ * antes do DNS propagar.
+ */
+async function runSwapScript({ baseUrl, phpFileName, token, username, newDomain, mode }) {
   const serverHost = (config.HOSTING_SERVER_IP
     || config.WHM_URL.replace('https://', '').replace(/:\d+$/, '')).trim();
-  const q = `?dhtoken=${token}`;
+  const q = `?dhtoken=${token}&mode=${mode}`;
 
   const attempts = [
     // (a) Direto no servidor + header Host  → DNS-independente (caminho principal)
     { url: `https://${serverHost}/${phpFileName}${q}`, headers: { Host: newDomain } },
-    // (b) Pelo novo domínio (caso o DNS já tenha propagado)
+    // (b) Pelo domínio novo (caso o DNS já tenha propagado)
     { url: `https://${newDomain}/${phpFileName}${q}`, headers: {} },
     // (c) Userdir do cPanel + header Host (fallback usado no resto do sistema)
     { url: `${baseUrl}/~${username}/${phpFileName}${q}`, headers: { Host: newDomain } }
@@ -188,7 +196,7 @@ async function fixWordPressUrls({ username, oldDomain, newDomain }) {
   for (const att of attempts) {
     try {
       const resp = await axios.get(att.url, {
-        timeout: 120000,
+        timeout: 180000,
         httpsAgent,
         headers: { 'User-Agent': 'DomainHub-Swap/1.0', 'Accept': 'application/json', ...att.headers },
         validateStatus: () => true
@@ -200,16 +208,21 @@ async function fixWordPressUrls({ username, oldDomain, newDomain }) {
       lastErr = e;
     }
   }
-  return { success: false, error: lastErr ? lastErr.message : 'Falha ao executar a correção do WordPress' };
+  return { success: false, error: lastErr ? lastErr.message : 'Falha ao executar o script do swap' };
 }
 
 /**
- * Gera o PHP temporário que corrige as URLs do WordPress diretamente no banco.
+ * Gera o PHP temporário do swap.
+ *
+ * mode=db     → reescreve as URLs do WordPress direto no banco
+ * mode=cache  → limpa caches (CSS do Elementor, wp-content/cache, transients)
+ *               e apaga o próprio arquivo no final
+ *
  * Usa SHORTINIT (carrega só o $wpdb, sem disparar o redirect canônico do WP) e
  * faz um search-replace serialization-safe (não corrompe dados serializados),
  * cobrindo também as barras escapadas do Elementor/JSON.
  */
-function buildWpFixPhp({ oldDomain, newDomain, token }) {
+function buildSwapPhp({ oldDomain, newDomain, token }) {
   return `<?php
 header('Content-Type: application/json');
 error_reporting(0);
@@ -223,22 +236,95 @@ if ((isset($_GET['dhtoken']) ? $_GET['dhtoken'] : '') !== $__token) {
   exit;
 }
 
-$__old = strtolower(${JSON.stringify(oldDomain)});
-$__new = strtolower(${JSON.stringify(newDomain)});
+$__mode = isset($_GET['mode']) ? $_GET['mode'] : 'db';
+$__old  = strtolower(${JSON.stringify(oldDomain)});
+$__new  = strtolower(${JSON.stringify(newDomain)});
 
-$__wpload = dirname(__FILE__) . '/wp-load.php';
-if (!file_exists($__wpload)) { echo json_encode(array('ok'=>false,'error'=>'wp-load.php nao encontrado')); @unlink(__FILE__); exit; }
+// Localiza o wp-load.php (raiz do public_html ou 1 nivel de subpasta)
+function dh_find_wpload($base){
+  if (file_exists($base.'/wp-load.php')) return $base.'/wp-load.php';
+  $items = @scandir($base);
+  if (is_array($items)) {
+    foreach ($items as $it) {
+      if ($it === '.' || $it === '..') continue;
+      $p = $base.'/'.$it;
+      if (is_dir($p) && file_exists($p.'/wp-load.php')) return $p.'/wp-load.php';
+    }
+  }
+  return null;
+}
+
+$__wpload = dh_find_wpload(dirname(__FILE__));
+if (!$__wpload) {
+  echo json_encode(array('ok'=>false,'error'=>'wp-load.php nao encontrado'));
+  if ($__mode === 'cache') { @unlink(__FILE__); }
+  exit;
+}
+$__wproot = dirname($__wpload);
 
 if (!defined('SHORTINIT')) define('SHORTINIT', true);
 require $__wpload;
 
 global $wpdb, $table_prefix;
-if (!isset($wpdb) || !is_object($wpdb)) { echo json_encode(array('ok'=>false,'error'=>'wpdb indisponivel')); @unlink(__FILE__); exit; }
+if (!isset($wpdb) || !is_object($wpdb)) {
+  echo json_encode(array('ok'=>false,'error'=>'wpdb indisponivel'));
+  if ($__mode === 'cache') { @unlink(__FILE__); }
+  exit;
+}
 
 $prefix = (isset($wpdb->prefix) && $wpdb->prefix) ? $wpdb->prefix : (isset($table_prefix) ? $table_prefix : 'wp_');
 $bs = chr(92); // barra invertida
 
-// Pares de substituicao: http/https, protocolo-relativo, barras escapadas (JSON/Elementor) e host puro
+// ═══════════════════════════════ MODO CACHE ═══════════════════════════════
+if ($__mode === 'cache') {
+  $report = array('ok'=>true,'mode'=>'cache','removed'=>array());
+
+  // 1) Arquivos de cache que guardam URL absoluta do dominio antigo
+  function dh_rmfiles($dir,$depth){
+    if ($depth < 0 || !is_dir($dir)) return 0;
+    $n = 0;
+    $items = @scandir($dir);
+    if (!is_array($items)) return 0;
+    foreach ($items as $it) {
+      if ($it === '.' || $it === '..') continue;
+      $p = $dir.'/'.$it;
+      if (is_dir($p)) { $n += dh_rmfiles($p,$depth-1); @rmdir($p); }
+      else { if (@unlink($p)) $n++; }
+    }
+    return $n;
+  }
+
+  $paths = array(
+    'elementor_css' => $__wproot.'/wp-content/uploads/elementor/css',
+    'wp_cache'      => $__wproot.'/wp-content/cache',
+    'uploads_cache' => $__wproot.'/wp-content/uploads/cache'
+  );
+  foreach ($paths as $k=>$p) {
+    $report['removed'][$k] = dh_rmfiles($p, 4);
+  }
+
+  // 2) CSS do Elementor guardado no banco (forca regeneracao com a URL nova)
+  $wpdb->query("DELETE FROM {$prefix}postmeta WHERE meta_key = '_elementor_css'");
+  $wpdb->query("DELETE FROM {$prefix}options WHERE option_name = '_elementor_global_css'");
+
+  // 3) Transients (muitos guardam URL absoluta)
+  $wpdb->query("DELETE FROM {$prefix}options WHERE option_name LIKE '\\_transient\\_%'");
+  $wpdb->query("DELETE FROM {$prefix}options WHERE option_name LIKE '\\_site\\_transient\\_%'");
+
+  // 4) Rewrite rules (forca o WP a regravar as permalinks no proximo acesso)
+  $wpdb->query("UPDATE {$prefix}options SET option_value = '' WHERE option_name = 'rewrite_rules'");
+
+  $report['old'] = $__old;
+  $report['new'] = $__new;
+  @unlink(__FILE__);
+  $report['self_deleted'] = !file_exists(__FILE__);
+  echo json_encode($report);
+  exit;
+}
+
+// ════════════════════════════════ MODO DB ═════════════════════════════════
+// Pares de substituicao: http/https, protocolo-relativo, barras escapadas
+// (JSON/Elementor) e host puro
 $pairs = array();
 $pairs['https://'.$__old] = 'https://'.$__new;
 $pairs['http://'.$__old]  = 'https://'.$__new;
@@ -252,14 +338,14 @@ function dh_has_object($d){ if (is_object($d)) return true; if (is_array($d)){ f
 function dh_deep($d,$pairs){ if (is_array($d)){ $o=array(); foreach($d as $k=>$v){ $o[is_string($k)?strtr($k,$pairs):$k]=dh_deep($v,$pairs);} return $o;} if (is_string($d)) return strtr($d,$pairs); return $d; }
 function dh_fix($val,$pairs){ if(!is_string($val)) return $val; $un=@unserialize($val); if($un!==false || $val==='b:0;'){ if(dh_has_object($un)) return $val; $re=@serialize(dh_deep($un,$pairs)); return $re===null?$val:$re; } return strtr($val,$pairs); }
 
-$report = array('ok'=>true,'updated'=>array());
+$report = array('ok'=>true,'mode'=>'db','updated'=>array(),'total'=>0);
 $like = '%'.$wpdb->esc_like($__old).'%';
 
 // 1) siteurl / home (sempre) — para o WordPress deixar de redirecionar ao dominio antigo
 $wpdb->query($wpdb->prepare("UPDATE {$prefix}options SET option_value=%s WHERE option_name='siteurl'",'https://'.$__new));
 $wpdb->query($wpdb->prepare("UPDATE {$prefix}options SET option_value=%s WHERE option_name='home'",'https://'.$__new));
 
-// 2) URLs absolutas espalhadas pelo conteudo (paginas, posts, mídias, Elementor, etc.)
+// 2) URLs absolutas espalhadas pelo conteudo (paginas, posts, midias, Elementor, etc.)
 $targets = array(
   array($prefix.'options','option_id',array('option_value')),
   array($prefix.'posts','ID',array('post_content','post_excerpt','guid')),
@@ -286,26 +372,24 @@ foreach($targets as $t){
       }
     }
   }
-  if($n>0) $report['updated'][$table]=$n;
+  if($n>0){ $report['updated'][$table]=$n; $report['total'] += $n; }
 }
 
 $report['old']=$__old; $report['new']=$__new; $report['siteurl']='https://'.$__new;
-@unlink(__FILE__);
-$report['self_deleted'] = !file_exists(__FILE__);
 echo json_encode($report);
 exit;
 `;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ORQUESTRADOR DO SWAP
+// ORQUESTRADOR DAS OPERAÇÕES DE SERVIDOR
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
  * Executa o swap completo para uma conta existente.
  * @param {Object} p
  * @param {string} p.oldDomain  domínio antigo (que já existe no WHM)
- * @param {string} p.newDomain  domínio novo (já comprado)
+ * @param {string} p.newDomain  domínio novo (já comprado na fase 1)
  * @param {string} p.sessionId
  * @param {Function} p.updateProgress  (sessionId, step, status, message, domain)
  */
@@ -314,7 +398,7 @@ async function swapDomainOnWHM({ oldDomain, newDomain, sessionId, updateProgress
     if (updateProgress) { try { await updateProgress(sessionId, step, status, msg, newDomain); } catch (_) {} }
   };
 
-  // 1) Localizar a conta do domínio antigo
+  // ═══ 1) Localizar a conta do domínio antigo
   await up('swap_whm', 'in_progress', `Localizando a conta de ${oldDomain} no servidor...`);
   const account = await findAccountByDomain(oldDomain);
   if (!account) {
@@ -326,41 +410,65 @@ async function swapDomainOnWHM({ oldDomain, newDomain, sessionId, updateProgress
     return { success: false, error: `Conta de ${oldDomain} está suspensa` };
   }
 
-  // 2) Trocar o domínio principal (modifyacct)
-  await up('swap_whm', 'in_progress', `Reapontando ${oldDomain} → ${newDomain} no servidor...`);
+  // ═══ 2) Trocar o domínio principal (modifyacct)
+  await up('swap_whm', 'in_progress', `Modificando a conta ${account.user} no WHM: ${oldDomain} → ${newDomain}...`);
   const mod = await modifyPrimaryDomain(account.user, newDomain);
   if (!mod.success) {
     await up('swap_whm', 'error', `Falha ao trocar o domínio no WHM: ${mod.message}`);
     return { success: false, error: mod.message || 'modifyacct falhou' };
   }
-  await up('swap_whm', 'completed', `Domínio reapontado (conta ${account.user})`);
+  await up('swap_whm', 'completed', `Conta ${account.user} agora responde por ${newDomain}`);
 
   // aguardar o WHM reconstruir o vhost/config do Apache
   await new Promise(r => setTimeout(r, 8000));
 
-  // 3) Corrigir as URLs do WordPress (siteurl/home + conteúdo/mídias)
-  await up('swap_wordpress', 'in_progress', `Ajustando o WordPress para ${newDomain}...`);
-  let wp = { success: false, error: 'não executado' };
+  // ═══ 3) Enviar o script temporário para dentro da conta
+  let uploaded = null;
   try {
-    wp = await fixWordPressUrls({ username: account.user, oldDomain, newDomain });
+    uploaded = await uploadSwapScript({ username: account.user, oldDomain, newDomain });
   } catch (e) {
-    wp = { success: false, error: e.message };
+    await up('swap_database', 'error',
+      `Domínio trocado, mas não foi possível preparar o ajuste do WordPress (${e.message}).`);
+    return { success: true, partial: true, username: account.user, oldDomain, newDomain, wordpressFixed: false };
   }
-  if (wp.success) {
-    await up('swap_wordpress', 'completed', `WordPress e mídias atualizados para ${newDomain}`);
+
+  // ═══ 4) Banco de dados do WordPress (siteurl/home + páginas + mídias + Elementor)
+  await up('swap_database', 'in_progress', `Apontando o banco de dados do WordPress para ${newDomain}...`);
+  const db = await runSwapScript({ ...uploaded, newDomain, mode: 'db' });
+  if (db.success) {
+    const total = db.result?.total || 0;
+    await up('swap_database', 'completed',
+      `Banco atualizado: ${total} registro(s) reapontados para ${newDomain}`);
   } else {
     // Não derruba o swap: o domínio JÁ foi reapontado. Apenas avisa.
-    await up('swap_wordpress', 'error',
-      `Domínio trocado, mas a correção automática do WordPress falhou (${wp.error}). ` +
+    await up('swap_database', 'error',
+      `Domínio trocado, mas a correção automática do WordPress falhou (${db.error}). ` +
       `As URLs internas podem precisar de ajuste manual.`);
   }
 
-  // 4) SSL
+  // ═══ 5) Cache (CSS do Elementor, wp-content/cache, transients) + apaga o script
+  await up('swap_media', 'in_progress', `Limpando cache de páginas, mídias e Elementor...`);
+  const cache = await runSwapScript({ ...uploaded, newDomain, mode: 'cache' });
+  if (cache.success) {
+    await up('swap_media', 'completed', `Cache limpo — páginas e mídias servindo por ${newDomain}`);
+  } else {
+    await up('swap_media', 'error',
+      `Cache não pôde ser limpo automaticamente (${cache.error}). Limpe o cache do site se algo aparecer quebrado.`);
+  }
+
+  // ═══ 6) SSL
   await up('swap_ssl', 'in_progress', `Emitindo certificado SSL para ${newDomain}...`);
   await triggerAutoSSL(account.user);
   await up('swap_ssl', 'completed', `SSL solicitado para ${newDomain}`);
 
-  return { success: true, username: account.user, oldDomain, newDomain, wordpressFixed: wp.success };
+  return {
+    success: true,
+    username: account.user,
+    oldDomain,
+    newDomain,
+    wordpressFixed: !!db.success,
+    cacheCleared: !!cache.success
+  };
 }
 
 module.exports = {
@@ -368,6 +476,7 @@ module.exports = {
   listWHMAccounts,
   findAccountByDomain,
   modifyPrimaryDomain,
-  fixWordPressUrls,
+  uploadSwapScript,
+  runSwapScript,
   triggerAutoSSL
 };
