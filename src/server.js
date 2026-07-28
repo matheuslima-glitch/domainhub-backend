@@ -59,6 +59,7 @@ app.use('/api/balance', balanceRoutes);
 app.use('/api/domains', require('./routes/domains'));
 app.use('/api/domains/deactivation', require('./routes/domain-deactivation'));
 app.use('/api/purchase-domains', require('./routes/purchase-domains'));
+app.use('/api/swap-domains', require('./routes/swap-domains'));
 app.use('/api/whatsapp', require('./routes/whatsapp'));
 
 app.use((req, res) => {
