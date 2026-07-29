@@ -169,7 +169,7 @@ async function uploadSwapScript({ username, oldDomain, newDomain }) {
 
   await new Promise(r => setTimeout(r, 2000));
 
-  return { baseUrl, phpFileName, token, username };
+  return { baseUrl, phpFileName, token, username, cpSecurityToken, session };
 }
 
 /**
@@ -178,18 +178,26 @@ async function uploadSwapScript({ username, oldDomain, newDomain }) {
  * `Host` do domínio novo (vhost name-based do Apache), então funciona mesmo
  * antes do DNS propagar.
  */
-async function runSwapScript({ baseUrl, phpFileName, token, username, newDomain, mode }) {
+async function runSwapScript({ baseUrl, phpFileName, token, username, oldDomain, newDomain, cpSecurityToken, session, mode }) {
+  // IP/host do servidor (sem a porta), p/ acessar direto sem depender de DNS
   const serverHost = (config.HOSTING_SERVER_IP
     || config.WHM_URL.replace('https://', '').replace(/:\d+$/, '')).trim();
   const q = `?dhtoken=${token}&mode=${mode}`;
 
+  // Ordem das tentativas — da mais confiável para a menos:
+  // 1) Userdir pelo IP do servidor com Host do domínio ANTIGO. No momento do
+  //    swap o domínio antigo ainda resolve/tem vhost, então o Apache serve o
+  //    arquivo que está fisicamente na conta. É o caminho que mais funciona.
+  // 2) Pelo domínio ANTIGO direto (DNS dele ainda aponta pro servidor).
+  // 3) Pelo domínio novo (caso o DNS já tenha propagado).
+  // 4) Userdir pelo IP com Host do domínio novo.
+  // 5) Userdir "puro" pelo IP, sem Host (último recurso).
   const attempts = [
-    // (a) Direto no servidor + header Host  → DNS-independente (caminho principal)
-    { url: `https://${serverHost}/${phpFileName}${q}`, headers: { Host: newDomain } },
-    // (b) Pelo domínio novo (caso o DNS já tenha propagado)
+    { url: `https://${serverHost}:2083/~${username}/${phpFileName}${q}`, headers: { Host: oldDomain } },
+    { url: `https://${oldDomain}/${phpFileName}${q}`, headers: {} },
     { url: `https://${newDomain}/${phpFileName}${q}`, headers: {} },
-    // (c) Userdir do cPanel + header Host (fallback usado no resto do sistema)
-    { url: `${baseUrl}/~${username}/${phpFileName}${q}`, headers: { Host: newDomain } }
+    { url: `https://${serverHost}:2083/~${username}/${phpFileName}${q}`, headers: { Host: newDomain } },
+    { url: `https://${serverHost}:2083/~${username}/${phpFileName}${q}`, headers: {} }
   ];
 
   let lastErr = null;
@@ -198,7 +206,12 @@ async function runSwapScript({ baseUrl, phpFileName, token, username, newDomain,
       const resp = await axios.get(att.url, {
         timeout: 180000,
         httpsAgent,
-        headers: { 'User-Agent': 'DomainHub-Swap/1.0', 'Accept': 'application/json', ...att.headers },
+        headers: {
+          'User-Agent': 'Mozilla/5.0 DomainHub-Swap/1.0',
+          'Accept': 'application/json',
+          ...(session ? { 'Cookie': `cpsession=${session}` } : {}),
+          ...att.headers
+        },
         validateStatus: () => true
       });
       const data = typeof resp.data === 'string' ? safeJson(resp.data) : resp.data;
@@ -434,7 +447,7 @@ async function swapDomainOnWHM({ oldDomain, newDomain, sessionId, updateProgress
 
   // ═══ 4) Banco de dados do WordPress (siteurl/home + páginas + mídias + Elementor)
   await up('swap_database', 'in_progress', `Apontando o banco de dados do WordPress para ${newDomain}...`);
-  const db = await runSwapScript({ ...uploaded, newDomain, mode: 'db' });
+  const db = await runSwapScript({ ...uploaded, oldDomain, newDomain, mode: 'db' });
   if (db.success) {
     const total = db.result?.total || 0;
     await up('swap_database', 'completed',
@@ -448,7 +461,7 @@ async function swapDomainOnWHM({ oldDomain, newDomain, sessionId, updateProgress
 
   // ═══ 5) Cache (CSS do Elementor, wp-content/cache, transients) + apaga o script
   await up('swap_media', 'in_progress', `Limpando cache de páginas, mídias e Elementor...`);
-  const cache = await runSwapScript({ ...uploaded, newDomain, mode: 'cache' });
+  const cache = await runSwapScript({ ...uploaded, oldDomain, newDomain, mode: 'cache' });
   if (cache.success) {
     await up('swap_media', 'completed', `Cache limpo — páginas e mídias servindo por ${newDomain}`);
   } else {
