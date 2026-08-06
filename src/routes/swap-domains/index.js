@@ -237,12 +237,21 @@ router.post('/execute', async (req, res) => {
     }
 
     // O domínio antigo precisa existir (e estar ativo) no WHM
-    const account = await findAccountByDomain(old);
+    const accounts = await listWHMAccounts();
+    const account = accounts.find(a => a.domain === old) || null;
     if (!account) {
       return res.status(400).json({ success: false, error: `Domínio ${old} não encontrado no WHM` });
     }
     if (account.suspended) {
       return res.status(400).json({ success: false, error: `A conta de ${old} está suspensa` });
+    }
+
+    const newAlready = accounts.find(a => a.domain === nue);
+    if (newAlready) {
+      return res.status(400).json({
+        success: false,
+        error: `O domínio ${nue} já é o principal da conta "${newAlready.user}" no WHM`
+      });
     }
 
     processingSessions.set(sessionId, { startTime: Date.now(), userId: finalUserId, phase: 2 });
