@@ -24,6 +24,7 @@ const https = require('https');
 const FormData = require('form-data');
 const { v4: uuidv4 } = require('uuid');
 const config = require('../../config/env');
+const { captureEmailPlan, migrateEmail, setupEmailDns } = require('./swap-email');
 
 const httpsAgent = new https.Agent({ rejectUnauthorized: false });
 
@@ -789,6 +790,23 @@ async function swapDomainOnWHM({ oldDomain, newDomain, sessionId, updateProgress
     return { success: false, error: `Conta de ${oldDomain} está suspensa` };
   }
 
+  // ═══ 1b) Se o domínio antigo tiver caixas de e-mail, captura ANTES da troca
+  //    (depois do modifyacct o cPanel não lista mais as caixas do antigo).
+  //    Se não houver e-mail, emailPlan.hasEmail = false e todo o bloco de
+  //    e-mail é pulado — o swap segue exatamente como hoje.
+  let emailPlan = { hasEmail: false, accounts: [], forwarders: [] };
+  try {
+    emailPlan = await captureEmailPlan({
+      username: account.user, homedir: account.homedir, oldDomain, newDomain
+    });
+    if (emailPlan.hasEmail) {
+      await up('swap_email_capture', 'completed',
+        `${emailPlan.accounts.length} caixa(s) de e-mail encontrada(s) em ${oldDomain} — serão migradas`);
+    }
+  } catch (e) {
+    console.error('⚠️ [SWAP] Captura de e-mail falhou:', e.message);
+  }
+
   // ═══ 2) Trocar o domínio principal (modifyacct)
   await up('swap_whm', 'in_progress', `Modificando a conta ${account.user} no WHM: ${oldDomain} → ${newDomain}...`);
   const mod = await modifyPrimaryDomain(account.user, newDomain);
@@ -800,6 +818,25 @@ async function swapDomainOnWHM({ oldDomain, newDomain, sessionId, updateProgress
 
   // aguardar o WHM reconstruir o vhost/config do Apache
   await new Promise(r => setTimeout(r, 8000));
+
+  // ═══ 2b) Migrar as caixas de e-mail para o domínio novo (se houver).
+  //    add_pop (recria a conta do jeito certo) + injeção do hash da senha
+  //    original + move das mensagens via rename() no disco — O(1), instantâneo
+  //    mesmo em caixas de dezenas de GB, sem trafegar nada pela API.
+  let emailReport = null;
+  if (emailPlan.hasEmail) {
+    await up('swap_email_migrate', 'in_progress', `Migrando caixas de e-mail para ${newDomain}...`);
+    try {
+      emailReport = await migrateEmail({
+        username: account.user, oldDomain, newDomain, plan: emailPlan,
+        onProgress: (m) => { up('swap_email_migrate', 'in_progress', m); }
+      });
+      await up('swap_email_migrate', 'completed',
+        `E-mail migrado: ${emailReport.created} caixa(s), ${emailReport.mailMoved} com mensagens movidas, ${emailReport.passwords} senha(s) preservada(s)`);
+    } catch (e) {
+      await up('swap_email_migrate', 'error', `Falha ao migrar e-mail: ${e.message}`);
+    }
+  }
 
   // ═══ 3) Enviar o script temporário para dentro da conta
   let uploaded = null;
@@ -891,6 +928,28 @@ async function swapDomainOnWHM({ oldDomain, newDomain, sessionId, updateProgress
   await triggerAutoSSL(account.user);
   await up('swap_ssl', 'completed', `SSL solicitado para ${newDomain}`);
 
+  // ═══ 8) DNS de entregabilidade do e-mail na Cloudflare (só se houver caixas):
+  //    MX + SPF + DKIM (chave real do domínio) + DMARC, todos DNS only.
+  let emailDns = null;
+  if (emailPlan.hasEmail) {
+    await up('swap_email_dns', 'in_progress', `Configurando DNS de e-mail (MX/SPF/DKIM) para ${newDomain}...`);
+    try {
+      emailDns = await setupEmailDns({
+        newDomain,
+        onProgress: (m) => { up('swap_email_dns', 'in_progress', m); }
+      });
+      if ((emailDns.errors || []).length === 0) {
+        await up('swap_email_dns', 'completed',
+          `DNS de e-mail publicado — ${newDomain} pronto para enviar e receber`);
+      } else {
+        await up('swap_email_dns', 'error',
+          `DNS de e-mail publicado com ressalvas: ${emailDns.errors.join('; ')}`);
+      }
+    } catch (e) {
+      await up('swap_email_dns', 'error', `Falha ao configurar DNS de e-mail: ${e.message}`);
+    }
+  }
+
   return {
     success: true,
     username: account.user,
@@ -898,7 +957,9 @@ async function swapDomainOnWHM({ oldDomain, newDomain, sessionId, updateProgress
     newDomain,
     wordpressFixed: !!db.success,
     softaculousFixed: softOk,
-    cacheCleared: !!cache.success
+    cacheCleared: !!cache.success,
+    emailMigrated: emailReport ? { created: emailReport.created, mailMoved: emailReport.mailMoved, passwords: emailReport.passwords } : null,
+    emailDnsConfigured: emailDns ? ((emailDns.errors || []).length === 0) : null
   };
 }
 
