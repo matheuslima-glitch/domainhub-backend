@@ -319,6 +319,84 @@ async function verifySoftaculousSwap({ username, oldDomain }) {
 }
 
 /**
+ * Salva os detalhes da instalação via API oficial do Softaculous
+ * (act=editdetail — o MESMO que o botão "Save Installation Details" do painel).
+ * É ISTO que atualiza o cache interno do Softaculous e faz o botão de LOGIN
+ * apontar para o domínio novo IMEDIATAMENTE; editar o installations.json
+ * sozinho não atualiza esse cache.
+ *
+ * Só troca a URL — reenvia as credenciais de banco EXISTENTES (lidas do
+ * installations.json pelo modo `soft`) para não zerar nenhum campo — e NÃO
+ * envia admin_username/admin_pass, então NÃO reseta a senha do WordPress.
+ */
+async function saveSoftaculousDetail({ username, oldDomain, newDomain, installs }) {
+  const old = String(oldDomain || '').toLowerCase();
+  const nue = String(newDomain || '').toLowerCase();
+  let list = Array.isArray(installs) ? installs : [];
+
+  // fallback: se o modo soft não trouxe as instalações, tenta pela listagem
+  if (list.length === 0) {
+    try { list = await listSoftaculousInstallations(username); } catch (_) {}
+  }
+
+  // instalações a corrigir: as que citam o domínio antigo OU o novo (após o
+  // modo soft o registro pode já estar como novo). Se nada casar e houver
+  // exatamente uma instalação, corrige essa.
+  let targets = list.filter(r => {
+    const d = String(r.softdomain || '').toLowerCase();
+    return d === old || d === nue;
+  });
+  if (targets.length === 0 && list.length === 1) targets = list;
+  if (targets.length === 0) {
+    return { attempted: 0, saved: 0, results: [], note: 'nenhuma instalação correspondente' };
+  }
+
+  const { baseUrl, cpSecurityToken, session } = await createCpanelSession(username);
+  const results = [];
+  let saved = 0;
+
+  for (const inst of targets) {
+    const insid = inst.insid;
+    if (!insid) continue;
+    const dir = String(inst.softdirectory || '').replace(/^\/+|\/+$/g, '');
+    const editUrl = `https://${nue}${dir ? '/' + dir : ''}`;
+    const editDir = String(inst.softpath || '').replace(/\/+$/, '') + '/';
+
+    const body = new URLSearchParams({
+      editins: '1',
+      edit_dir: editDir,
+      edit_url: editUrl,
+      edit_dbname: String(inst.softdb || ''),
+      edit_dbuser: String(inst.softdbuser || ''),
+      edit_dbpass: String(inst.softdbpass || ''),
+      edit_dbhost: String(inst.softdbhost || 'localhost')
+    });
+
+    const url = `${baseUrl}${cpSecurityToken}${SOFTACULOUS_PATH}?act=editdetail&insid=${encodeURIComponent(insid)}&api=json`;
+    try {
+      const resp = await axios.post(url, body.toString(), {
+        headers: {
+          'Cookie': `cpsession=${session}`,
+          'Content-Type': 'application/x-www-form-urlencoded'
+        },
+        timeout: 60000,
+        httpsAgent,
+        maxRedirects: 5,
+        validateStatus: () => true
+      });
+      const data = typeof resp.data === 'string' ? safeJson(resp.data) : resp.data;
+      const ok = !!data && !data.error;
+      if (ok) saved++;
+      results.push({ insid, ok, editUrl });
+    } catch (e) {
+      results.push({ insid, ok: false, error: e.message });
+    }
+  }
+
+  return { attempted: targets.length, saved, results };
+}
+
+/**
  * Gera o PHP temporário do swap.
  *
  * mode=db     → reescreve as URLs do WordPress direto no banco, em TODAS as
@@ -450,7 +528,7 @@ $__wproot = $__wpload ? dirname($__wpload) : dirname(__FILE__);
 // Registros do Softaculous + wp-config.php + .htaccess. NAO carrega o
 // WordPress (mexe so em arquivos), entao roda mesmo sem wp-load.
 if ($__mode === 'soft') {
-  $report = array('ok'=>true,'mode'=>'soft','softaculous'=>array('status'=>'not_found'),'files'=>array());
+  $report = array('ok'=>true,'mode'=>'soft','softaculous'=>array('status'=>'not_found'),'files'=>array(),'installs'=>array());
 
   // 1) ~/.softaculous/installations.json — arquivo PHP-SERIALIZADO onde o
   //    Softaculous guarda softdomain/softurl de cada instalacao. E daqui que
@@ -469,6 +547,20 @@ if ($__mode === 'soft') {
         if (is_array($j)) { $data = $j; $wasJson = true; }
       }
       if (($wasSerialized || $wasJson) && is_array($data)) {
+        // credenciais de cada instalacao (para o save oficial via act=editdetail)
+        foreach ($data as $__ik => $__iv) {
+          if (!is_array($__iv)) continue;
+          $report['installs'][] = array(
+            'insid'         => isset($__iv['insid']) ? $__iv['insid'] : $__ik,
+            'softpath'      => isset($__iv['softpath']) ? $__iv['softpath'] : '',
+            'softdirectory' => isset($__iv['softdirectory']) ? $__iv['softdirectory'] : '',
+            'softdomain'    => isset($__iv['softdomain']) ? $__iv['softdomain'] : '',
+            'softdb'        => isset($__iv['softdb']) ? $__iv['softdb'] : '',
+            'softdbuser'    => isset($__iv['softdbuser']) ? $__iv['softdbuser'] : '',
+            'softdbhost'    => isset($__iv['softdbhost']) ? $__iv['softdbhost'] : '',
+            'softdbpass'    => isset($__iv['softdbpass']) ? $__iv['softdbpass'] : ''
+          );
+        }
         if (dh_has_object($data)) {
           $report['softaculous'] = array('status'=>'skipped_object','occurrences'=>$before);
         } else if ($before === 0) {
@@ -742,37 +834,44 @@ async function swapDomainOnWHM({ oldDomain, newDomain, sessionId, updateProgress
       `As URLs internas podem precisar de ajuste manual.`);
   }
 
-  // ═══ 5) Softaculous (softdomain/softurl) + wp-config.php + .htaccess
+  // ═══ 5) Softaculous: arquivos + SAVE OFICIAL (act=editdetail) + verificação.
+  //    O save oficial é o MESMO do botão "Save Installation Details" do painel
+  //    e é o que atualiza o cache do Softaculous — sem ele o botão de LOGIN
+  //    continua apontando para o domínio antigo mesmo com o arquivo já correto.
   await up('swap_softaculous', 'in_progress', `Atualizando os registros do Softaculous para ${newDomain}...`);
-  const soft = await runSwapScript({ ...uploaded, oldDomain, newDomain, mode: 'soft' });
-  let softOk = false;
-  if (soft.success) {
-    const st = soft.result?.softaculous?.status || 'not_found';
-    softOk = (st === 'updated' || st === 'nothing_to_do');
 
-    // Verificação real: a listagem do Softaculous é a mesma fonte que o
-    // botão de Login usa — se nenhum registro cita o domínio antigo, o
-    // login vai abrir no domínio novo.
-    const check = await verifySoftaculousSwap({ username: account.user, oldDomain });
-    if (check.checked && check.stale === 0) {
-      softOk = true;
-      await up('swap_softaculous', 'completed',
-        `Softaculous atualizado — login e registros apontando para ${newDomain}`);
-    } else if (check.checked && check.stale > 0) {
-      softOk = false;
-      await up('swap_softaculous', 'error',
-        `O Softaculous ainda tem ${check.stale} registro(s) citando ${oldDomain} (status: ${st}). ` +
-        `Ajuste pelo "Edit Installation Details" se o login abrir no domínio antigo.`);
-    } else if (softOk) {
-      await up('swap_softaculous', 'completed',
-        `Registros do Softaculous atualizados para ${newDomain}`);
-    } else {
-      await up('swap_softaculous', 'error',
-        `Registros do Softaculous não puderam ser confirmados (status: ${st}).`);
-    }
-  } else {
+  // 5a) corrige installations.json + wp-config + .htaccess e coleta as
+  //     credenciais das instalações (para reenviar no save oficial)
+  const soft = await runSwapScript({ ...uploaded, oldDomain, newDomain, mode: 'soft' });
+  const installs = soft.success ? (soft.result?.installs || []) : [];
+
+  // 5b) SAVE OFICIAL via API do Softaculous — corrige o cache do botão Login
+  let softSave = { attempted: 0, saved: 0 };
+  try {
+    softSave = await saveSoftaculousDetail({ username: account.user, oldDomain, newDomain, installs });
+  } catch (e) {
+    console.error('⚠️ [SWAP] Softaculous editdetail falhou:', e.message);
+  }
+
+  // 5c) verificação real (mesma fonte que o botão de Login usa)
+  let softOk = false;
+  const check = await verifySoftaculousSwap({ username: account.user, oldDomain });
+  if (check.checked && check.stale === 0) {
+    softOk = true;
+    await up('swap_softaculous', 'completed',
+      `Softaculous atualizado (${softSave.saved}/${softSave.attempted} salvo(s)) — login apontando para ${newDomain}`);
+  } else if (check.checked && check.stale > 0) {
+    softOk = false;
     await up('swap_softaculous', 'error',
-      `Domínio trocado, mas a atualização do Softaculous falhou (${soft.error}).`);
+      `O Softaculous ainda tem ${check.stale} registro(s) citando ${oldDomain}. ` +
+      `Abra Softaculous → lápis (Edit Details) da instalação → "Save Installation Details".`);
+  } else {
+    const st = soft.result?.softaculous?.status || 'not_found';
+    softOk = softSave.saved > 0 || st === 'updated' || st === 'nothing_to_do';
+    await up('swap_softaculous', softOk ? 'completed' : 'error',
+      softOk
+        ? `Registros do Softaculous atualizados para ${newDomain}`
+        : `Registros do Softaculous não puderam ser confirmados.`);
   }
 
   // ═══ 6) Cache (CSS do Elementor, wp-content/cache, LiteSpeed, transients) + apaga o script
@@ -813,6 +912,7 @@ module.exports = {
   triggerAutoSSL,
   listSoftaculousInstallations,
   verifySoftaculousSwap,
+  saveSoftaculousDetail,
   neutralizeSwapScript,
   buildSwapPhp
 };
