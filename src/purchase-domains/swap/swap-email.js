@@ -175,6 +175,8 @@ async function captureEmailPlan({ username, homedir, oldDomain, newDomain }) {
   const uploaded = await uploadEmailPhp({ username, homedir, oldDomain, newDomain });
   const cap = await runEmailPhp({ ...uploaded, mode: 'mailcapture', hostDomain: oldDomain });
   if (!cap.success) {
+    // captura falhou: apaga o script pra não deixar órfão no public_html
+    try { await runEmailPhp({ phpFileName: uploaded.phpFileName, token: uploaded.token, mode: 'mailcleanup', hostDomain: oldDomain }); } catch (_) {}
     return { hasEmail: false, error: cap.error, ...uploaded, accounts: [], forwarders: [] };
   }
   const accounts = cap.result.accounts || [];
@@ -187,12 +189,15 @@ async function captureEmailPlan({ username, homedir, oldDomain, newDomain }) {
     forwarders = (fr.data || []).map(f => ({ forward: f.forward || f.email, dest: f.forwardto || f.dest }));
   } catch (_) {}
 
-  return {
-    hasEmail: accounts.length > 0 || forwarders.length > 0,
-    accounts,
-    forwarders,
-    ...uploaded
-  };
+  const hasEmail = accounts.length > 0 || forwarders.length > 0;
+
+  // Sem e-mail: a migração (que faria a limpeza) não roda, então apaga o
+  // script agora pra não deixar o dh-mail-*.php órfão no public_html.
+  if (!hasEmail) {
+    try { await runEmailPhp({ phpFileName: uploaded.phpFileName, token: uploaded.token, mode: 'mailcleanup', hostDomain: oldDomain }); } catch (_) {}
+  }
+
+  return { hasEmail, accounts, forwarders, ...uploaded };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -209,7 +214,9 @@ async function migrateEmail({ username, oldDomain, newDomain, plan, onProgress }
   const accounts = plan.accounts || [];
   const report = { created: 0, mailMoved: 0, passwords: 0, forwarders: 0, perAccount: [], errors: [] };
 
-  const sess = await createCpanelSession(username);
+  let sess;
+  try {
+    sess = await createCpanelSession(username);
 
   // 2a) recriar cada caixa via API do cPanel (com a cota original)
   for (const acc of accounts) {
@@ -259,8 +266,10 @@ async function migrateEmail({ username, oldDomain, newDomain, plan, onProgress }
     } catch (_) {}
   }
 
-  // 2d) limpeza (remove stash e apaga o script)
-  try { await runEmailPhp({ phpFileName: plan.phpFileName, token: plan.token, mode: 'mailcleanup', hostDomain: newDomain }); } catch (_) {}
+  } finally {
+    // 2d) limpeza — SEMPRE roda, mesmo se algo acima falhar (remove stash + apaga o script)
+    try { await runEmailPhp({ phpFileName: plan.phpFileName, token: plan.token, mode: 'mailcleanup', hostDomain: newDomain }); } catch (_) {}
+  }
 
   return report;
 }
