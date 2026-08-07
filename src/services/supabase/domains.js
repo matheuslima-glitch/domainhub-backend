@@ -69,6 +69,40 @@ class SupabaseDomainsService {
 
     if (error) throw error;
 
+    // ═══════════════════════════════════════════════════════════════
+    // LIMPAR ALERTA RESOLVIDO
+    //
+    // A RPC upsert_domain_stats não recebe has_alert, então um alerta gravado uma
+    // única vez sobrevivia para sempre — inclusive falhas transitórias da API da
+    // Namecheap ("Ocorreu uma exceção não tratada"), que ficavam coladas em
+    // domínios perfeitamente saudáveis.
+    //
+    // Isso tinha efeito colateral grave: no popup de cópia o rótulo "Alerta"
+    // ganhava de "Crítico/Expirando", e o domínio sumia da lista de renovação.
+    //
+    // Chegar aqui significa que a sincronização leu o domínio SEM erro.
+    // É seguro limpar: se o problema persistir, o próximo ciclo (4h) regrava o
+    // alerta via updateDomainAlert. Nenhum alerta real se perde.
+    // ═══════════════════════════════════════════════════════════════
+    try {
+      const { data: cleared, error: clearError } = await this.client
+        .from('domains')
+        .update({ has_alert: null })
+        .eq('domain_name', domainData.domain_name)
+        .eq('user_id', config.SUPABASE_USER_ID)
+        .not('has_alert', 'is', null)
+        .select('domain_name');
+
+      if (clearError) {
+        console.warn(`⚠️ Não foi possível limpar has_alert de ${domainData.domain_name}: ${clearError.message}`);
+      } else if (cleared && cleared.length > 0) {
+        console.log(`🧹 Alerta resolvido removido: ${domainData.domain_name}`);
+      }
+    } catch (clearErr) {
+      // Falha aqui não invalida o upsert que já foi gravado com sucesso
+      console.warn(`⚠️ Falha ao limpar has_alert de ${domainData.domain_name}: ${clearErr.message}`);
+    }
+
     // Detectar mudança de status e enviar alertas imediatos
     if (previousDomain && previousDomain.status !== domainData.status) {
       const notificationService = require('../whatsapp/notifications');
