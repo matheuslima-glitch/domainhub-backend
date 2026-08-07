@@ -283,6 +283,22 @@ function normalizeTxt(txt) {
   return String(txt || '').replace(/^"|"$/g, '').replace(/"\s*"/g, '');
 }
 
+/**
+ * Formata o valor de um TXT para a API da Cloudflare no formato correto:
+ * cada "character-string" entre aspas e com no máximo 255 chars. TXT curto vira
+ * "valor"; TXT longo (DKIM 2048-bit tem 400+ chars) é quebrado em pedaços de 255
+ * e cada pedaço entra entre aspas separado por UM espaço — exatamente como o
+ * painel da Cloudflare grava. Sem isso, a Cloudflare pode gravar a chave sem
+ * aspas / mal quebrada e o DKIM não valida.
+ */
+function cfTxtContent(value) {
+  const raw = normalizeTxt(value);
+  const chunks = [];
+  for (let i = 0; i < raw.length; i += 255) chunks.push(raw.substring(i, i + 255));
+  if (chunks.length === 0) chunks.push('');
+  return chunks.map((c) => `"${c}"`).join(' ');
+}
+
 /** Extrai SPF e DKIM da zona LOCAL do cPanel (fonte de verdade dos registros). */
 function extractFromZone(zoneData, newDomain) {
   const records = [];
@@ -334,8 +350,12 @@ async function setupEmailDns({ newDomain, onProgress }) {
   const say = (m) => { if (onProgress) { try { onProgress(m); } catch (_) {} } };
   const out = { zoneId: null, records: {}, errors: [] };
 
-  // garante que a chave DKIM existe no servidor e lê a zona local
-  try { await whmApi('enable_dkim', { domain: newDomain }); } catch (_) {}
+  // garante que a chave DKIM existe no servidor (com algumas tentativas —
+  // logo após o modifyacct a geração da chave do domínio novo pode demorar)
+  for (let i = 0; i < 3; i++) {
+    try { await whmApi('enable_dkim', { domain: newDomain }); break; } catch (_) {}
+    await new Promise(r => setTimeout(r, 3000));
+  }
 
   let mailHost = getServerHost();
   try {
@@ -344,12 +364,25 @@ async function setupEmailDns({ newDomain, onProgress }) {
     else if (gh?.hostname) mailHost = gh.hostname;
   } catch (_) {}
 
+  // Lê o DKIM da zona local ESPERANDO ele estabilizar: logo após o enable_dkim
+  // a zona pode ter uma chave transitória/antiga. Lê algumas vezes até o valor
+  // repetir em 2 leituras seguidas (aí é a chave final que o servidor assina).
   let spf = null, dkim = null;
-  try {
-    const zone = await whmApi('dumpzone', { domain: newDomain });
-    const ext = extractFromZone(zone, newDomain);
-    spf = ext.spf; dkim = ext.dkim;
-  } catch (e) { out.errors.push('dumpzone: ' + e.message); }
+  {
+    let prevDkim = null;
+    for (let i = 0; i < 8; i++) {
+      let curDkim = null, curSpf = null;
+      try {
+        const zone = await whmApi('dumpzone', { domain: newDomain });
+        const ext = extractFromZone(zone, newDomain);
+        curDkim = ext.dkim; curSpf = ext.spf;
+      } catch (e) { if (i === 0) out.errors.push('dumpzone: ' + e.message); }
+      if (curSpf) spf = curSpf;
+      if (curDkim) { dkim = curDkim; if (curDkim === prevDkim) break; }
+      prevDkim = curDkim;
+      await new Promise(r => setTimeout(r, 4000));
+    }
+  }
 
   const serverIp = String(config.HOSTING_SERVER_IP || '').trim();
   if (!spf) spf = `v=spf1 +mx +a${serverIp ? ' +ip4:' + serverIp : ''} +include:spf.${mailHost} ~all`;
@@ -361,10 +394,10 @@ async function setupEmailDns({ newDomain, onProgress }) {
 
   const desiredRecords = [
     { type: 'MX',  name: newDomain, content: mailHost, priority: 0, ttl: 1 },
-    { type: 'TXT', name: newDomain, content: spf, ttl: 1 },
-    { type: 'TXT', name: `_dmarc.${newDomain}`, content: dmarc, ttl: 1 }
+    { type: 'TXT', name: newDomain, content: cfTxtContent(spf), ttl: 1 },
+    { type: 'TXT', name: `_dmarc.${newDomain}`, content: cfTxtContent(dmarc), ttl: 1 }
   ];
-  if (dkim) desiredRecords.push({ type: 'TXT', name: `default._domainkey.${newDomain}`, content: dkim, ttl: 1 });
+  if (dkim) desiredRecords.push({ type: 'TXT', name: `default._domainkey.${newDomain}`, content: cfTxtContent(dkim), ttl: 1 });
   else out.errors.push('DKIM não encontrado na zona local (verifique manualmente)');
 
   for (const rec of desiredRecords) {
