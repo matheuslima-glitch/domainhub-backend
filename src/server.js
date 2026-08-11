@@ -371,11 +371,30 @@ cron.schedule('0 */4 * * *', async () => {
   }
 });
 
+// ============================================
+// CRON: Domínios externos (GoDaddy, Registro.br, ...) via RDAP
+//
+// A sincronização acima só cobre o que está DENTRO da conta Namecheap.
+// Domínios de outros registradores ficavam com data congelada e nunca tinham
+// suspensão detectada. Roda às :45 para não colidir com os outros dois crons.
+// ============================================
+cron.schedule('45 */6 * * *', async () => {
+  console.log('🌐 [CRON] Iniciando verificação de domínios externos (RDAP)...');
+
+  try {
+    const rdapDomains = require('./services/rdap/domains');
+    await rdapDomains.syncExternalDomains();
+  } catch (error) {
+    console.error('❌ [CRON] Erro na verificação de domínios externos:', error.message);
+  }
+});
+
 app.listen(config.PORT, async () => {
   console.log(`Servidor rodando na porta ${config.PORT}`);
   console.log(`Ambiente: ${config.NODE_ENV}`);
   console.log('🕐 Cron de domínios configurado: A cada 4 horas');
   console.log('📦 Processamento em lotes de 100 domínios');
+  console.log('🌐 Cron de domínios externos (RDAP): A cada 6 horas');
   
   const namecheapBalance = require('./services/namecheap/balance');
   const ip = await namecheapBalance.getServerIP();

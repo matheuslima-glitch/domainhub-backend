@@ -208,4 +208,25 @@ router.post('/sync', async (req, res, next) => {
   }
 });
 
+/**
+ * POST /api/domains/sync-external
+ *
+ * Verifica via RDAP os domínios de registradores que a sincronização da
+ * Namecheap não cobre (GoDaddy, Registro.br, ...). Roda sozinho a cada 6h;
+ * esta rota existe para disparo manual e conferência.
+ *
+ * Rápido — hoje são poucos domínios externos — então responde de forma síncrona.
+ */
+router.post('/sync-external', async (req, res, next) => {
+  try {
+    const rdapDomains = require('../../services/rdap/domains');
+    const results = await rdapDomains.syncExternalDomains();
+
+    res.json({ success: true, data: results });
+  } catch (error) {
+    console.error('❌ Erro na sincronização de domínios externos:', error.message);
+    next(error);
+  }
+});
+
 module.exports = router;
