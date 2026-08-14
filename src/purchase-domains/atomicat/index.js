@@ -972,15 +972,10 @@ class AtomiCatDomainPurchase {
   /**
    * NOTIFICAR WHATSAPP VIA ZAPI
    */
+  // Nome mantido por compatibilidade com as chamadas existentes.
+  // O destino agora é o Discord — ver src/services/notify/discord.js
   async sendWhatsAppNotification(domain, status, errorMsg = '') {
-    if (!config.ZAPI_INSTANCE || !config.ZAPI_CLIENT_TOKEN) {
-      console.log('⚠️ [WHATSAPP-ATOMICAT] ZAPI não configurado');
-      return;
-    }
-    
     try {
-      const phoneNumber = config.WHATSAPP_PHONE_NUMBER;
-      
       // Data e hora formatadas separadamente (igual WordPress)
       const agora = new Date();
       const dataFormatada = new Intl.DateTimeFormat('pt-BR', {
@@ -1013,36 +1008,17 @@ class AtomiCatDomainPurchase {
           `🗓️Data: ${dataFormatada} ás ${horaFormatada}`;
       }
       
-      console.log(`📱 [WHATSAPP-ATOMICAT] Enviando para: ${phoneNumber}`);
-      console.log(`   Mensagem: ${message.substring(0, 50)}...`);
-      const zapiUrl = config.ZAPI_INSTANCE;
-      
-      console.log(`🌐 [WHATSAPP-ATOMICAT] URL: ${zapiUrl}`);
-      
-      const response = await axios.post(
-        zapiUrl,
-        { 
-          phone: phoneNumber.replace(/\D/g, ''), 
-          message: message 
-        },
-        { 
-          timeout: 10000,
-          headers: {
-            'Client-Token': config.ZAPI_CLIENT_TOKEN,
-            'Content-Type': 'application/json'
-          }
-        }
-      );
-      
-      console.log('✅ [WHATSAPP-ATOMICAT] Notificação enviada com sucesso');
-      console.log(`   Response:`, JSON.stringify(response.data, null, 2));
-      
-    } catch (error) {
-      console.error('❌ [WHATSAPP-ATOMICAT] Erro ao enviar:', error.message);
-      if (error.response) {
-        console.error('   Status:', error.response.status);
-        console.error('   Data:', JSON.stringify(error.response.data, null, 2));
+      const discord = require('../../services/notify/discord');
+      const result = await discord.send(message);
+
+      if (result.success) {
+        console.log('✅ [NOTIFY-ATOMICAT] Notificação enviada ao Discord');
+      } else {
+        console.error(`❌ [NOTIFY-ATOMICAT] Falha ao notificar: ${result.error}`);
       }
+
+    } catch (error) {
+      console.error('❌ [NOTIFY-ATOMICAT] Erro ao enviar:', error.message);
     }
   }
 

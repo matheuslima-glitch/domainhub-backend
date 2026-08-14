@@ -60,6 +60,12 @@ if (!process.env.ZAPI_INSTANCE || !process.env.ZAPI_CLIENT_TOKEN) {
   console.warn('⚠️ Z-API não configurado - notificações WhatsApp desabilitadas');
 }
 
+// Verificar Discord — canal ATUAL das notificações. Sem isso, nenhum alerta sai.
+if (!process.env.DISCORD_WEBHOOK_URL) {
+  console.error('❌ DISCORD_WEBHOOK_URL não configurada - NENHUM ALERTA SERÁ ENVIADO!');
+  console.error('   Configure no Render: Environment → DISCORD_WEBHOOK_URL');
+}
+
 // Log de configuração
 console.log('\n📋 CONFIGURAÇÃO DO SISTEMA DOMAINHUB');
 console.log('=====================================');
@@ -68,7 +74,8 @@ console.log(`✅ IP Cliente: ${process.env.NAMECHEAP_CLIENT_IP}`);
 console.log(`${process.env.OPENAI_API_KEY ? '✅' : '❌'} OpenAI: ${process.env.OPENAI_API_KEY ? 'Configurado' : 'NÃO CONFIGURADO'}`);
 console.log(`${missingWordpress.length === 0 ? '✅' : '⚠️'} WordPress: ${missingWordpress.length === 0 ? 'Configurado' : 'Parcialmente configurado'}`);
 console.log(`${missingCloudflare.length === 0 ? '✅' : '⚠️'} Cloudflare: ${missingCloudflare.length === 0 ? 'Configurado' : 'Parcialmente configurado'}`);
-console.log(`${process.env.ZAPI_INSTANCE ? '✅' : '⚠️'} WhatsApp: ${process.env.ZAPI_INSTANCE ? 'Configurado' : 'Não configurado'}`);
+console.log(`${process.env.ZAPI_INSTANCE ? '✅' : '⚠️'} WhatsApp (inativo): ${process.env.ZAPI_INSTANCE ? 'Configurado' : 'Não configurado'}`);
+console.log(`${process.env.DISCORD_WEBHOOK_URL ? '✅' : '❌'} Discord: ${process.env.DISCORD_WEBHOOK_URL ? 'Configurado' : 'NÃO CONFIGURADO'}`);
 console.log('=====================================\n');
 
 module.exports = {
@@ -113,6 +120,9 @@ module.exports = {
   ZAPI_INSTANCE: process.env.ZAPI_INSTANCE,
   ZAPI_CLIENT_TOKEN: process.env.ZAPI_CLIENT_TOKEN,
   WHATSAPP_PHONE_NUMBER: process.env.WHATSAPP_PHONE_NUMBER,
+
+  // Discord — canal atual de notificações
+  DISCORD_WEBHOOK_URL: process.env.DISCORD_WEBHOOK_URL,
 
   // cPanel Theme
   CPANEL_THEME: 'jupiter',

@@ -85,63 +85,31 @@ class WhatsAppService {
   }
 
   /**
-   * Envia mensagem de texto via WhatsApp
-   * @param {string} phoneNumber - Número de telefone no formato internacional
+   * Envia a mensagem para o canal de notificação.
+   *
+   * ATENÇÃO: apesar do nome do arquivo, o destino agora é o DISCORD, não o
+   * WhatsApp. A Z-API saiu de operação e o canal passou a ser um servidor do
+   * Discord. O corpo do método foi redirecionado em vez de alterar os ~8 lugares
+   * que o chamam — a montagem das mensagens continua idêntica.
+   *
+   * O parâmetro phoneNumber é mantido apenas por compatibilidade de assinatura:
+   * o Discord posta num canal, não para um destinatário. Ele é usado só no log.
+   *
+   * O código antigo da Z-API segue neste arquivo (checkPhoneNumber, zapiUrl) para
+   * facilitar a volta atrás, mas não é mais acionado por este método.
+   *
+   * @param {string} phoneNumber - Ignorado no envio; mantido para rastreabilidade
    * @param {string} message - Mensagem a ser enviada
    * @returns {Promise<object>}
    */
   async sendMessage(phoneNumber, message) {
-    if (!this.configured) {
-      return {
-        success: false,
-        error: 'ZAPI não configurado'
-      };
+    const discord = require('../notify/discord');
+
+    if (phoneNumber) {
+      console.log(`📤 [NOTIFY] Alerta referente ao contato ${this.maskPhone(String(phoneNumber).replace(/\D/g, ''))}`);
     }
 
-    try {
-      const cleanNumber = phoneNumber.replace(/\D/g, '');
-      
-      console.log('📤 [ZAPI] Enviando mensagem');
-      console.log('📤 [ZAPI] Destinatário:', this.maskPhone(cleanNumber));
-      console.log('📤 [ZAPI] Preview:', message.substring(0, 50) + '...');
-
-      const response = await axios.post(
-        this.zapiUrl,
-        { 
-          phone: cleanNumber,
-          message: message 
-        },
-        { 
-          timeout: 15000,
-          headers: {
-            'Client-Token': this.clientToken,
-            'Content-Type': 'application/json'
-          }
-        }
-      );
-
-      console.log('✅ [ZAPI] Mensagem enviada com sucesso');
-
-      return {
-        success: true,
-        messageId: response.data.zapiMessageId || response.data.messageId,
-        data: response.data
-      };
-    } catch (error) {
-      console.error('❌ [ZAPI] Erro ao enviar mensagem:', error.message);
-      
-      if (error.response) {
-        console.error('❌ [ZAPI] Status:', error.response.status);
-        console.error('❌ [ZAPI] Erro:', error.response.data?.error || error.response.statusText);
-      }
-
-      return {
-        success: false,
-        error: error.message,
-        statusCode: error.response?.status,
-        details: error.response?.data
-      };
-    }
+    return discord.send(message);
   }
 
   /**
