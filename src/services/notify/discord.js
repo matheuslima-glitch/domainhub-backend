@@ -25,6 +25,20 @@ const REQUEST_TIMEOUT = 15000;
 const JANELA_DEDUPE_MS = 60000;
 const LIMITE_DISCORD = 2000;
 
+// POLITICA DO CANAL (definida pelo time)
+//
+// O canal recebe SOMENTE falhas: dominio caido, suspenso, expirado, erro de
+// compra e erro de swap. Todas marcam @everyone.
+//
+// Mensagens informativas - compra concluida com sucesso, swap concluido,
+// boas-vindas de cadastro e testes - NAO sao enviadas. Quem chama marca com
+// { critico: false } e elas param aqui.
+//
+// Para voltar a receber as informativas em silencio (sem mencao), basta
+// ligar ENVIAR_INFORMATIVOS: elas passam a chegar sem @everyone.
+const ENVIAR_INFORMATIVOS = false;
+const PREFIXO_MENCAO = '@everyone';
+
 class DiscordNotifier {
   constructor() {
     this.webhookUrl = config.DISCORD_WEBHOOK_URL;
@@ -82,10 +96,23 @@ class DiscordNotifier {
   /**
    * Envia uma mensagem ao canal.
    *
+   * @param {string} message
+   * @param {object} [opts]
+   * @param {boolean} [opts.critico=true] - false para mensagens informativas
+   *        (sucesso, boas-vindas, teste). O padrão é crítico: se alguém
+   *        esquecer de marcar, o alerta chega — preferimos ruído a silêncio.
+   *
    * Devolve o mesmo formato do serviço de WhatsApp ({ success, error }) para que
    * quem chama continue funcionando sem alteração.
    */
-  async send(message) {
+  async send(message, opts = {}) {
+    const { critico = true } = opts;
+
+    if (!critico && !ENVIAR_INFORMATIVOS) {
+      console.log('🔕 [DISCORD] Mensagem informativa não enviada (canal recebe só falhas)');
+      return { success: true, suprimida: true };
+    }
+
     if (!this.configured) {
       return { success: false, error: 'Discord não configurado' };
     }
@@ -106,18 +133,28 @@ class DiscordNotifier {
 
     let conteudo = this.converterFormatacao(message);
 
-    if (conteudo.length > LIMITE_DISCORD) {
-      const corte = LIMITE_DISCORD - 20;
-      conteudo = `${conteudo.slice(0, corte)}\n… (truncado)`;
+    // A mencao entra ANTES do truncamento para nunca ser cortada
+    const prefixo = critico ? `${PREFIXO_MENCAO}\n` : '';
+    const limiteTexto = LIMITE_DISCORD - prefixo.length;
+
+    if (conteudo.length > limiteTexto) {
+      conteudo = `${conteudo.slice(0, limiteTexto - 20)}\n… (truncado)`;
       console.warn(`⚠️ [DISCORD] Mensagem excedeu ${LIMITE_DISCORD} caracteres e foi truncada`);
     }
+
+    conteudo = prefixo + conteudo;
 
     try {
       console.log(`📤 [DISCORD] Enviando: ${conteudo.replace(/\n/g, ' ').substring(0, 60)}...`);
 
       await axios.post(
         this.webhookUrl,
-        { username: 'DomainHub', content: conteudo },
+        {
+          username: 'DomainHub',
+          content: conteudo,
+          // Sem isto o Discord pode ignorar o @everyone vindo de webhook
+          allowed_mentions: { parse: ['everyone'] }
+        },
         { timeout: REQUEST_TIMEOUT, headers: { 'Content-Type': 'application/json' } }
       );
 

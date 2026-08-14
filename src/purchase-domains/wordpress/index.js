@@ -1442,6 +1442,12 @@ try {
   // Nome mantido por compatibilidade com as chamadas existentes.
   // O destino agora é o Discord — ver src/services/notify/discord.js
   async sendWhatsAppNotification(domain, status, errorMsg = '') {
+    // O canal recebe só falhas. Compra concluída com sucesso não notifica.
+    if (status !== 'error') {
+      console.log(`🔕 [NOTIFY-WORDPRESS] ${domain} comprado com sucesso - sem notificação (canal recebe só falhas)`);
+      return;
+    }
+
     try {
       // Data e hora formatadas separadamente
       const agora = new Date();

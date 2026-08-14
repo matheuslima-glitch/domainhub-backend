@@ -100,16 +100,18 @@ class WhatsAppService {
    *
    * @param {string} phoneNumber - Ignorado no envio; mantido para rastreabilidade
    * @param {string} message - Mensagem a ser enviada
+   * @param {object} [opts] - { critico: false } para mensagens informativas
+   *        (boas-vindas, teste). O canal só recebe falhas — ver notify/discord.js
    * @returns {Promise<object>}
    */
-  async sendMessage(phoneNumber, message) {
+  async sendMessage(phoneNumber, message, opts = {}) {
     const discord = require('../notify/discord');
 
     if (phoneNumber) {
       console.log(`📤 [NOTIFY] Alerta referente ao contato ${this.maskPhone(String(phoneNumber).replace(/\D/g, ''))}`);
     }
 
-    return discord.send(message);
+    return discord.send(message, opts);
   }
 
   /**

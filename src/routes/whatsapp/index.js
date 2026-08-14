@@ -388,7 +388,7 @@ A partir de agora você receberá alertas em tempo real sobre o status dos seus 
 
 _Sistema ativo e monitorando 24/7_`;
 
-    const result = await whatsappService.sendMessage(phoneNumber, message);
+    const result = await whatsappService.sendMessage(phoneNumber, message, { critico: false });
 
     if (result.success) {
       res.json({ success: true, message: 'Mensagem de teste enviada com sucesso', messageId: result.messageId });

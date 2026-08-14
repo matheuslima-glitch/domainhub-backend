@@ -49,6 +49,12 @@ async function updateProgress(sessionId, step, status, message, domainName = nul
 // Nome mantido por compatibilidade com as chamadas existentes.
 // O destino agora é o Discord — ver src/services/notify/discord.js
 async function sendSwapWhatsApp({ oldDomain, newDomain, status, errorMsg = '' }) {
+  // O canal recebe só falhas. Swap concluído com sucesso não notifica.
+  if (status !== 'error') {
+    console.log(`🔕 [NOTIFY-SWAP] ${oldDomain} -> ${newDomain} concluído - sem notificação (canal recebe só falhas)`);
+    return;
+  }
+
   try {
     const agora = new Date();
     const dataFormatada = new Intl.DateTimeFormat('pt-BR', {
