@@ -1,10 +1,14 @@
 // =====================================================
 // CANAL DE NOTIFICAÇÃO — DISCORD
 //
-// Substitui a Z-API como canal de saída dos alertas. Antes existiam QUATRO
-// pontos independentes falando com a Z-API (o serviço oficial e mais três
-// dentro dos fluxos de compra/swap), cada um com seu próprio axios.post.
-// Todos passam a sair por aqui.
+// Segundo canal de saída dos alertas, EM PARALELO com a Z-API — não no lugar
+// dela. Os quatro pontos que falam com a Z-API (o serviço oficial e mais três
+// dentro dos fluxos de compra/swap) chamam este módulo logo ao lado do envio
+// do WhatsApp.
+//
+// Os dois canais são independentes: um fora do ar não impede o outro. A chamada
+// daqui é disparada sem `await` e com `.catch()` próprio, então nem o tempo de
+// resposta nem o resultado do envio do WhatsApp mudam por causa do Discord.
 //
 // DEDUPLICAÇÃO — leia antes de mexer:
 // O código de notificação foi escrito para WhatsApp, onde cada contato tem um
