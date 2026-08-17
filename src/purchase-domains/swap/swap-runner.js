@@ -47,11 +47,6 @@ async function updateProgress(sessionId, step, status, message, domainName = nul
  * Notificação de WhatsApp específica do swap (mesmo Z-API do resto do sistema).
  */
 async function sendSwapWhatsApp({ oldDomain, newDomain, status, errorMsg = '' }) {
-  if (!config.ZAPI_INSTANCE || !config.ZAPI_CLIENT_TOKEN) {
-    console.log('⚠️ [WHATSAPP-SWAP] ZAPI não configurado');
-    return;
-  }
-
   try {
     const agora = new Date();
     const dataFormatada = new Intl.DateTimeFormat('pt-BR', {
@@ -84,6 +79,11 @@ async function sendSwapWhatsApp({ oldDomain, newDomain, status, errorMsg = '' })
         .catch((e) => console.error('❌ [DISCORD] Falha ao enviar:', e.message));
     } catch (e) {
       console.error('❌ [DISCORD] Falha ao carregar o canal:', e.message);
+    }
+
+    if (!config.ZAPI_INSTANCE || !config.ZAPI_CLIENT_TOKEN) {
+      console.log('⚠️ [WHATSAPP-SWAP] ZAPI não configurado');
+      return;
     }
 
     await axios.post(

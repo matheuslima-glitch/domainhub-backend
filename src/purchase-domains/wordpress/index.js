@@ -1440,10 +1440,6 @@ try {
    * NOTIFICAR WHATSAPP
    */
   async sendWhatsAppNotification(domain, status, errorMsg = '') {
-    if (!config.ZAPI_INSTANCE || !config.ZAPI_CLIENT_TOKEN) {
-      console.log('⚠️ [WHATSAPP-WORDPRESS] ZAPI não configurado');
-      return;
-    }
     
     try {
       const phoneNumber = config.WHATSAPP_PHONE_NUMBER;
@@ -1489,6 +1485,11 @@ try {
           .catch((e) => console.error('❌ [DISCORD] Falha ao enviar:', e.message));
       } catch (e) {
         console.error('❌ [DISCORD] Falha ao carregar o canal:', e.message);
+      }
+
+      if (!config.ZAPI_INSTANCE || !config.ZAPI_CLIENT_TOKEN) {
+        console.log('⚠️ [WHATSAPP-WORDPRESS] ZAPI não configurado');
+        return;
       }
 
       console.log(`📱 [WHATSAPP-WORDPRESS] Enviando para: ${phoneNumber}`);
