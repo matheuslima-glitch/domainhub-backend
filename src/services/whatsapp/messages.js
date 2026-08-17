@@ -85,33 +85,91 @@ class WhatsAppService {
   }
 
   /**
-   * Envia a mensagem para o canal de notificação.
+   * Espelha a mensagem no canal do Discord.
    *
-   * ATENÇÃO: apesar do nome do arquivo, o destino agora é o DISCORD, não o
-   * WhatsApp. A Z-API saiu de operação e o canal passou a ser um servidor do
-   * Discord. O corpo do método foi redirecionado em vez de alterar os ~8 lugares
-   * que o chamam — a montagem das mensagens continua idêntica.
+   * ACRÉSCIMO — não interfere no envio da Z-API. É disparado sem `await` de
+   * propósito: o tempo de resposta e o valor devolvido por sendMessage()
+   * continuam exatamente os mesmos de antes. Qualquer erro do Discord morre
+   * aqui dentro e nunca sobe para quem chamou.
    *
-   * O parâmetro phoneNumber é mantido apenas por compatibilidade de assinatura:
-   * o Discord posta num canal, não para um destinatário. Ele é usado só no log.
-   *
-   * O código antigo da Z-API segue neste arquivo (checkPhoneNumber, zapiUrl) para
-   * facilitar a volta atrás, mas não é mais acionado por este método.
-   *
-   * @param {string} phoneNumber - Ignorado no envio; mantido para rastreabilidade
+   * O canal colapsa mensagens iguais numa janela curta, então o laço que
+   * percorre os contatos do WhatsApp — uma mensagem por contato — resulta em
+   * uma única mensagem no Discord. Ver services/notify/discord.js.
+   */
+  espelharNoDiscord(message, opts = {}) {
+    try {
+      require('../notify/discord')
+        .send(message, opts)
+        .catch((e) => console.error('❌ [DISCORD] Falha ao enviar:', e.message));
+    } catch (e) {
+      console.error('❌ [DISCORD] Falha ao carregar o canal:', e.message);
+    }
+  }
+
+  /**
+   * Envia mensagem de texto via WhatsApp
+   * @param {string} phoneNumber - Número de telefone no formato internacional
    * @param {string} message - Mensagem a ser enviada
-   * @param {object} [opts] - { critico: false } para mensagens informativas
-   *        (boas-vindas, teste). O canal só recebe falhas — ver notify/discord.js
+   * @param {object} [opts] - Só para o Discord: { critico: false } em mensagem
+   *        informativa (boas-vindas, teste). Ignorado pelo envio do WhatsApp.
    * @returns {Promise<object>}
    */
   async sendMessage(phoneNumber, message, opts = {}) {
-    const discord = require('../notify/discord');
+    // Antes do guard da Z-API: assim o Discord recebe o alerta mesmo que a
+    // Z-API esteja fora de operação, que foi o cenário que motivou o canal.
+    this.espelharNoDiscord(message, opts);
 
-    if (phoneNumber) {
-      console.log(`📤 [NOTIFY] Alerta referente ao contato ${this.maskPhone(String(phoneNumber).replace(/\D/g, ''))}`);
+    if (!this.configured) {
+      return {
+        success: false,
+        error: 'ZAPI não configurado'
+      };
     }
 
-    return discord.send(message, opts);
+    try {
+      const cleanNumber = phoneNumber.replace(/\D/g, '');
+      
+      console.log('📤 [ZAPI] Enviando mensagem');
+      console.log('📤 [ZAPI] Destinatário:', this.maskPhone(cleanNumber));
+      console.log('📤 [ZAPI] Preview:', message.substring(0, 50) + '...');
+
+      const response = await axios.post(
+        this.zapiUrl,
+        { 
+          phone: cleanNumber,
+          message: message 
+        },
+        { 
+          timeout: 15000,
+          headers: {
+            'Client-Token': this.clientToken,
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+
+      console.log('✅ [ZAPI] Mensagem enviada com sucesso');
+
+      return {
+        success: true,
+        messageId: response.data.zapiMessageId || response.data.messageId,
+        data: response.data
+      };
+    } catch (error) {
+      console.error('❌ [ZAPI] Erro ao enviar mensagem:', error.message);
+      
+      if (error.response) {
+        console.error('❌ [ZAPI] Status:', error.response.status);
+        console.error('❌ [ZAPI] Erro:', error.response.data?.error || error.response.statusText);
+      }
+
+      return {
+        success: false,
+        error: error.message,
+        statusCode: error.response?.status,
+        details: error.response?.data
+      };
+    }
   }
 
   /**
