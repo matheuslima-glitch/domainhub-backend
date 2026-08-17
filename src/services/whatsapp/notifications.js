@@ -1319,7 +1319,7 @@ class NotificationService {
       message += `\n\n━━━━━━━━━━━━━━━━━━━━━\n\n⚡ Verifique AGORA na *Gestão de Domínios* e tome ação imediata!\n\n━━━━━━━━━━━━━━━━━━━━━`;
 
       console.log('📤 [TEST] Enviando mensagem com alertas');
-      const result = await whatsappService.sendMessage(profile.whatsapp_number, message, { critico: false });
+      const result = await whatsappService.sendMessage(profile.whatsapp_number, message);
       
       if (!result.success) {
         console.error('❌ [TEST] Falha ao enviar:', result.error);
@@ -1456,7 +1456,7 @@ class NotificationService {
         reportMessage += `\n\n━━━━━━━━━━━━━━━━━━━━━\n\n⚡ Verifique AGORA na *Gestão de Domínios* e tome ação imediata!\n\n━━━━━━━━━━━━━━━━━━━━━`;
 
         console.log('📤 [TEST-CONTACT] Enviando relatório de domínios críticos');
-            const reportResult = await whatsappService.sendMessage(phoneNumber, reportMessage, { critico: false });
+            const reportResult = await whatsappService.sendMessage(phoneNumber, reportMessage);
 
         if (!reportResult.success) {
               console.error('❌ [TEST-CONTACT] Falha ao enviar relatório:', reportResult.error);

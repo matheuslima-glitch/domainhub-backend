@@ -46,12 +46,9 @@ async function updateProgress(sessionId, step, status, message, domainName = nul
 /**
  * Notificação de WhatsApp específica do swap (mesmo Z-API do resto do sistema).
  */
-// Nome mantido por compatibilidade com as chamadas existentes.
-// O destino agora é o Discord — ver src/services/notify/discord.js
 async function sendSwapWhatsApp({ oldDomain, newDomain, status, errorMsg = '' }) {
-  // O canal recebe só falhas. Swap concluído com sucesso não notifica.
-  if (status !== 'error') {
-    console.log(`🔕 [NOTIFY-SWAP] ${oldDomain} -> ${newDomain} concluído - sem notificação (canal recebe só falhas)`);
+  if (!config.ZAPI_INSTANCE || !config.ZAPI_CLIENT_TOKEN) {
+    console.log('⚠️ [WHATSAPP-SWAP] ZAPI não configurado');
     return;
   }
 
@@ -78,16 +75,29 @@ async function sendSwapWhatsApp({ oldDomain, newDomain, status, errorMsg = '' })
         `❌Erro: ${errorMsg}\n` +
         `🗓️Data: ${dataFormatada} ás ${horaFormatada}`;
 
-    const discord = require('../../services/notify/discord');
-    const result = await discord.send(message);
-
-    if (result.success) {
-      console.log('✅ [NOTIFY-SWAP] Notificação enviada ao Discord');
-    } else {
-      console.error(`❌ [NOTIFY-SWAP] Falha ao notificar: ${result.error}`);
+    // ACRESCIMO: o mesmo texto tambem vai para o canal do Discord. Disparado
+    // sem `await` para nao alterar o tempo nem o resultado do envio da Z-API
+    // abaixo. Sucesso e informativo; erro e falha e marca @everyone no canal.
+    try {
+      require('../../services/notify/discord')
+        .send(message, { critico: status !== 'success' })
+        .catch((e) => console.error('❌ [DISCORD] Falha ao enviar:', e.message));
+    } catch (e) {
+      console.error('❌ [DISCORD] Falha ao carregar o canal:', e.message);
     }
+
+    await axios.post(
+      config.ZAPI_INSTANCE,
+      { phone: String(config.WHATSAPP_PHONE_NUMBER || '').replace(/\D/g, ''), message },
+      {
+        timeout: 10000,
+        headers: { 'Client-Token': config.ZAPI_CLIENT_TOKEN, 'Content-Type': 'application/json' }
+      }
+    );
+
+    console.log('✅ [WHATSAPP-SWAP] Notificação enviada');
   } catch (e) {
-    console.error('❌ [NOTIFY-SWAP] Erro ao enviar:', e.message);
+    console.error('❌ [WHATSAPP-SWAP] Erro ao enviar:', e.message);
   }
 }
 
