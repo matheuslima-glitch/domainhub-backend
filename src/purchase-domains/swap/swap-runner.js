@@ -46,9 +46,12 @@ async function updateProgress(sessionId, step, status, message, domainName = nul
 /**
  * Notificação de WhatsApp específica do swap (mesmo Z-API do resto do sistema).
  */
+// Nome mantido por compatibilidade com as chamadas existentes.
+// O destino agora é o Discord — ver src/services/notify/discord.js
 async function sendSwapWhatsApp({ oldDomain, newDomain, status, errorMsg = '' }) {
-  if (!config.ZAPI_INSTANCE || !config.ZAPI_CLIENT_TOKEN) {
-    console.log('⚠️ [WHATSAPP-SWAP] ZAPI não configurado');
+  // O canal recebe só falhas. Swap concluído com sucesso não notifica.
+  if (status !== 'error') {
+    console.log(`🔕 [NOTIFY-SWAP] ${oldDomain} -> ${newDomain} concluído - sem notificação (canal recebe só falhas)`);
     return;
   }
 
@@ -75,18 +78,16 @@ async function sendSwapWhatsApp({ oldDomain, newDomain, status, errorMsg = '' })
         `❌Erro: ${errorMsg}\n` +
         `🗓️Data: ${dataFormatada} ás ${horaFormatada}`;
 
-    await axios.post(
-      config.ZAPI_INSTANCE,
-      { phone: String(config.WHATSAPP_PHONE_NUMBER || '').replace(/\D/g, ''), message },
-      {
-        timeout: 10000,
-        headers: { 'Client-Token': config.ZAPI_CLIENT_TOKEN, 'Content-Type': 'application/json' }
-      }
-    );
+    const discord = require('../../services/notify/discord');
+    const result = await discord.send(message);
 
-    console.log('✅ [WHATSAPP-SWAP] Notificação enviada');
+    if (result.success) {
+      console.log('✅ [NOTIFY-SWAP] Notificação enviada ao Discord');
+    } else {
+      console.error(`❌ [NOTIFY-SWAP] Falha ao notificar: ${result.error}`);
+    }
   } catch (e) {
-    console.error('❌ [WHATSAPP-SWAP] Erro ao enviar:', e.message);
+    console.error('❌ [NOTIFY-SWAP] Erro ao enviar:', e.message);
   }
 }
 
