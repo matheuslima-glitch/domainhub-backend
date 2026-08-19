@@ -389,13 +389,33 @@ cron.schedule('45 */6 * * *', async () => {
   }
 });
 
+// ============================================
+// VIEWS DIÁRIAS (CLOUDFLARE)
+//
+// Traz os três campos que a tabela mensal nunca respondeu: views nos últimos 14
+// dias, data da última view e views nesse dia. Roda 1x por dia às 05:20 UTC — a
+// série do Cloudflare é diária, então consultar de hora em hora não traria nada
+// novo, e o horário evita colidir com os outros três crons.
+// ============================================
+cron.schedule('20 5 * * *', async () => {
+  console.log('📊 [CRON] Iniciando coleta de views diárias (Cloudflare)...');
+
+  try {
+    const cloudflareAnalytics = require('./services/cloudflare/analytics');
+    await cloudflareAnalytics.syncDailyViews();
+  } catch (error) {
+    console.error('❌ [CRON] Erro na coleta de views diárias:', error.message);
+  }
+});
+
 app.listen(config.PORT, async () => {
   console.log(`Servidor rodando na porta ${config.PORT}`);
   console.log(`Ambiente: ${config.NODE_ENV}`);
   console.log('🕐 Cron de domínios configurado: A cada 4 horas');
   console.log('📦 Processamento em lotes de 100 domínios');
   console.log('🌐 Cron de domínios externos (RDAP): A cada 6 horas');
-  
+  console.log('📊 Cron de views diárias (Cloudflare): 1x por dia às 05:20 UTC');
+
   const namecheapBalance = require('./services/namecheap/balance');
   const ip = await namecheapBalance.getServerIP();
   console.log(`IP do servidor: ${ip}`);
