@@ -48,6 +48,9 @@ from public.domain_monthly_stats;
 -- 2. Reversão
 -- -----------------------------------------------------
 
+-- A view depende da tabela, então cai primeiro.
+drop view if exists public.monthly_uniques_totals;
+
 drop index if exists public.domain_monthly_stats_periodo_idx;
 
 drop table if exists public.domain_monthly_stats;
@@ -70,11 +73,11 @@ where table_schema = 'public'
   and table_name = 'domains'
   and column_name in ('uniques_14d', 'uniques_last_day', 'monthly_uniques', 'monthly_uniques_ref');
 
--- A tabela nova não deve mais existir.
+-- Nem a tabela nem a view devem mais existir.
 select table_name
 from information_schema.tables
 where table_schema = 'public'
-  and table_name = 'domain_monthly_stats';
+  and table_name in ('domain_monthly_stats', 'monthly_uniques_totals');
 
 
 -- -----------------------------------------------------

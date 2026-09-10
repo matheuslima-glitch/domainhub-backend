@@ -166,7 +166,44 @@ create policy "leitura para autenticados"
 
 
 -- -----------------------------------------------------
--- 5. Conferência — rode junto e verifique a saída
+-- 5. Total por mês — view para o Dashboard
+-- -----------------------------------------------------
+--
+-- O gráfico do Dashboard mostra a rede inteira, mês a mês. Sem esta view o
+-- painel teria de baixar uma linha por domínio e por mês — ~10 mil linhas, o
+-- que estoura o limite de 1.000 do PostgREST e obrigaria a paginar para somar
+-- no navegador. A view devolve uma linha por mês.
+--
+-- ⚠️ LEIA O QUE ESTE NÚMERO É: soma dos visitantes de cada domínio.
+--
+-- NÃO é "quantas pessoas distintas visitaram a rede". Quem entrou em dois
+-- domínios no mesmo mês é contado duas vezes, porque a dedução do Cloudflare
+-- acontece dentro de cada zona. Não há como deduplicar entre zonas com este
+-- dataset. O painel rotula a série de acordo, e a coluna `dominios` deixa ver
+-- quantos entraram em cada mês.
+--
+-- security_invoker faz a view respeitar a política da tabela de baixo, em vez
+-- de rodar com os poderes do dono e passar por cima dela.
+
+create or replace view public.monthly_uniques_totals
+with (security_invoker = true) as
+select
+  ano,
+  mes,
+  sum(uniques)::bigint  as uniques,
+  sum(requests)::bigint as requests,
+  count(*)::int         as dominios
+from public.domain_monthly_stats
+group by ano, mes;
+
+comment on view public.monthly_uniques_totals is
+  'Soma mensal por domínio. NÃO é visitante distinto na rede: quem visita dois domínios conta duas vezes.';
+
+grant select on public.monthly_uniques_totals to authenticated;
+
+
+-- -----------------------------------------------------
+-- 6. Conferência — rode junto e verifique a saída
 -- -----------------------------------------------------
 
 -- Devem aparecer as quatro colunas novas em `domains`.
