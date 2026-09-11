@@ -300,10 +300,22 @@ class CloudflareMonthlyService {
               page_views: m.pageViews
             });
 
+            // As requisições do MESMO mês vão junto, e não por capricho.
+            //
+            // Sem elas o painel compararia `monthly_uniques` com
+            // `monthly_visits`, que é a fotografia congelada de 15/08/2026 e
+            // tem mês diferente em cada linha. Medido em 11/09/2026: em 98 dos
+            // 969 domínios (10,1%) os visitantes ficavam MAIORES que as
+            // visitas, o que é impossível e faria o dado novo parecer quebrado.
+            // Contra as requisições do mesmo mês: zero casos.
             if (espelhar) {
               espelhos.push({
                 id: d.id,
-                campos: { monthly_uniques: m.uniques, monthly_uniques_ref: de }
+                campos: {
+                  monthly_uniques: m.uniques,
+                  monthly_requests: m.requests,
+                  monthly_uniques_ref: de
+                }
               });
             }
           });
