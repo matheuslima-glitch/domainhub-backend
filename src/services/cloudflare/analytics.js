@@ -184,6 +184,41 @@ class CloudflareAnalyticsService {
   }
 
   /**
+   * TODOS os domínios, em páginas.
+   *
+   * `.select()` sem paginação devolve no máximo 1.000 linhas — é o teto padrão
+   * do PostgREST, e ele não avisa: não há erro nem aviso, a resposta
+   * simplesmente vem cortada. Medido em 11/09/2026: a tabela tem 2.697
+   * domínios e o select devolvia 1.000.
+   *
+   * Pior que o corte era ele não ser estável. Sem `order by`, o Postgres não
+   * garante QUAIS mil voltam, então cada rodada media um recorte diferente da
+   * base. O resultado no banco era uma colcha de retalhos: 1.095 domínios com
+   * `views_14d` preenchido em datas diferentes, nenhum deles medido todo dia.
+   * Por isso a ordenação por `id` importa tanto quanto o laço.
+   */
+  async listarDominios() {
+    const POR_PAGINA = 1000;
+    const todos = [];
+
+    for (let inicio = 0; ; inicio += POR_PAGINA) {
+      const { data, error } = await this.client
+        .from('domains')
+        .select('id, domain_name')
+        .order('id', { ascending: true })
+        .range(inicio, inicio + POR_PAGINA - 1);
+
+      if (error) throw new Error(`Supabase: ${error.message}`);
+      if (!data || data.length === 0) break;
+
+      todos.push(...data);
+      if (data.length < POR_PAGINA) break;
+    }
+
+    return todos;
+  }
+
+  /**
    * Série diária de um lote de zonas.
    *
    * O `zoneTag` volta no próprio resultado, então não dependemos da ordem do
@@ -346,11 +381,8 @@ class CloudflareAnalyticsService {
       const zonas = await this.listarZonas();
       console.log(`📊 [CF-ANALYTICS] ${zonas.size} zonas na conta Cloudflare`);
 
-      const { data: dominios, error } = await this.client
-        .from('domains')
-        .select('id, domain_name');
-
-      if (error) throw new Error(`Supabase: ${error.message}`);
+      const dominios = await this.listarDominios();
+      console.log(`📊 [CF-ANALYTICS] ${dominios.length} domínios na base`);
 
       // domínio -> zona. Comparação em minúsculo: `domains` tem 68 nomes em
       // caixa mista e o Cloudflare devolve tudo minúsculo.

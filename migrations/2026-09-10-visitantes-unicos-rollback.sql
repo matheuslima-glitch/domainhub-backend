@@ -55,11 +55,14 @@ drop index if exists public.domain_monthly_stats_periodo_idx;
 
 drop table if exists public.domain_monthly_stats;
 
+-- `monthly_requests` vem de 2026-09-11-requisicoes-do-mes.sql e cai junto: ela
+-- só existe para dar par a `monthly_uniques`, e sem ela não serve para nada.
 alter table public.domains
   drop column if exists uniques_14d,
   drop column if exists uniques_last_day,
   drop column if exists monthly_uniques,
-  drop column if exists monthly_uniques_ref;
+  drop column if exists monthly_uniques_ref,
+  drop column if exists monthly_requests;
 
 
 -- -----------------------------------------------------
@@ -71,7 +74,8 @@ select column_name
 from information_schema.columns
 where table_schema = 'public'
   and table_name = 'domains'
-  and column_name in ('uniques_14d', 'uniques_last_day', 'monthly_uniques', 'monthly_uniques_ref');
+  and column_name in ('uniques_14d', 'uniques_last_day', 'monthly_uniques',
+                      'monthly_uniques_ref', 'monthly_requests');
 
 -- Nem a tabela nem a view devem mais existir.
 select table_name
