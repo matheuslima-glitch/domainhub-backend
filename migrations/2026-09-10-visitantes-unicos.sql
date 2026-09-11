@@ -142,26 +142,52 @@ create index if not exists domain_monthly_stats_periodo_idx
 -- 4. Permissão de leitura para o painel
 -- -----------------------------------------------------
 --
--- ⚠️ CONFIRA ANTES DE RODAR: a política abaixo libera leitura para qualquer
--- usuário autenticado, que é o padrão mais comum. Se `domains` e
--- `domain_analytics` usarem regra diferente nesse projeto, ajuste para a mesma
--- regra delas — a consulta abaixo mostra o que elas fazem hoje:
+-- A regra espelha a de `domains` e `domain_analytics`, conferida em 11/09/2026:
+-- o usuário só enxerga o que pertence ao seu dono de dados.
 --
---   select tablename, policyname, roles, cmd, qual
---   from pg_policies
---   where schemaname = 'public' and tablename in ('domains', 'domain_analytics');
+--   domains           -> user_id = get_data_owner_id()
+--   domain_analytics  -> existe domínio com aquele nome e aquele dono
 --
--- O coletor do backend não depende disto: ele usa a service role, que passa
--- por cima de RLS. Isto existe só para o painel conseguir ler.
+-- Uma primeira versão desta migration liberava leitura para QUALQUER
+-- autenticado (`using (true)`). Estava errado: deixaria um usuário ler a série
+-- mensal de domínios de outro dono, que é justamente o que as duas tabelas
+-- vizinhas impedem. Se você aplicou aquela versão, rode
+-- migrations/2026-09-11-corrige-rls-monthly-stats.sql.
+--
+-- O join é por `domain_id`, e não pelo nome como em `domain_analytics`: aqui
+-- existe chave estrangeira de verdade, que é mais barata e não sofre com os 68
+-- domínios em caixa mista.
+--
+-- O coletor do backend não depende disto: usa a service role, que passa por
+-- cima de RLS. Isto existe só para o painel conseguir ler.
 
 alter table public.domain_monthly_stats enable row level security;
 
 drop policy if exists "leitura para autenticados" on public.domain_monthly_stats;
+drop policy if exists "Users can view accessible monthly stats" on public.domain_monthly_stats;
 
-create policy "leitura para autenticados"
+create policy "Users can view accessible monthly stats"
   on public.domain_monthly_stats
   for select
   to authenticated
+  using (
+    exists (
+      select 1
+      from public.domains d
+      where d.id = domain_monthly_stats.domain_id
+        and d.user_id = get_data_owner_id()
+    )
+  );
+
+-- Espelha "Service role full access domains". A service role já passa por cima
+-- de RLS no Supabase, então isto é redundante — existe para a tabela nova ter a
+-- mesma cara das vizinhas quando alguém for auditar as políticas.
+drop policy if exists "Service role full access monthly stats" on public.domain_monthly_stats;
+
+create policy "Service role full access monthly stats"
+  on public.domain_monthly_stats
+  for all
+  to service_role
   using (true);
 
 
