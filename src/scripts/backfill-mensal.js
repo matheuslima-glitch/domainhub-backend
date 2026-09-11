@@ -12,9 +12,12 @@
 //      SUPABASE_SERVICE_ROLE_KEY no ambiente
 //   3. COLETA_UNIQUES diferente de "false"
 //
-// QUANTO TEMPO LEVA: ~2 minutos por mês (~103 consultas a 1,1s cada). Os 11
-// meses levam cerca de 20 minutos. O ritmo é lento de propósito: a cota da
-// Cloudflare é de 300 consultas por 5 minutos, e o backfill inteiro são ~1.133.
+// QUANTO TEMPO LEVA: ~5 minutos por mês. Os 11 meses levam cerca de UMA HORA.
+//
+// Medido em 11/09/2026: um mês com 1.032 zonas levou 286s. O ritmo é lento de
+// propósito — a cota da Cloudflare é de 300 consultas por 5 minutos, e o
+// backfill inteiro são ~1.144. O script imprime a estimativa real no começo,
+// depois de contar as zonas.
 //
 // É SEGURO RODAR DE NOVO. A gravação é upsert por (domain_id, ano, mes): rodar
 // duas vezes reescreve as mesmas linhas com os mesmos valores. Se parar no

@@ -55,10 +55,15 @@ const ZONAS_POR_CONSULTA = 10;
 // 5 minutos — a mesma pausa do coletor diário serve.
 const PAUSA_CRON = 400;
 
-// Backfill: 11 meses × ~103 = ~1.133 consultas. Aí a cota aperta de verdade,
-// então descemos para ~1 consulta por segundo. A rodada leva cerca de 20
-// minutos, e é uma vez só na vida.
+// Backfill: 11 meses × ~104 lotes = ~1.144 consultas. Aí a cota aperta de
+// verdade, então descemos para ~1 consulta por segundo.
 const PAUSA_BACKFILL = 1100;
+
+// Quanto custa DE FATO um lote no ritmo do backfill: a pausa acima mais o
+// tempo de ida e volta da consulta. Medido em 11/09/2026 — um mês com 1.032
+// zonas levou 286s em 104 lotes. Serve só para a estimativa que o script
+// imprime; errar aqui não quebra nada, só desinforma quem está esperando.
+const SEGUNDOS_POR_LOTE = 2.8;
 
 const MESES_BACKFILL_PADRAO = 11;
 const LINHAS_POR_UPSERT = 500;
@@ -109,11 +114,9 @@ class CloudflareMonthlyService {
   async mapearDominiosPorZona() {
     const zonas = await analytics.listarZonas();
 
-    const { data: dominios, error } = await this.client
-      .from('domains')
-      .select('id, domain_name');
-
-    if (error) throw new Error(`Supabase: ${error.message}`);
+    // Paginado: `.select()` direto pararia em 1.000 das 2.697 linhas, sem
+    // reclamar. Ver listarDominios() em analytics.js.
+    const dominios = await analytics.listarDominios();
 
     const porZona = new Map();
     let semZona = 0;
@@ -128,7 +131,7 @@ class CloudflareMonthlyService {
       porZona.get(tag).push({ id: d.id, nome: d.domain_name });
     });
 
-    return { porZona, semZona, totalZonas: zonas.size };
+    return { porZona, semZona, totalZonas: zonas.size, totalDominios: dominios.length };
   }
 
   /**
@@ -252,11 +255,14 @@ class CloudflareMonthlyService {
 
     console.log(`📆 [CF-MENSAL] Fechando ${rotulo} (${de} a ${ate})`);
 
-    const { porZona, semZona, totalZonas } =
+    const { porZona, semZona, totalZonas, totalDominios } =
       opcoes.porZona ? opcoes.porZona : await this.mapearDominiosPorZona();
 
     if (!opcoes.porZona) {
-      console.log(`📆 [CF-MENSAL] ${totalZonas} zonas · ${semZona} domínios sem zona (ficam sem medição)`);
+      console.log(
+        `📆 [CF-MENSAL] ${totalDominios} domínios · ${totalZonas} zonas · ` +
+          `${semZona} sem zona (ficam sem medição)`
+      );
     }
 
     const tags = [...porZona.keys()];
@@ -364,11 +370,22 @@ class CloudflareMonthlyService {
 
     console.log('═══════════════════════════════════════════════════');
     console.log(`📆 [CF-MENSAL] BACKFILL de ${meses} meses`);
-    console.log(`   ~${meses * 103} consultas, ~${Math.round((meses * 103 * PAUSA_BACKFILL) / 60000)} minutos`);
     console.log('═══════════════════════════════════════════════════');
 
     const mapa = await this.mapearDominiosPorZona();
-    console.log(`📆 [CF-MENSAL] ${mapa.totalZonas} zonas · ${mapa.semZona} domínios sem zona`);
+    console.log(
+      `📆 [CF-MENSAL] ${mapa.totalDominios} domínios · ${mapa.totalZonas} zonas · ` +
+        `${mapa.semZona} sem zona`
+    );
+
+    // A estimativa só sai AQUI, depois de saber quantas zonas existem de fato.
+    // Antes ela era impressa antes da contagem, chutando 103 lotes, e somava
+    // apenas as pausas: prometia 20 minutos onde a rodada leva quase uma hora.
+    // Medido em 11/09/2026: um mês com 1.032 zonas levou 286s, ou ~2,8s por
+    // lote — a pausa de 1,1s mais o tempo de ida e volta da consulta.
+    const lotes = Math.ceil(mapa.porZona.size / ZONAS_POR_CONSULTA);
+    const minutosEstimados = Math.round((lotes * meses * SEGUNDOS_POR_LOTE) / 60);
+    console.log(`📆 [CF-MENSAL] ~${lotes * meses} consultas, ~${minutosEstimados} minutos`);
 
     const resultados = [];
 
