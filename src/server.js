@@ -408,6 +408,32 @@ cron.schedule('20 5 * * *', async () => {
   }
 });
 
+// ============================================
+// FECHAMENTO MENSAL (CLOUDFLARE)
+//
+// Grava o mês que acabou de fechar em `domain_monthly_stats`: visitantes únicos
+// e requisições, lado a lado. É a primeira coleta mensal que o sistema tem —
+// `monthly_visits` e `domain_analytics` são a importação congelada de agosto e
+// ninguém escreve neles.
+//
+// Roda no DIA 2, às 06:00 UTC. No dia 1 o mês mal fechou e a Cloudflare ainda
+// está consolidando as últimas horas; esperar um dia evita gravar mês curto. O
+// horário fica depois do cron diário das 05:20 para os dois não disputarem cota.
+//
+// O histórico anterior não vem daqui: é uma rodada única, manual, via
+// `npm run backfill:mensal`.
+// ============================================
+cron.schedule('0 6 2 * *', async () => {
+  console.log('📆 [CRON] Iniciando fechamento mensal (Cloudflare)...');
+
+  try {
+    const cloudflareMonthly = require('./services/cloudflare/monthly');
+    await cloudflareMonthly.fecharMes(1);
+  } catch (error) {
+    console.error('❌ [CRON] Erro no fechamento mensal:', error.message);
+  }
+});
+
 app.listen(config.PORT, async () => {
   console.log(`Servidor rodando na porta ${config.PORT}`);
   console.log(`Ambiente: ${config.NODE_ENV}`);
@@ -415,6 +441,7 @@ app.listen(config.PORT, async () => {
   console.log('📦 Processamento em lotes de 100 domínios');
   console.log('🌐 Cron de domínios externos (RDAP): A cada 6 horas');
   console.log('📊 Cron de views diárias (Cloudflare): 1x por dia às 05:20 UTC');
+  console.log('📆 Cron de fechamento mensal (Cloudflare): dia 2 às 06:00 UTC');
 
   const namecheapBalance = require('./services/namecheap/balance');
   const ip = await namecheapBalance.getServerIP();

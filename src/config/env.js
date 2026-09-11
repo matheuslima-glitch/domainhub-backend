@@ -55,6 +55,18 @@ if (missingCloudflare.length > 0) {
   console.warn('   Configuração de DNS e segurança será desabilitada');
 }
 
+// Coleta de visitantes únicos (Cloudflare).
+//
+// LIGADA por padrão. É o interruptor de emergência da mudança de 10/09/2026:
+// desligar aqui faz o coletor voltar a gravar só requisições, sem deploy e sem
+// depender das colunas novas existirem no banco. Use ao reverter a migration.
+const coletaUniques = String(process.env.COLETA_UNIQUES ?? 'true').toLowerCase() !== 'false';
+
+if (!coletaUniques) {
+  console.warn('⚠️ COLETA_UNIQUES=false - visitantes únicos NÃO serão coletados');
+  console.warn('   O coletor gravará apenas requisições, como antes de 10/09/2026');
+}
+
 // Verificar variáveis WhatsApp
 if (!process.env.ZAPI_INSTANCE || !process.env.ZAPI_CLIENT_TOKEN) {
   console.warn('⚠️ Z-API não configurado - notificações WhatsApp desabilitadas');
@@ -77,6 +89,7 @@ console.log(`${missingWordpress.length === 0 ? '✅' : '⚠️'} WordPress: ${mi
 console.log(`${missingCloudflare.length === 0 ? '✅' : '⚠️'} Cloudflare: ${missingCloudflare.length === 0 ? 'Configurado' : 'Parcialmente configurado'}`);
 console.log(`${process.env.ZAPI_INSTANCE ? '✅' : '⚠️'} WhatsApp: ${process.env.ZAPI_INSTANCE ? 'Configurado' : 'Não configurado'}`);
 console.log(`${process.env.DISCORD_WEBHOOK_URL ? '✅' : '❌'} Discord: ${process.env.DISCORD_WEBHOOK_URL ? 'Configurado' : 'NÃO CONFIGURADO'}`);
+console.log(`${coletaUniques ? '✅' : '⏸️'} Visitantes únicos: ${coletaUniques ? 'Coleta ligada' : 'DESLIGADA (COLETA_UNIQUES=false)'}`);
 console.log('=====================================\n');
 
 module.exports = {
@@ -102,6 +115,9 @@ module.exports = {
   CLOUDFLARE_API_KEY: process.env.CLOUDFLARE_API_KEY,
   CLOUDFLARE_ACCOUNT_ID: process.env.CLOUDFLARE_ACCOUNT_ID,
   CLOUDFLARE_MAIN_ZONE_ID: process.env.CLOUDFLARE_MAIN_ZONE_ID,
+
+  // Interruptor da coleta de visitantes únicos. Ver o bloco acima.
+  COLETA_UNIQUES: coletaUniques,
 
   // cPanel/Softaculous (WordPress)
   CPANEL_URL: process.env.CPANEL_URL || 'https://nexus.servidor.net.br:2083',

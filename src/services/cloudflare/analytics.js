@@ -22,11 +22,33 @@
 // mas varia de 1,8 a mais de 4.000 conforme o site — não existe conversão.
 //
 // Manter `requests` aqui preserva a comparabilidade com a coluna que já existe:
-// as três colunas novas falam a mesma língua do resto do export. Trocar para
-// `pageViews` daria o número honesto de visualizações, mas colocaria na mesma
-// linha dois números 40x diferentes sem explicação. Se algum dia o time decidir
-// migrar, é trocar METRICA abaixo e renomear as colunas junto — nunca só uma
-// das duas coisas.
+// as três colunas de visita falam a mesma língua do resto do export.
+//
+// VISITANTES ÚNICOS — acrescentados em 10/09/2026, AO LADO das requisições
+//
+// O time decidiu ter as duas leituras, não trocar uma pela outra. `requests`
+// responde "quanto o site foi acionado"; `uniques` responde "quanta gente
+// esteve lá". Medido nas 1.030 zonas da conta, em 14 dias fechados:
+//
+//   603.352.989 requisições  ->  7.324.466 visitantes únicos   (82x)
+//
+// E a razão não é constante: vai de 2,2x a 1.125x conforme o peso da página.
+// Por isso nenhuma das duas colunas pode ser derivada da outra por cálculo, e
+// por isso o ranking de maiores domínios muda de ORDEM entre as duas leituras.
+//
+// A REGRA QUE NÃO PODE SER QUEBRADA: uniques não se somam.
+//
+// A dedução é por endereço, dentro da janela do grupo. Somar os uniques de 14
+// dias conta cinco vezes quem voltou em cinco dias — medimos inflação de 1,03x
+// a 3,71x entre domínios. Então o total da janela vem de uma consulta PRÓPRIA,
+// sem a dimensão de data, e nunca da série diária. Ver consultarJanela().
+//
+// Requisições continuam vindo da série diária e sendo somadas, como sempre —
+// para elas somar está certo.
+//
+// DESLIGAR SEM DEPLOY: COLETA_UNIQUES=false no Render. Com a flag desligada
+// este serviço volta a se comportar exatamente como antes de 10/09/2026,
+// inclusive sem depender das colunas novas existirem no banco.
 // =====================================================
 
 const axios = require('axios');
@@ -38,11 +60,20 @@ const API_GRAPHQL = 'https://api.cloudflare.com/client/v4/graphql';
 
 const METRICA = 'requests';
 
+// Interruptor de emergência. Desligado, o serviço faz exatamente o que fazia
+// antes de 10/09/2026: só requisições, sem tocar nas colunas de uniques.
+const COLETA_UNIQUES = config.COLETA_UNIQUES;
+
 // O Cloudflare aceita no máximo 10 zonas por consulta com escopo de zona.
 const ZONAS_POR_CONSULTA = 10;
 
-// A cota é de 300 consultas por janela de 5 minutos. Com ~1.000 zonas são ~100
-// consultas; a pausa mantém folga larga mesmo se a base crescer.
+// A cota é de 300 consultas por janela de 5 minutos.
+//
+// Com ~1.030 zonas e uniques LIGADO são duas consultas por lote: ~206 por
+// rodada, contra as ~103 de antes. Continua dentro da cota, mas a folga
+// encolheu pela metade. Se a conta passar de ~1.400 zonas, aumente esta pausa
+// ou divida a rodada em duas — não vá pelo caminho de juntar as duas consultas
+// numa só, porque é a ausência da dimensão de data que faz a dedução funcionar.
 const PAUSA_ENTRE_CONSULTAS = 400;
 
 const DIAS = 14;
@@ -125,34 +156,11 @@ class CloudflareAnalyticsService {
     return zonas;
   }
 
-  /**
-   * Série diária de um lote de zonas.
-   *
-   * O `zoneTag` volta no próprio resultado, então não dependemos da ordem do
-   * array para saber de quem é cada série — o que seria frágil.
-   */
-  async consultarLote(zoneTags, de, ate) {
-    const consulta = {
-      query: `{
-        viewer {
-          zones(filter: { zoneTag_in: ${JSON.stringify(zoneTags)} }) {
-            zoneTag
-            httpRequests1dGroups(
-              limit: ${DIAS + 2}
-              filter: { date_geq: "${de}", date_leq: "${ate}" }
-              orderBy: [date_DESC]
-            ) {
-              dimensions { date }
-              sum { ${METRICA} }
-            }
-          }
-        }
-      }`
-    };
-
+  /** Dispara a consulta com as tentativas de sempre. `null` = desistimos. */
+  async executar(query, rotulo) {
     for (let tentativa = 1; tentativa <= TENTATIVAS; tentativa++) {
       try {
-        const { data } = await axios.post(API_GRAPHQL, consulta, {
+        const { data } = await axios.post(API_GRAPHQL, { query }, {
           headers: this.cabecalhos,
           timeout: REQUEST_TIMEOUT
         });
@@ -165,7 +173,7 @@ class CloudflareAnalyticsService {
       } catch (erro) {
         const ultima = tentativa === TENTATIVAS;
         console.error(
-          `⚠️ [CF-ANALYTICS] Lote falhou (${tentativa}/${TENTATIVAS}): ${erro.message}`
+          `⚠️ [CF-ANALYTICS] ${rotulo} falhou (${tentativa}/${TENTATIVAS}): ${erro.message}`
         );
         if (ultima) return null;
         await this.pausa(PAUSA_ENTRE_TENTATIVAS);
@@ -176,6 +184,65 @@ class CloudflareAnalyticsService {
   }
 
   /**
+   * Série diária de um lote de zonas.
+   *
+   * O `zoneTag` volta no próprio resultado, então não dependemos da ordem do
+   * array para saber de quem é cada série — o que seria frágil.
+   *
+   * `uniques` entra aqui só para saber quanta gente esteve no ÚLTIMO DIA. O
+   * total de 14 dias jamais sai desta consulta: ver consultarJanela().
+   */
+  async consultarLote(zoneTags, de, ate) {
+    const campoUniques = COLETA_UNIQUES ? 'uniq { uniques }' : '';
+
+    return this.executar(`{
+      viewer {
+        zones(filter: { zoneTag_in: ${JSON.stringify(zoneTags)} }) {
+          zoneTag
+          httpRequests1dGroups(
+            limit: ${DIAS + 2}
+            filter: { date_geq: "${de}", date_leq: "${ate}" }
+            orderBy: [date_DESC]
+          ) {
+            dimensions { date }
+            sum { ${METRICA} }
+            ${campoUniques}
+          }
+        }
+      }
+    }`, 'Lote diário');
+  }
+
+  /**
+   * Visitantes únicos da JANELA INTEIRA, num grupo só.
+   *
+   * A ausência de `dimensions { date }` é o ponto do método, não um descuido:
+   * é ela que faz a Cloudflare deduplicar sobre os 14 dias em vez de fechar
+   * dia a dia. Medido contra a soma da série diária, a diferença vai de 1,03x
+   * a 3,71x — quem volta ao site seria contado uma vez por dia de visita.
+   *
+   * Requisições não precisam disso (somar está certo para elas), mas voltam
+   * aqui de graça e servem de conferência: este `requests` tem de bater com o
+   * somado da série diária.
+   */
+  async consultarJanela(zoneTags, de, ate) {
+    return this.executar(`{
+      viewer {
+        zones(filter: { zoneTag_in: ${JSON.stringify(zoneTags)} }) {
+          zoneTag
+          httpRequests1dGroups(
+            limit: 1
+            filter: { date_geq: "${de}", date_leq: "${ate}" }
+          ) {
+            sum { ${METRICA} }
+            uniq { uniques }
+          }
+        }
+      }
+    }`, 'Janela agrupada');
+  }
+
+  /**
    * Calcula os três campos a partir da série diária.
    *
    * "Última view" é o dia mais recente com valor MAIOR QUE ZERO — não o dia mais
@@ -183,19 +250,38 @@ class CloudflareAnalyticsService {
    * justamente a data em que o tráfego cessou que interessa para decidir
    * exclusão.
    */
-  calcular(serie) {
+  calcular(serie, uniquesDaJanela) {
     const dias = (serie || [])
-      .map((d) => ({ data: d.dimensions.date, views: Number(d.sum[METRICA]) || 0 }))
+      .map((d) => ({
+        data: d.dimensions.date,
+        views: Number(d.sum[METRICA]) || 0,
+        uniques: d.uniq ? Number(d.uniq.uniques) || 0 : 0
+      }))
       .sort((a, b) => (a.data < b.data ? 1 : -1));
 
     const total = dias.reduce((s, d) => s + d.views, 0);
     const ultimo = dias.find((d) => d.views > 0) || null;
 
-    return {
+    const campos = {
       views_14d: total,
       last_view_date: ultimo ? ultimo.data : null,
       views_last_day: ultimo ? ultimo.views : 0
     };
+
+    // As duas colunas de uniques entram JUNTAS ou não entram. Se a consulta de
+    // janela falhou, `uniquesDaJanela` vem indefinido e nada é gravado: o valor
+    // da rodada anterior fica de pé, em vez de virar NULL por falha de rede.
+    // Gravar só o "último dia" também não serve — deixaria a linha dizendo
+    // quanta gente veio ontem e nada sobre os 14 dias.
+    //
+    // `last_view_date` serve às duas métricas: o dia em que o tráfego parou é o
+    // mesmo, porque toda requisição vem de algum visitante.
+    if (COLETA_UNIQUES && Number.isFinite(uniquesDaJanela)) {
+      campos.uniques_14d = uniquesDaJanela;
+      campos.uniques_last_day = ultimo ? ultimo.uniques : 0;
+    }
+
+    return campos;
   }
 
   async gravar(atualizacoes) {
@@ -227,12 +313,19 @@ class CloudflareAnalyticsService {
   }
 
   /**
-   * Sincroniza os três campos para todo domínio que tenha zona no Cloudflare.
+   * Sincroniza os campos de janela curta para todo domínio com zona na
+   * Cloudflare: três de requisição e, com a flag ligada, dois de visitante
+   * único.
    *
    * Quem não tem zona NÃO é tocado: os campos ficam NULL, e NULL aqui significa
    * "não medido", nunca "sem acesso". São 169 domínios ativos nessa condição —
    * quase todos AtomiCat, hospedados fora do Cloudflare. Gravar zero neles
    * repetiria o erro que a coluna `monthly_visits` já comete.
+   *
+   * Medido em 10/09/2026: das 1.030 zonas da conta, 942 (91,5%) têm visitante
+   * único registrado. As 88 restantes estão paradas ou em "DNS only" — e nessas
+   * a Cloudflare também não tem requisição, então a cobertura das duas métricas
+   * é exatamente a mesma. Ligar uniques não perde nenhum domínio.
    */
   async syncDailyViews() {
     if (!this.configurado) {
@@ -243,6 +336,11 @@ class CloudflareAnalyticsService {
     const inicio = Date.now();
     const { de, ate } = this.janela();
     console.log(`📊 [CF-ANALYTICS] Views diárias de ${de} a ${ate} (${DIAS} dias fechados)`);
+    console.log(
+      COLETA_UNIQUES
+        ? '📊 [CF-ANALYTICS] Visitantes únicos: LIGADO (2 consultas por lote)'
+        : '📊 [CF-ANALYTICS] Visitantes únicos: DESLIGADO (COLETA_UNIQUES=false)'
+    );
 
     try {
       const zonas = await this.listarZonas();
@@ -278,16 +376,39 @@ class CloudflareAnalyticsService {
       const tags = [...porZona.keys()];
       const atualizacoes = [];
       let lotesComFalha = 0;
+      let lotesUniquesComFalha = 0;
 
       for (let i = 0; i < tags.length; i += ZONAS_POR_CONSULTA) {
         const lote = tags.slice(i, i + ZONAS_POR_CONSULTA);
         const zonasResposta = await this.consultarLote(lote, de, ate);
 
+        // Segunda consulta do lote: o total deduplicado da janela. Não dá para
+        // tirar da série diária acima — somar uniques conta a mesma pessoa uma
+        // vez por dia em que ela voltou.
+        const uniquesPorZona = new Map();
+
+        if (COLETA_UNIQUES && zonasResposta !== null) {
+          await this.pausa(PAUSA_ENTRE_CONSULTAS);
+          const janela = await this.consultarJanela(lote, de, ate);
+
+          if (janela === null) {
+            // Falha só nos uniques: as requisições do lote continuam válidas e
+            // são gravadas normalmente. As colunas de uniques ficam como
+            // estavam, e a rodada de amanhã tenta de novo.
+            lotesUniquesComFalha += 1;
+          } else {
+            janela.forEach((z) => {
+              const grupo = (z.httpRequests1dGroups || [])[0];
+              uniquesPorZona.set(z.zoneTag, grupo ? Number(grupo.uniq.uniques) || 0 : 0);
+            });
+          }
+        }
+
         if (zonasResposta === null) {
           lotesComFalha += 1;
         } else {
           zonasResposta.forEach((z) => {
-            const campos = this.calcular(z.httpRequests1dGroups);
+            const campos = this.calcular(z.httpRequests1dGroups, uniquesPorZona.get(z.zoneTag));
             (porZona.get(z.zoneTag) || []).forEach((d) => {
               atualizacoes.push({ id: d.id, campos });
             });
@@ -312,12 +433,24 @@ class CloudflareAnalyticsService {
           (lotesComFalha ? ` · ${lotesComFalha} lote(s) falharam` : '')
       );
 
+      if (COLETA_UNIQUES) {
+        const comUniques = atualizacoes.filter((a) => Number.isFinite(a.campos.uniques_14d)).length;
+        const totalUniques = atualizacoes.reduce((s, a) => s + (a.campos.uniques_14d || 0), 0);
+        console.log(
+          `✅ [CF-ANALYTICS] ${comUniques} domínios com visitante único medido ` +
+            `(${totalUniques.toLocaleString('pt-BR')} únicos somando as zonas)` +
+            (lotesUniquesComFalha ? ` · ${lotesUniquesComFalha} lote(s) sem uniques` : '')
+        );
+      }
+
       return {
         sucesso: true,
         zonas: zonas.size,
         atualizados: gravados,
         semZona: semZona.length,
         lotesComFalha,
+        lotesUniquesComFalha,
+        uniques: COLETA_UNIQUES,
         segundos
       };
     } catch (erro) {
