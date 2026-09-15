@@ -455,8 +455,30 @@ class DomainDeactivationService {
       );
 
       if (response.data?.success) {
-        console.log(`   ✅ Zona Cloudflare removida com sucesso!`);
-        return { success: true, message: 'Zona Cloudflare removida com sucesso' };
+        // "A API respondeu 200" não é prova de que a zona sumiu. Conferimos
+        // consultando de volta — mesma razão pela qual removeWHMAccount já
+        // chama checkAccountStillExists desde a V7.
+        await this.delay(1500);
+        const confere = await this.confirmarAusencia(domainName);
+
+        if (confere.estado.cloudflare.situacao === 'ausente') {
+          console.log(`   ✅ Zona Cloudflare removida e confirmada!`);
+          return { success: true, message: 'Zona Cloudflare removida e confirmada' };
+        }
+
+        if (confere.estado.cloudflare.situacao === 'presente') {
+          console.log(`   ❌ A API aceitou o delete mas a zona CONTINUA lá`);
+          return {
+            success: false,
+            message: `A Cloudflare aceitou a remoção mas a zona continua existindo (${confere.estado.cloudflare.detalhe})`
+          };
+        }
+
+        console.log(`   ⚠️ Delete aceito, mas não deu para confirmar: ${confere.estado.cloudflare.detalhe}`);
+        return {
+          success: false,
+          message: `Remoção enviada, mas não foi possível confirmar: ${confere.estado.cloudflare.detalhe}`
+        };
       } else {
         console.log(`   ⚠️ Falha ao remover zona:`, response.data?.errors);
         return { success: false, message: response.data?.errors?.[0]?.message || 'Falha ao remover zona' };
@@ -468,12 +490,165 @@ class DomainDeactivationService {
   }
 
   /**
-   * DESATIVAR DOMÍNIO NO SUPABASE
+   * CONFIRMAR QUE O DOMÍNIO SUMIU DE TODOS OS SERVIÇOS
+   *
+   * Por que não dá para usar detectIntegrations() aqui: as três buscas dela
+   * (findWordPressInstallation, findWHMAccount, findCloudflareZone) engolem o
+   * erro e devolvem `null`. Um timeout da Cloudflare fica IDÊNTICO a "a zona
+   * não existe" — exatamente a confusão que permite marcar como desativado um
+   * domínio que continua no ar.
+   *
+   * Aqui cada serviço tem três estados, e "não consegui verificar" NÃO é
+   * "está limpo":
+   *
+   *   'ausente'        confirmado: o serviço respondeu e não tem o domínio
+   *   'presente'       confirmado: o serviço respondeu e ainda tem
+   *   'indeterminado'  o serviço não respondeu — não sabemos
+   *
+   * O WordPress é DERIVADO do WHM de propósito. A instalação vive dentro da
+   * conta cPanel (ver findWordPressInstallation), então conta ausente implica
+   * instalação ausente. E quando a conta ainda existe, o WHM já basta para
+   * barrar — não precisamos de uma verificação própria que teria os mesmos
+   * problemas de engolir erro.
    */
-  async deactivateInSupabase(domainId) {
+  async confirmarAusencia(domainName) {
+    const estado = {
+      cloudflare: { situacao: 'indeterminado', detalhe: null },
+      whm: { situacao: 'indeterminado', detalhe: null },
+      wordpress: { situacao: 'indeterminado', detalhe: null }
+    };
+
+    // ── Cloudflare ────────────────────────────────────────────────────
+    if (!config.CLOUDFLARE_EMAIL || !config.CLOUDFLARE_API_KEY) {
+      estado.cloudflare.detalhe = 'Cloudflare não configurado — impossível verificar';
+    } else {
+      try {
+        const resposta = await axios.get(`${this.cloudflareAPI}/zones?name=${domainName}`, {
+          headers: {
+            'X-Auth-Email': config.CLOUDFLARE_EMAIL,
+            'X-Auth-Key': config.CLOUDFLARE_API_KEY,
+            'Content-Type': 'application/json'
+          },
+          timeout: this.defaultTimeout
+        });
+
+        if (resposta.data?.success !== true) {
+          estado.cloudflare.detalhe = `A Cloudflare recusou a consulta: ${JSON.stringify(resposta.data?.errors)}`;
+        } else {
+          const zonas = resposta.data?.result || [];
+          estado.cloudflare.situacao = zonas.length > 0 ? 'presente' : 'ausente';
+          if (zonas.length > 0) estado.cloudflare.detalhe = `zona ${zonas[0].id} (${zonas[0].status})`;
+        }
+      } catch (erro) {
+        estado.cloudflare.detalhe = `Não respondeu: ${erro.message}`;
+      }
+    }
+
+    // ── WHM ───────────────────────────────────────────────────────────
+    if (!config.WHM_URL || !config.WHM_API_TOKEN) {
+      estado.whm.detalhe = 'WHM não configurado — impossível verificar';
+    } else {
+      try {
+        const resposta = await axios.get(`${config.WHM_URL}/json-api/listaccts?api.version=1`, {
+          headers: { Authorization: `whm ${config.WHM_USERNAME}:${config.WHM_API_TOKEN}` },
+          timeout: this.defaultTimeout,
+          httpsAgent: new (require('https').Agent)({ rejectUnauthorized: false })
+        });
+
+        const contas = resposta.data?.data?.acct;
+        if (!Array.isArray(contas)) {
+          estado.whm.detalhe = 'Resposta do WHM sem a lista de contas';
+        } else {
+          const achada = contas.find((a) => a.domain === domainName);
+          estado.whm.situacao = achada ? 'presente' : 'ausente';
+          if (achada) estado.whm.detalhe = `conta ${achada.user}`;
+        }
+      } catch (erro) {
+        estado.whm.detalhe = `Não respondeu: ${erro.message}`;
+      }
+    }
+
+    // ── WordPress, derivado do WHM ────────────────────────────────────
+    if (estado.whm.situacao === 'ausente') {
+      estado.wordpress.situacao = 'ausente';
+      estado.wordpress.detalhe = 'conta cPanel não existe, então a instalação também não';
+    } else if (estado.whm.situacao === 'presente') {
+      estado.wordpress.detalhe = 'a conta cPanel ainda existe — resolva o WHM primeiro';
+    } else {
+      estado.wordpress.detalhe = 'depende do WHM, que não pôde ser verificado';
+    }
+
+    const pendencias = Object.entries(estado)
+      .filter(([, v]) => v.situacao !== 'ausente')
+      .map(([servico, v]) => `${servico}: ${v.situacao}${v.detalhe ? ` (${v.detalhe})` : ''}`);
+
+    return { estado, limpo: pendencias.length === 0, pendencias };
+  }
+
+  /**
+   * DESATIVAR DOMÍNIO NO SUPABASE — só quando REALMENTE saiu de tudo
+   *
+   * A trava mora aqui, e não no orquestrador, porque o painel chama as etapas
+   * uma a uma por endpoints separados: `/step/supabase` é acionável sozinho,
+   * sem passar por deactivateDomain(). Guardar só o orquestrador deixaria a
+   * porta da frente aberta.
+   *
+   * Antes de 15/09/2026 este método gravava incondicionalmente, e
+   * `overallSuccess` olhava apenas para ele. Resultado: WordPress, WHM e
+   * Cloudflare podiam falhar e a desativação ainda relatava ✅ SUCESSO — o
+   * domínio sumia do painel enquanto o site seguia no ar. Encontrado em
+   * theflashburn.online, marcado como desativado com a zona ativa e 286.289
+   * requisições nos 14 dias anteriores.
+   *
+   * Desligar a trava sem deploy: DESATIVACAO_ESTRITA=false no Render.
+   */
+  async deactivateInSupabase(domainId, domainNameConhecido = null) {
     console.log(`\n💾 [SUPABASE] Desativando domínio no banco de dados...`);
 
     try {
+      // O nome vem do banco quando não é passado: o painel manda só o id para
+      // `/step/supabase`, e sem o nome não há como verificar nada.
+      let domainName = domainNameConhecido;
+
+      if (!domainName) {
+        const { data, error } = await supabase
+          .from('domains')
+          .select('domain_name')
+          .eq('id', domainId)
+          .maybeSingle();
+
+        if (error) {
+          console.error(`   ❌ Erro ao ler o domínio: ${error.message}`);
+          return { success: false, message: `Erro ao ler o domínio: ${error.message}` };
+        }
+        if (!data) {
+          return { success: false, message: `Domínio ${domainId} não encontrado` };
+        }
+        domainName = data.domain_name;
+      }
+
+      if (config.DESATIVACAO_ESTRITA) {
+        console.log(`   🔒 Conferindo se ${domainName} saiu de todos os serviços...`);
+        const { limpo, pendencias } = await this.confirmarAusencia(domainName);
+
+        if (!limpo) {
+          console.log(`   ⛔ NÃO vou marcar como desativado. Ainda pendente:`);
+          pendencias.forEach((p) => console.log(`      • ${p}`));
+          return {
+            success: false,
+            bloqueado: true,
+            pendencias,
+            message:
+              `O domínio ainda não saiu de tudo, então NÃO foi marcado como desativado. ` +
+              `Pendente — ${pendencias.join(' · ')}`
+          };
+        }
+
+        console.log(`   ✅ Confirmado: fora do Cloudflare, do WHM e do WordPress.`);
+      } else {
+        console.warn(`   ⚠️ DESATIVACAO_ESTRITA=false — marcando sem conferir`);
+      }
+
       const { error } = await supabase
         .from('domains')
         .update({
@@ -562,14 +737,34 @@ class DomainDeactivationService {
         results.steps.cloudflare.message = 'Zona não encontrada no Cloudflare - etapa pulada';
       }
 
-      // ETAPA 5: Desativar no Supabase (sempre executa)
+      // ETAPA 5: Desativar no Supabase
+      //
+      // Continua sendo chamada mesmo com etapas anteriores falhando — não para
+      // gravar, e sim porque deactivateInSupabase() reconfere os três serviços
+      // e devolve a lista exata do que ficou pendente. É mais útil que um
+      // "pulado" genérico, e a gravação só acontece se estiver tudo limpo.
       results.steps.supabase.executed = true;
-      const supabaseResult = await this.deactivateInSupabase(domainId);
+      const supabaseResult = await this.deactivateInSupabase(domainId, domainName);
       results.steps.supabase.success = supabaseResult.success;
       results.steps.supabase.message = supabaseResult.message;
+      if (supabaseResult.pendencias) results.pendencias = supabaseResult.pendencias;
 
-      // Verificar sucesso geral
-      results.overallSuccess = results.steps.supabase.success;
+      // SUCESSO EXIGE QUE TUDO TENHA DADO CERTO.
+      //
+      // Antes de 15/09/2026 esta linha era `results.overallSuccess =
+      // results.steps.supabase.success`, e por isso WordPress, WHM e Cloudflare
+      // podiam falhar sem afetar o resultado: bastava a gravação no banco
+      // funcionar para o relatório dizer ✅ SUCESSO. O domínio saía do painel
+      // como desativado enquanto o site continuava no ar.
+      //
+      // Etapa PULADA (a integração não existia) não conta contra — ela não
+      // tinha o que fazer. Só as executadas precisam ter dado certo.
+      const executadasComFalha = Object.entries(results.steps)
+        .filter(([, s]) => s.executed && !s.success)
+        .map(([nome]) => nome);
+
+      results.overallSuccess = executadasComFalha.length === 0;
+      results.failedSteps = executadasComFalha;
       results.completedAt = new Date().toISOString();
 
       // Log final
@@ -580,7 +775,13 @@ class DomainDeactivationService {
       console.log(`   WHM: ${results.steps.whm.executed ? (results.steps.whm.success ? '✅' : '❌') : '⏭️'} ${results.steps.whm.message || ''}`);
       console.log(`   Cloudflare: ${results.steps.cloudflare.executed ? (results.steps.cloudflare.success ? '✅' : '❌') : '⏭️'} ${results.steps.cloudflare.message || ''}`);
       console.log(`   Supabase: ${results.steps.supabase.executed ? (results.steps.supabase.success ? '✅' : '❌') : '⏭️'} ${results.steps.supabase.message || ''}`);
-      console.log(`\n   Status Geral: ${results.overallSuccess ? '✅ SUCESSO' : '⚠️ PARCIAL/FALHA'}`);
+      if (results.overallSuccess) {
+        console.log(`\n   Status Geral: ✅ SUCESSO — saiu de todos os serviços e foi marcado no banco`);
+      } else {
+        console.log(`\n   Status Geral: ❌ NÃO CONCLUÍDO — etapa(s) com falha: ${results.failedSteps.join(', ')}`);
+        console.log(`   O domínio NÃO foi marcado como desativado e continua visível no painel.`);
+        (results.pendencias || []).forEach((p) => console.log(`      • ainda em ${p}`));
+      }
       console.log(`${'='.repeat(70)}\n`);
 
       return results;
