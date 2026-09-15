@@ -235,9 +235,22 @@ router.post('/step/supabase', async (req, res) => {
     }
     
     console.log(`\n📡 [API] Desativando no Supabase: ${domainId}`);
-    
+
     const result = await deactivationService.deactivateInSupabase(domainId);
-    
+
+    // 409 quando a trava barrou: não é erro do servidor nem pedido malformado,
+    // é o domínio ainda estar nos serviços. O painel já trata `success: false`
+    // mostrando a mensagem, então `pendencias` vai junto para quem quiser
+    // detalhar sem mudar o frontend.
+    if (result.bloqueado) {
+      return res.status(409).json({
+        success: false,
+        bloqueado: true,
+        pendencias: result.pendencias,
+        message: result.message
+      });
+    }
+
     res.json({
       success: result.success,
       message: result.message

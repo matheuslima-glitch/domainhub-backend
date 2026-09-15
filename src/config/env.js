@@ -55,6 +55,23 @@ if (missingCloudflare.length > 0) {
   console.warn('   Configuração de DNS e segurança será desabilitada');
 }
 
+// Desativação estrita de domínios.
+//
+// LIGADA por padrão. Com ela, um domínio só é marcado como `deactivated` no
+// banco depois de confirmado que saiu do Cloudflare, do WHM e do WordPress.
+// Se algum serviço ainda tiver o domínio — ou se não der para verificar — a
+// marcação é recusada e ele continua visível no painel.
+//
+// Desligar volta ao comportamento anterior a 15/09/2026, em que a gravação era
+// incondicional e a desativação relatava sucesso mesmo com as outras etapas
+// falhando. Só use se a trava estiver travando a operação por engano.
+const desativacaoEstrita = String(process.env.DESATIVACAO_ESTRITA ?? 'true').toLowerCase() !== 'false';
+
+if (!desativacaoEstrita) {
+  console.warn('⚠️ DESATIVACAO_ESTRITA=false - domínios serão marcados como desativados SEM verificação');
+  console.warn('   Um domínio pode sair do painel enquanto o site continua no ar');
+}
+
 // Coleta de visitantes únicos (Cloudflare).
 //
 // LIGADA por padrão. É o interruptor de emergência da mudança de 10/09/2026:
@@ -90,6 +107,7 @@ console.log(`${missingCloudflare.length === 0 ? '✅' : '⚠️'} Cloudflare: ${
 console.log(`${process.env.ZAPI_INSTANCE ? '✅' : '⚠️'} WhatsApp: ${process.env.ZAPI_INSTANCE ? 'Configurado' : 'Não configurado'}`);
 console.log(`${process.env.DISCORD_WEBHOOK_URL ? '✅' : '❌'} Discord: ${process.env.DISCORD_WEBHOOK_URL ? 'Configurado' : 'NÃO CONFIGURADO'}`);
 console.log(`${coletaUniques ? '✅' : '⏸️'} Visitantes únicos: ${coletaUniques ? 'Coleta ligada' : 'DESLIGADA (COLETA_UNIQUES=false)'}`);
+console.log(`${desativacaoEstrita ? '✅' : '⚠️'} Desativação estrita: ${desativacaoEstrita ? 'Só marca após confirmar remoção' : 'DESLIGADA - marca sem verificar'}`);
 console.log('=====================================\n');
 
 module.exports = {
@@ -118,6 +136,9 @@ module.exports = {
 
   // Interruptor da coleta de visitantes únicos. Ver o bloco acima.
   COLETA_UNIQUES: coletaUniques,
+
+  // Só marca domínio como desativado depois de confirmar que saiu de tudo.
+  DESATIVACAO_ESTRITA: desativacaoEstrita,
 
   // cPanel/Softaculous (WordPress)
   CPANEL_URL: process.env.CPANEL_URL || 'https://nexus.servidor.net.br:2083',
