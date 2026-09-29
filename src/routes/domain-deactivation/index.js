@@ -7,8 +7,41 @@
 const express = require('express');
 const router = express.Router();
 const DomainDeactivationService = require('../../services/domain-deactivation');
+const trava = require('../../services/exclusao');
 
 const deactivationService = new DomainDeactivationService();
+
+/**
+ * Pergunta à trava antes de destruir qualquer coisa.
+ *
+ * Aplicada nos QUATRO endpoints destrutivos, não só no /execute: os
+ * /step/* removem conta de hospedagem, zona de DNS e instalação de
+ * WordPress por conta própria. Proteger só o /execute deixaria a porta dos
+ * fundos aberta para quem chamasse os passos na mão.
+ *
+ * Devolve true quando pode seguir. Quando barra, já respondeu 409 — que é
+ * o mesmo código que a trava de desativação estrita usa, e que o painel já
+ * sabe tratar mostrando a mensagem.
+ */
+async function podeSeguir(req, res, { domainId, domainName }) {
+  const r = await trava.verificar({
+    domainId,
+    domainName,
+    userId: req.user && req.user.id,
+  });
+
+  if (r.permitido) return true;
+
+  console.log(`🔒 [EXCLUSAO] Barrado (${r.motivo}): ${domainName || domainId}`);
+  res.status(409).json({
+    success: false,
+    bloqueado: true,
+    motivo: r.motivo,
+    loteId: r.lote_id || null,
+    message: r.mensagem || "Esta exclusão precisa da aprovação de um super admin.",
+  });
+  return false;
+}
 
 /**
  * GET /api/domains/deactivation/detect/:domainName
@@ -57,8 +90,16 @@ router.post('/execute', async (req, res) => {
     console.log(`\n📡 [API] Recebida requisição de desativação:`);
     console.log(`   Domain ID: ${domainId}`);
     console.log(`   Domain Name: ${domainName}`);
-    
+
+    if (!(await podeSeguir(req, res, { domainId, domainName }))) return;
+
     const result = await deactivationService.deactivateDomain(domainId, domainName);
+
+    // Só registra o que de fato saiu: exclusão que falhou no meio não pode
+    // contar para a regra de ritmo.
+    if (result.overallSuccess) {
+      await trava.registrar({ domainId, domainName, userId: req.user && req.user.id });
+    }
     
     res.json({
       success: result.overallSuccess,
@@ -92,7 +133,9 @@ router.post('/step/wordpress', async (req, res) => {
     }
     
     console.log(`\n📡 [API] Desinstalando WordPress de: ${domainName}`);
-    
+
+    if (!(await podeSeguir(req, res, { domainName }))) return;
+
     // Buscar instalação
     const installation = await deactivationService.findWordPressInstallation(domainName);
     
@@ -140,7 +183,9 @@ router.post('/step/whm', async (req, res) => {
     }
     
     console.log(`\n📡 [API] Removendo conta WHM para: ${domainName}`);
-    
+
+    if (!(await podeSeguir(req, res, { domainName }))) return;
+
     // Verificar se existe
     const whmAccount = await deactivationService.findWHMAccount(domainName);
     
@@ -187,7 +232,9 @@ router.post('/step/cloudflare', async (req, res) => {
     }
     
     console.log(`\n📡 [API] Removendo zona Cloudflare: ${domainName}`);
-    
+
+    if (!(await podeSeguir(req, res, { domainName }))) return;
+
     // Verificar se existe
     const zone = await deactivationService.findCloudflareZone(domainName);
     
@@ -236,7 +283,16 @@ router.post('/step/supabase', async (req, res) => {
     
     console.log(`\n📡 [API] Desativando no Supabase: ${domainId}`);
 
+    if (!(await podeSeguir(req, res, { domainId }))) return;
+
     const result = await deactivationService.deactivateInSupabase(domainId);
+
+    // Este é o passo que tira o domínio do painel — é o marco da exclusão
+    // para a regra de ritmo. Os /step anteriores destroem infraestrutura mas
+    // podem ser repetidos; este é o que conta.
+    if (result.success) {
+      await trava.registrar({ domainId, userId: req.user && req.user.id });
+    }
 
     // 409 quando a trava barrou: não é erro do servidor nem pedido malformado,
     // é o domínio ainda estar nos serviços. O painel já trata `success: false`

@@ -58,6 +58,9 @@ app.use('/api', (req, res, next) => {
 app.use('/api/balance', balanceRoutes);
 app.use('/api/domains', require('./routes/domains'));
 app.use('/api/domains/deactivation', require('./routes/domain-deactivation'));
+// Pedidos de exclusao em lote: criar o pedido e avisar o Discord no mesmo
+// lugar, para nao existir pedido esperando sem ninguem saber.
+app.use('/api/exclusao-lote', require('./routes/exclusao-lote'));
 app.use('/api/purchase-domains', require('./routes/purchase-domains'));
 app.use('/api/swap-domains', require('./routes/swap-domains'));
 app.use('/api/whatsapp', require('./routes/whatsapp'));
