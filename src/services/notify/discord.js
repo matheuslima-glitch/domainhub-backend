@@ -151,14 +151,31 @@ class DiscordNotifier {
     try {
       console.log(`📤 [DISCORD] Enviando: ${conteudo.replace(/\n/g, ' ').substring(0, 60)}...`);
 
+      // Botão de link, quando quem chamou pedir um.
+      //
+      // Webhook comum de canal NÃO envia botão interativo — só aplicação
+      // Discord faz isso. O que dá para enviar é botão de LINK, e mesmo esse
+      // exige o parâmetro with_components=true na URL; sem ele o Discord
+      // ignora o campo em silêncio.
+      const corpo = {
+        username: 'DomainHub',
+        content: conteudo,
+        // Sem isto o Discord pode ignorar o @everyone vindo de webhook
+        allowed_mentions: { parse: ['everyone'] }
+      };
+
+      let url = this.webhookUrl;
+      if (opts.botao && opts.botao.url && opts.botao.rotulo) {
+        corpo.components = [{
+          type: 1,                                   // action row
+          components: [{ type: 2, style: 5, label: opts.botao.rotulo, url: opts.botao.url }]
+        }];
+        url += (url.includes('?') ? '&' : '?') + 'with_components=true';
+      }
+
       await axios.post(
-        this.webhookUrl,
-        {
-          username: 'DomainHub',
-          content: conteudo,
-          // Sem isto o Discord pode ignorar o @everyone vindo de webhook
-          allowed_mentions: { parse: ['everyone'] }
-        },
+        url,
+        corpo,
         { timeout: REQUEST_TIMEOUT, headers: { 'Content-Type': 'application/json' } }
       );
 

@@ -87,6 +87,18 @@ if (!exclusaoExigeAprovacao) {
   console.warn('⚠️ EXCLUSAO_EXIGE_APROVACAO=false - exclusão em massa liberada sem aprovação');
 }
 
+// Endereço público do painel, usado para montar o link do botão "Aprovar" que
+// vai no Discord.
+//
+// Sem ela o aviso continua saindo — só sem botão, com o pedido identificado
+// pelo id. Melhor um aviso sem atalho do que um botão apontando para lugar
+// nenhum.
+const painelUrl = (process.env.PAINEL_URL || '').replace(/\/+$/, '');
+
+if (exclusaoExigeAprovacao && !painelUrl) {
+  console.warn('⚠️ PAINEL_URL não configurada - o aviso de exclusão no Discord irá sem o botão Aprovar');
+}
+
 // Coleta de visitantes únicos (Cloudflare).
 //
 // LIGADA por padrão. É o interruptor de emergência da mudança de 10/09/2026:
@@ -155,6 +167,7 @@ module.exports = {
   // Só marca domínio como desativado depois de confirmar que saiu de tudo.
   DESATIVACAO_ESTRITA: desativacaoEstrita,
   EXCLUSAO_EXIGE_APROVACAO: exclusaoExigeAprovacao,
+  PAINEL_URL: painelUrl,
 
   // cPanel/Softaculous (WordPress)
   CPANEL_URL: process.env.CPANEL_URL || 'https://nexus.servidor.net.br:2083',

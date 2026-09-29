@@ -186,6 +186,12 @@ async function registrar({ domainId, domainName, userId }) {
  * Marca @everyone: foi o pedido do time, e é coerente com o resto do canal,
  * que já usa menção para o que precisa de ação humana.
  *
+ * O botão leva para a tela de aprovação NO PAINEL, e não aprova por si.
+ * A mensagem chega com @everyone, ou seja, todo o canal a vê: um botão que
+ * aprovasse sozinho entregaria a decisão para qualquer um que clicasse,
+ * inclusive para quem pediu a exclusão. Abrindo o painel, quem decide
+ * precisa estar logado e ser super admin, e a decisão fica no nome dele.
+ *
  * O id do pedido entra na mensagem de propósito — o notificador tem uma
  * janela de deduplicação de 60 segundos por conteúdo, e sem algo único dois
  * pedidos seguidos parecidos seriam engolidos.
@@ -210,8 +216,14 @@ async function avisarDiscord(lote) {
     `Pedido \`${lote.id}\` · vence em 24 horas`,
   ].filter((l) => l !== null);
 
+  // Sem PAINEL_URL o aviso sai sem botão, identificado pelo id. Melhor isso
+  // do que um botão que leva a lugar nenhum.
+  const botao = config.PAINEL_URL
+    ? { rotulo: 'Aprovar no painel', url: `${config.PAINEL_URL}/aprovacoes/${lote.id}` }
+    : null;
+
   try {
-    await require('../notify/discord').send(linhas.join('\n'), { critico: true });
+    await require('../notify/discord').send(linhas.join('\n'), { critico: true, botao });
   } catch (e) {
     // O pedido já está gravado; falhar o aviso não pode desfazer isso.
     console.error('❌ [EXCLUSAO] Falha ao avisar o Discord:', e.message);
