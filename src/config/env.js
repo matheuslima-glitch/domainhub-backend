@@ -72,6 +72,21 @@ if (!desativacaoEstrita) {
   console.warn('   Um domínio pode sair do painel enquanto o site continua no ar');
 }
 
+// Aprovação obrigatória para exclusão em massa.
+//
+// LIGADA por padrão. Com ela, excluir dois ou mais domínios de uma vez — ou a
+// terceira exclusão avulsa da mesma pessoa em 20 minutos — exige a aprovação
+// de um super admin antes de qualquer passo destrutivo.
+//
+// Desligar é o interruptor de emergência: a verificação passa a liberar tudo,
+// mas o REGISTRO de cada exclusão continua, para o histórico não ficar com
+// buraco durante o período desligado. Um restart no Render basta, sem deploy.
+const exclusaoExigeAprovacao = String(process.env.EXCLUSAO_EXIGE_APROVACAO ?? 'true').toLowerCase() !== 'false';
+
+if (!exclusaoExigeAprovacao) {
+  console.warn('⚠️ EXCLUSAO_EXIGE_APROVACAO=false - exclusão em massa liberada sem aprovação');
+}
+
 // Coleta de visitantes únicos (Cloudflare).
 //
 // LIGADA por padrão. É o interruptor de emergência da mudança de 10/09/2026:
@@ -139,6 +154,7 @@ module.exports = {
 
   // Só marca domínio como desativado depois de confirmar que saiu de tudo.
   DESATIVACAO_ESTRITA: desativacaoEstrita,
+  EXCLUSAO_EXIGE_APROVACAO: exclusaoExigeAprovacao,
 
   // cPanel/Softaculous (WordPress)
   CPANEL_URL: process.env.CPANEL_URL || 'https://nexus.servidor.net.br:2083',
