@@ -93,7 +93,20 @@ if (!exclusaoExigeAprovacao) {
 // Sem ela o aviso continua saindo — só sem botão, com o pedido identificado
 // pelo id. Melhor um aviso sem atalho do que um botão apontando para lugar
 // nenhum.
-const painelUrl = (process.env.PAINEL_URL || '').replace(/\/+$/, '');
+//
+// O valor é normalizado: espaços e barras do fim saem, e o https:// é
+// acrescentado quando falta. Não é frescura — o Discord recusa a MENSAGEM
+// INTEIRA quando a URL do botão é inválida, então um "domainhubgex.com" sem
+// esquema deixaria o time sem nem o texto do aviso.
+//
+// É só a base, sem caminho: o /aprovacoes/<id> é montado na hora de enviar.
+const painelUrlBruta = (process.env.PAINEL_URL || '').trim().replace(/\/+$/, '');
+const painelUrl =
+  painelUrlBruta && !/^https?:\/\//i.test(painelUrlBruta) ? `https://${painelUrlBruta}` : painelUrlBruta;
+
+if (painelUrlBruta && /\/aprovacoes/i.test(painelUrlBruta)) {
+  console.warn('⚠️ PAINEL_URL parece incluir /aprovacoes - use só a base, o caminho é acrescentado sozinho');
+}
 
 if (exclusaoExigeAprovacao && !painelUrl) {
   console.warn('⚠️ PAINEL_URL não configurada - o aviso de exclusão no Discord irá sem o botão Aprovar');
