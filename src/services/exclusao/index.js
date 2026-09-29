@@ -19,11 +19,21 @@
  * As regras em si estão no banco, em `pode_excluir_dominio()`. Este arquivo é
  * quem pergunta, e quem avisa o Discord.
  *
+ * O QUE ACONTECE QUANDO NÃO DÁ PARA VERIFICAR
+ *
+ * Barra. Banco fora, usuário não identificado, domínio fora da base: a
+ * exclusão é recusada. É preferível a equipe ficar sem excluir durante uma
+ * instabilidade a um domínio sair do ar sem a aprovação que a regra exige.
+ *
+ * A exceção é a trava não estar instalada no banco — aí libera, porque é o
+ * estado esperado entre mesclar este código e rodar a migration.
+ *
  * COMO DESLIGAR SEM DEPLOY
  *
  * EXCLUSAO_EXIGE_APROVACAO=false no Render. A verificação passa a devolver
  * "permitido" sempre, e o registro continua acontecendo — assim o histórico
- * não fica com buraco durante o período desligado.
+ * não fica com buraco durante o período desligado. É também a saída quando a
+ * trava barrar por engano e a operação não puder esperar.
  */
 
 const { createClient } = require('@supabase/supabase-js');
@@ -55,17 +65,41 @@ async function idDoDominio(domainName) {
 }
 
 /**
+ * A trava não está instalada?
+ *
+ * Distingue "a migration ainda não rodou" de "o banco está com problema".
+ * São situações opostas: a primeira é o estado normal antes da instalação e
+ * deve deixar tudo funcionar como antes; a segunda é falha e deve barrar.
+ *
+ * Sem essa distinção, mesclar o backend antes de rodar a migration pararia
+ * toda exclusão do painel.
+ */
+function travaNaoInstalada(error) {
+  const codigo = String(error.code || '');
+  const msg = String(error.message || '').toLowerCase();
+  return (
+    codigo === 'PGRST202' ||            // PostgREST: função não encontrada no schema
+    codigo === '42883' ||               // Postgres: undefined_function
+    msg.includes('could not find the function') ||
+    msg.includes('does not exist')
+  );
+}
+
+/**
  * Pergunta se esta pessoa pode excluir este domínio agora.
  *
- * Devolve sempre um objeto com `permitido`. Em caso de erro de infraestrutura
- * — banco fora, função ausente — devolve permitido: true e registra no log.
+ * BARRA quando não consegue verificar — decidido com o time em 29/09/2026.
+ * Banco fora, usuário não identificado, domínio que não está na base: em
+ * qualquer um desses a exclusão é recusada.
  *
- * Essa escolha merece explicação: uma trava que barra tudo quando o banco
- * oscila transformaria um problema de disponibilidade numa parada de
- * operação. O custo de errar para o lado permissivo é uma exclusão que
- * escapou; o de errar para o restritivo é ninguém conseguir trabalhar. Como o
- * registro de execuções continua funcionando, uma exclusão que escapa fica
- * visível depois.
+ * O raciocínio: é preferível a equipe ficar sem excluir durante uma
+ * instabilidade a um domínio sair do ar sem a aprovação que a regra exige.
+ * Quando isso atrapalhar de verdade, a saída é EXCLUSAO_EXIGE_APROVACAO=false
+ * no Render — um restart, sem deploy.
+ *
+ * A única exceção é a trava não estar instalada. Aí não há falha nenhuma: é
+ * o estado esperado entre mesclar o backend e rodar a migration, e barrar
+ * nessa janela pararia a operação por um motivo que não é risco.
  */
 async function verificar({ domainId, domainName, userId }) {
   if (!config.EXCLUSAO_EXIGE_APROVACAO) {
@@ -73,16 +107,25 @@ async function verificar({ domainId, domainName, userId }) {
   }
 
   if (!userId) {
-    // Sem saber quem é, não dá para aplicar a regra de ritmo. Não barra, mas
-    // avisa alto: significa que alguma rota perdeu o middleware de auth.
-    console.warn('⚠️ [EXCLUSAO] Chamada sem usuário identificado — trava não aplicada');
-    return { permitido: true, motivo: 'sem_usuario' };
+    // Chegar aqui significa que alguma rota perdeu o middleware de auth.
+    console.error('❌ [EXCLUSAO] Chamada sem usuário identificado — exclusão barrada');
+    return {
+      permitido: false,
+      motivo: 'sem_usuario',
+      mensagem: 'Não foi possível identificar quem está pedindo a exclusão. Entre novamente no painel.',
+    };
   }
 
   const id = domainId || (domainName ? await idDoDominio(domainName) : null);
   if (!id) {
-    console.warn(`⚠️ [EXCLUSAO] Domínio não encontrado (${domainName || domainId}) — trava não aplicada`);
-    return { permitido: true, motivo: 'dominio_desconhecido' };
+    console.error(`❌ [EXCLUSAO] Domínio não encontrado na base (${domainName || domainId}) — exclusão barrada`);
+    return {
+      permitido: false,
+      motivo: 'dominio_desconhecido',
+      mensagem:
+        'Este domínio não está cadastrado na base, então a trava não consegue verificá-lo. ' +
+        'Se for uma limpeza de resto órfão, peça a um super admin.',
+    };
   }
 
   const { data, error } = await supabase.rpc('pode_excluir_dominio', {
@@ -91,8 +134,19 @@ async function verificar({ domainId, domainName, userId }) {
   });
 
   if (error) {
-    console.error('❌ [EXCLUSAO] Falha ao consultar a trava:', error.message);
-    return { permitido: true, motivo: 'erro_na_trava', erro: error.message };
+    if (travaNaoInstalada(error)) {
+      console.warn('⚠️ [EXCLUSAO] Trava ainda não instalada no banco — rode a migration de 29/09');
+      return { permitido: true, motivo: 'trava_nao_instalada' };
+    }
+    console.error('❌ [EXCLUSAO] Falha ao consultar a trava — exclusão barrada:', error.message);
+    return {
+      permitido: false,
+      motivo: 'erro_na_trava',
+      erro: error.message,
+      mensagem:
+        'Não foi possível verificar a permissão de exclusão agora. ' +
+        'Tente de novo em alguns minutos; se persistir, avise a infraestrutura.',
+    };
   }
 
   return { ...data, domainId: id };
