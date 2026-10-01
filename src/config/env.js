@@ -124,6 +124,17 @@ if (!coletaUniques) {
   console.warn('   O coletor gravará apenas requisições, como antes de 10/09/2026');
 }
 
+// Interruptor da série DIÁRIA, no mesmo espírito do de cima: desligar aqui faz
+// o coletor voltar a descartar a quebra por dia, sem deploy e sem depender de
+// `domain_daily_stats` existir. Use ao reverter a migration de 01/10/2026 —
+// com a tabela fora e isto ligado, cada rodada falha no upsert e enche o log.
+const coletaDiaria = String(process.env.COLETA_DIARIA ?? 'true').toLowerCase() !== 'false';
+
+if (!coletaDiaria) {
+  console.warn('⚠️ COLETA_DIARIA=false - a série diária NÃO será gravada');
+  console.warn('   O coletor segue atualizando views_14d; só o detalhe por dia é descartado');
+}
+
 // Verificar variáveis WhatsApp
 if (!process.env.ZAPI_INSTANCE || !process.env.ZAPI_CLIENT_TOKEN) {
   console.warn('⚠️ Z-API não configurado - notificações WhatsApp desabilitadas');
@@ -147,6 +158,7 @@ console.log(`${missingCloudflare.length === 0 ? '✅' : '⚠️'} Cloudflare: ${
 console.log(`${process.env.ZAPI_INSTANCE ? '✅' : '⚠️'} WhatsApp: ${process.env.ZAPI_INSTANCE ? 'Configurado' : 'Não configurado'}`);
 console.log(`${process.env.DISCORD_WEBHOOK_URL ? '✅' : '❌'} Discord: ${process.env.DISCORD_WEBHOOK_URL ? 'Configurado' : 'NÃO CONFIGURADO'}`);
 console.log(`${coletaUniques ? '✅' : '⏸️'} Visitantes únicos: ${coletaUniques ? 'Coleta ligada' : 'DESLIGADA (COLETA_UNIQUES=false)'}`);
+console.log(`${coletaDiaria ? '✅' : '⏸️'} Série diária: ${coletaDiaria ? 'Coleta ligada' : 'DESLIGADA (COLETA_DIARIA=false)'}`);
 console.log(`${desativacaoEstrita ? '✅' : '⚠️'} Desativação estrita: ${desativacaoEstrita ? 'Só marca após confirmar remoção' : 'DESLIGADA - marca sem verificar'}`);
 console.log('=====================================\n');
 
@@ -176,6 +188,9 @@ module.exports = {
 
   // Interruptor da coleta de visitantes únicos. Ver o bloco acima.
   COLETA_UNIQUES: coletaUniques,
+
+  // Interruptor da série diária por domínio. Ver o bloco acima.
+  COLETA_DIARIA: coletaDiaria,
 
   // Só marca domínio como desativado depois de confirmar que saiu de tudo.
   DESATIVACAO_ESTRITA: desativacaoEstrita,
