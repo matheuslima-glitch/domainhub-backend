@@ -82,6 +82,11 @@ const TENTATIVAS = 3;
 const PAUSA_ENTRE_TENTATIVAS = 3000;
 const DOMINIOS_POR_GRAVACAO = 20;
 
+// A série diária gera 14 linhas por domínio, então o lote é maior: 20
+// domínios viravam 280 linhas, e o PostgREST aceita bem mais que isso num
+// upsert só.
+const LINHAS_POR_GRAVACAO = 500;
+
 class CloudflareAnalyticsService {
   constructor() {
     this.client = createClient(config.SUPABASE_URL, config.SUPABASE_SERVICE_KEY, {
@@ -319,6 +324,71 @@ class CloudflareAnalyticsService {
     return campos;
   }
 
+  /**
+   * Grava a série DIÁRIA em `domain_daily_stats`.
+   *
+   * O dado já veio: `consultarLote` pede `dimensions { date }` e o coletor
+   * usava isso só para somar `views_14d`. Aqui o detalhe é guardado.
+   *
+   * DIA COM ZERO VIRA LINHA, de propósito — ao contrário do coletor mensal,
+   * que pula zona sem dado. No diário a diferença importa: linha com
+   * `requests = 0` diz "medimos e não teve acesso"; linha AUSENTE diz "não
+   * medimos". O filtro de 60 dias precisa saber qual é qual.
+   *
+   * FALHA AQUI NÃO DERRUBA A RODADA. As colunas de `domains` são o que o
+   * painel lê hoje; a série diária é acréscimo. Se o upsert falhar, grita no
+   * log e a rodada de amanhã tenta de novo — o upsert é por
+   * (domain_id, data), então repetir reescreve o mesmo valor.
+   */
+  async gravarDiario(linhas) {
+    if (!linhas.length) return 0;
+
+    let gravadas = 0;
+
+    for (let i = 0; i < linhas.length; i += LINHAS_POR_GRAVACAO) {
+      const lote = linhas.slice(i, i + LINHAS_POR_GRAVACAO);
+
+      const { error } = await this.client
+        .from('domain_daily_stats')
+        .upsert(lote, { onConflict: 'domain_id,data' });
+
+      if (error) {
+        console.error(`❌ [CF-DIARIO] Falha ao gravar lote: ${error.message}`);
+      } else {
+        gravadas += lote.length;
+      }
+    }
+
+    return gravadas;
+  }
+
+  /**
+   * A série de uma zona virada em linhas de `domain_daily_stats`.
+   *
+   * Uma zona pode servir mais de um domínio, então a mesma série vira uma
+   * linha por domínio — igual ao que `calcular` já faz com `views_14d`.
+   */
+  linhasDiarias(serie, domainIds) {
+    const dias = (serie || []).map((d) => ({
+      data: d.dimensions.date,
+      requests: Number(d.sum[METRICA]) || 0,
+      uniques: d.uniq ? Number(d.uniq.uniques) || 0 : null
+    }));
+
+    const linhas = [];
+    domainIds.forEach((id) => {
+      dias.forEach((dia) => {
+        linhas.push({
+          domain_id: id,
+          data: dia.data,
+          requests: dia.requests,
+          uniques: dia.uniques
+        });
+      });
+    });
+    return linhas;
+  }
+
   async gravar(atualizacoes) {
     let gravados = 0;
 
@@ -407,6 +477,7 @@ class CloudflareAnalyticsService {
 
       const tags = [...porZona.keys()];
       const atualizacoes = [];
+      const linhasDoDia = [];
       let lotesComFalha = 0;
       let lotesUniquesComFalha = 0;
 
@@ -441,9 +512,22 @@ class CloudflareAnalyticsService {
         } else {
           zonasResposta.forEach((z) => {
             const campos = this.calcular(z.httpRequests1dGroups, uniquesPorZona.get(z.zoneTag));
-            (porZona.get(z.zoneTag) || []).forEach((d) => {
+            const dominiosDaZona = porZona.get(z.zoneTag) || [];
+
+            dominiosDaZona.forEach((d) => {
               atualizacoes.push({ id: d.id, campos });
             });
+
+            // A quebra por dia que `calcular` resume em views_14d. Guardada
+            // só se a coleta diária estiver ligada — ver COLETA_DIARIA.
+            if (config.COLETA_DIARIA) {
+              linhasDoDia.push(
+                ...this.linhasDiarias(
+                  z.httpRequests1dGroups,
+                  dominiosDaZona.map((d) => d.id)
+                )
+              );
+            }
           });
         }
 
@@ -456,6 +540,14 @@ class CloudflareAnalyticsService {
       }
 
       const gravados = await this.gravar(atualizacoes);
+
+      // Depois das colunas de `domains`, nunca antes: se a série diária
+      // falhar, o que o painel lê hoje já está salvo.
+      let diariasGravadas = 0;
+      if (config.COLETA_DIARIA) {
+        diariasGravadas = await this.gravarDiario(linhasDoDia);
+      }
+
       const segundos = Math.round((Date.now() - inicio) / 1000);
 
       const comAcesso = atualizacoes.filter((a) => a.campos.views_14d > 0).length;
@@ -464,6 +556,14 @@ class CloudflareAnalyticsService {
           `(${comAcesso} com acesso nos ${DIAS} dias)` +
           (lotesComFalha ? ` · ${lotesComFalha} lote(s) falharam` : '')
       );
+
+      if (config.COLETA_DIARIA) {
+        const faltaram = linhasDoDia.length - diariasGravadas;
+        console.log(
+          `✅ [CF-DIARIO] ${diariasGravadas} linhas de série diária gravadas` +
+            (faltaram ? ` · ${faltaram} falharam` : '')
+        );
+      }
 
       if (COLETA_UNIQUES) {
         const comUniques = atualizacoes.filter((a) => Number.isFinite(a.campos.uniques_14d)).length;
