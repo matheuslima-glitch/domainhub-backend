@@ -188,8 +188,8 @@ async function registrar({ domainId, domainName, userId }) {
  *
  * O botão leva para a tela de aprovação NO PAINEL, e não aprova por si.
  * A mensagem chega com @everyone, ou seja, todo o canal a vê: um botão que
- * aprovasse sozinho entregaria a decisão para qualquer um que clicasse,
- * inclusive para quem pediu a exclusão. Abrindo o painel, quem decide
+ * aprovasse sozinho entregaria a decisão para qualquer um que clicasse —
+ * inclusive para quem não é super admin. Abrindo o painel, quem decide
  * precisa estar logado e ser super admin, e a decisão fica no nome dele.
  *
  * O id do pedido entra na mensagem de propósito — o notificador tem uma
@@ -212,7 +212,7 @@ async function avisarDiscord(lote) {
     '',
     lista + resto,
     '',
-    'Só um super admin pode aprovar, e quem pediu não pode aprovar o próprio pedido.',
+    'Só um super admin pode aprovar.',
     `Pedido \`${lote.id}\` · vence em 24 horas`,
   ].filter((l) => l !== null);
 
