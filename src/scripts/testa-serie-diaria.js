@@ -4,8 +4,11 @@
 //
 //   1. UMA LINHA POR DIA POR DOMÍNIO. Uma zona pode servir mais de um
 //      domínio; a série dela tem de virar linha para cada um.
-//   2. DIA COM ZERO VIRA LINHA. É a diferença entre "medimos e não teve
-//      acesso" e "não medimos" — o filtro de 60 dias depende dela.
+//   2. DIA COM ZERO VIRA LINHA — mas isso é DEFESA, não o caminho normal.
+//      Medido em 02/10/2026: das 7.654 linhas da primeira rodada real,
+//      nenhuma tem `requests = 0`. A Cloudflare omite o grupo do dia sem
+//      requisição, então a entrada desta prova é fabricada de propósito e o
+//      que ela trava é o código não quebrar se a API mudar de ideia.
 //   3. UNIQUES AUSENTE VIRA NULL, NÃO ZERO. Quando a coleta de únicos está
 //      desligada, a resposta não traz `uniq`. Gravar 0 ali afirmaria que
 //      ninguém visitou.
@@ -80,9 +83,9 @@ ok(
   'dom-b ficou com ' + doisDominios.filter((l) => l.domain_id === 'dom-b').length
 );
 
-// ── 2. dia com zero vira linha ──────────────────────────────────────
+// ── 2. dia com zero vira linha (entrada FABRICADA — a API nao manda) ─
 const diaZero = umDominio.find((l) => l.data === '2026-09-30');
-ok('dia sem acesso vira linha (nao some)', !!diaZero, 'nao encontrei a linha de 30/09');
+ok('dia zerado FABRICADO vira linha (defesa, nao caminho real)', !!diaZero, 'nao encontrei a linha de 30/09');
 ok('e o zero e gravado como 0, nao null', diaZero && diaZero.requests === 0, `requests=${diaZero && diaZero.requests}`);
 
 // ── 3. uniques ausente vira null ────────────────────────────────────
