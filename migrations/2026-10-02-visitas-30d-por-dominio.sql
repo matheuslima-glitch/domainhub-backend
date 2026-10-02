@@ -88,7 +88,7 @@ comment on column public.domain_30d_totals.uniques_media_dia is
   'MÉDIA de visitantes únicos por dia. Não é o total de pessoas do período: único é deduplicado dentro de cada dia, e somar os dias infla de 1,03x a 3,71x.';
 
 comment on column public.domain_30d_totals.dias is
-  'Quantos dias da janela de 30 têm linha. Menos que 30 significa cobertura parcial — a coleta começou em 02/10/2026 e cresce um dia por dia.';
+  'Em quantos dos 30 dias o domínio RECEBEU ACESSO — não quantos dias foram medidos. A Cloudflare omite o dia sem acesso, então um domínio consultado todos os dias que teve visita em um só aparece aqui com dias = 1.';
 
 -- `security_invoker` faz a view respeitar a política de `domain_daily_stats`
 -- em vez de rodar com os poderes do dono e passar por cima dela.
