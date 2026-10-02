@@ -103,6 +103,57 @@ ok(
 ok('serie vazia nao gera linha', servico.linhasDiarias([], ['dom-a']).length === 0);
 ok('serie nula nao quebra', servico.linhasDiarias(null, ['dom-a']).length === 0);
 
+// ── 4b. a janela do mes corrente ────────────────────────────────────
+//
+// Do dia 1 ate ONTEM, e o mes e o de ontem, nao o de hoje. No dia 1o o mes de
+// hoje nao tem nenhum dia fechado e a janela sairia invertida (`de` depois de
+// `ate`). Ancorado em ontem, a virada do mes acontece sozinha.
+const emDia = (s) => new Date(s + 'T12:00:00Z');
+const jan = (s) => servico.janelaDoMes(emDia(s));
+
+ok(
+  'em 02/10 a janela e 01/10 ate 01/10 (um dia de outubro)',
+  jan('2026-10-02').de === '2026-10-01' && jan('2026-10-02').ate === '2026-10-01',
+  JSON.stringify(jan('2026-10-02'))
+);
+ok(
+  'em 15/10 vai do dia 1 ate ontem',
+  jan('2026-10-15').de === '2026-10-01' && jan('2026-10-15').ate === '2026-10-14',
+  JSON.stringify(jan('2026-10-15'))
+);
+ok(
+  'no dia 1o de novembro a janela e OUTUBRO INTEIRO, nao novembro vazio',
+  jan('2026-11-01').de === '2026-10-01' && jan('2026-11-01').ate === '2026-10-31',
+  JSON.stringify(jan('2026-11-01'))
+);
+ok(
+  'no dia 2 ela ja passou para novembro -- sem buraco e sem sobreposicao',
+  jan('2026-11-02').de === '2026-11-01' && jan('2026-11-02').ate === '2026-11-01',
+  JSON.stringify(jan('2026-11-02'))
+);
+ok(
+  'a virada de ANO tambem anda certo',
+  jan('2027-01-01').de === '2026-12-01' && jan('2027-01-01').ate === '2026-12-31',
+  JSON.stringify(jan('2027-01-01'))
+);
+ok(
+  'a janela nunca sai invertida',
+  ['2026-10-01', '2026-10-02', '2026-11-01', '2027-01-01', '2026-03-01'].every(
+    (d) => jan(d).de <= jan(d).ate
+  )
+);
+ok('e `ref` e sempre o primeiro dia do mes da janela', jan('2026-10-15').ref === '2026-10-01');
+
+// `dataISO` nao pode mutar a data que recebe: a segunda chamada partiria de
+// uma data ja deslocada.
+const fixa = emDia('2026-10-15');
+servico.dataISO(-30, fixa);
+ok(
+  'dataISO nao mexe na data recebida',
+  servico.dataISO(-1, fixa) === '2026-10-14',
+  servico.dataISO(-1, fixa)
+);
+
 // ── 5. gravacao: lotes, falha parcial e lista vazia ─────────────────
 (async () => {
   upsertsRecebidos = [];
