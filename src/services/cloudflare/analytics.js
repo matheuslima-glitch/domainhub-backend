@@ -330,10 +330,24 @@ class CloudflareAnalyticsService {
    * O dado já veio: `consultarLote` pede `dimensions { date }` e o coletor
    * usava isso só para somar `views_14d`. Aqui o detalhe é guardado.
    *
-   * DIA COM ZERO VIRA LINHA, de propósito — ao contrário do coletor mensal,
-   * que pula zona sem dado. No diário a diferença importa: linha com
-   * `requests = 0` diz "medimos e não teve acesso"; linha AUSENTE diz "não
-   * medimos". O filtro de 60 dias precisa saber qual é qual.
+   * A API NÃO MANDA DIA ZERADO — medido em 02/10/2026, na primeira rodada
+   * real: das 7.654 linhas gravadas, NENHUMA tem `requests = 0`, em nenhum
+   * dos 14 dias.
+   *
+   * Este comentário dizia o contrário ("DIA COM ZERO VIRA LINHA, de
+   * propósito"), e a intenção era essa mesma: distinguir "medimos e não teve
+   * acesso" de "não medimos". Mas a Cloudflare OMITE o grupo do dia sem
+   * requisição, então o caso simplesmente não chega aqui. `linhasDiarias`
+   * continua tratando `requests = 0` corretamente — é defesa, não o caminho
+   * normal.
+   *
+   * QUEM FOR ESCREVER O FILTRO DE 60 DIAS: ausência de linha NÃO distingue
+   * "sem acesso" de "não medido" nesta tabela. O desempate está fora dela:
+   *   - `domains.views_14d` é escrita para todo domínio processado, inclusive
+   *     com 0 — se ela existe, o domínio está sendo medido;
+   *   - um dia com centenas de linhas foi claramente coletado, então a
+   *     ausência de UM domínio nele significa zero acesso, não falta de
+   *     medição.
    *
    * FALHA AQUI NÃO DERRUBA A RODADA. As colunas de `domains` são o que o
    * painel lê hoje; a série diária é acréscimo. Se o upsert falhar, grita no
