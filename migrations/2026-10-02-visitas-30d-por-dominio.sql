@@ -2,7 +2,8 @@
 -- VISITAS DOS ÚLTIMOS 30 DIAS, POR DOMÍNIO
 --
 -- Uma linha por domínio, somando `domain_daily_stats`. É o que a coluna
--- "Visitas/Mês" do Gerenciamento passa a mostrar.
+-- "Visitas (30d)" do Gerenciamento passa a mostrar, no lugar da antiga
+-- "Visitas/Mês".
 --
 -- POR QUE ELA EXISTE
 --
@@ -32,13 +33,25 @@
 -- pede 14 dias FECHADOS terminando ontem (`janela()` em
 -- `src/services/cloudflare/analytics.js`).
 --
--- AUSÊNCIA DE LINHA É "NÃO MEDIDO", NUNCA ZERO
+-- AUSÊNCIA DE LINHA SIGNIFICA DUAS COISAS, E ELAS PRECISAM SER SEPARADAS
 --
--- Domínio sem nenhum dia na janela simplesmente não aparece aqui. Quem lê
--- precisa mostrar isso como "—", e não como 0: a diferença entre "medimos e
--- não teve acesso" e "não medimos" é o que faz alguém decidir excluir um
--- domínio. Por isso `dias` vem junto — um domínio com 3 dias medidos não
--- deve ter o número lido como se fossem 30.
+-- Medido em 02/10/2026, na primeira rodada real do coletor: das 7.654 linhas
+-- de `domain_daily_stats`, NENHUMA tem `requests = 0`. A GraphQL da
+-- Cloudflare OMITE o dia sem acesso em vez de devolvê-lo zerado.
+--
+-- Então domínio parado é consultado todo dia e mesmo assim não aparece nesta
+-- view. Ausência aqui pode ser "não teve acesso" OU "não é medido" — e a
+-- diferença entre as duas é o que faz alguém decidir excluir um domínio.
+--
+-- O DESEMPATE ESTÁ FORA DESTA VIEW: `domains.views_14d` é escrita para todo
+-- domínio que o coletor processa, inclusive com valor 0. Logo:
+--
+--   linha aqui                      -> a soma
+--   sem linha, views_14d preenchida -> 0, medimos e não teve acesso
+--   sem linha, views_14d nula       -> "—", nunca medido (sem zona)
+--
+-- `dias` vem junto por outro motivo: um domínio com 3 dias medidos não deve
+-- ter o número lido como se fossem 30.
 --
 -- O ÚNICO NÃO É SOMADO AQUI, DE PROPÓSITO
 --
@@ -66,7 +79,7 @@ where data >= current_date - 30
 group by domain_id;
 
 comment on view public.domain_30d_totals is
-  'Requisições dos últimos 30 dias por domínio, somadas de domain_daily_stats. Domínio ausente = não medido, nunca zero. `dias` diz quantos dias da janela têm medição.';
+  'Requisições dos últimos 30 dias por domínio, somadas de domain_daily_stats. Domínio AUSENTE pode ser "sem acesso" ou "não medido" — a Cloudflare omite o dia zerado; use domains.views_14d para desempatar. `dias` diz quantos dias da janela têm linha.';
 
 comment on column public.domain_30d_totals.requests is
   'Soma das requisições dos dias medidos. Requisição é evento, então somar entre dias é exato.';
