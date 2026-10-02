@@ -69,11 +69,22 @@ const ZONAS_POR_CONSULTA = 10;
 
 // A cota é de 300 consultas por janela de 5 minutos.
 //
-// Com ~1.030 zonas e uniques LIGADO são duas consultas por lote: ~206 por
-// rodada, contra as ~103 de antes. Continua dentro da cota, mas a folga
-// encolheu pela metade. Se a conta passar de ~1.400 zonas, aumente esta pausa
-// ou divida a rodada em duas — não vá pelo caminho de juntar as duas consultas
-// numa só, porque é a ausência da dimensão de data que faz a dedução funcionar.
+// São TRÊS consultas por lote com uniques ligado: a série diária, o total
+// deduplicado dos 14 dias, e o total deduplicado do mês corrente. Com ~601
+// zonas na conta são ~61 lotes, ou ~183 consultas por rodada — dentro da cota
+// com folga de 39%.
+//
+// O número de zonas é o que manda, e ele aparece no log de toda rodada
+// ("N zonas na conta Cloudflare"). Confira ali antes de concluir qualquer
+// coisa sobre a cota: uma versão anterior deste comentário falava em ~1.030
+// zonas e dimensionava tudo em cima disso. O teto para três consultas é de
+// ~1.000 zonas (100 lotes = 300 consultas); passando disso, aumente esta
+// pausa para espalhar a rodada por mais de uma janela de 5 minutos, ou divida
+// em dois crons.
+//
+// O que NÃO fazer: juntar as consultas numa só. É a ausência da dimensão de
+// data que faz a Cloudflare deduplicar, e é por isso que a segunda e a
+// terceira existem separadas da primeira.
 const PAUSA_ENTRE_CONSULTAS = 400;
 
 const DIAS = 14;
@@ -108,9 +119,15 @@ class CloudflareAnalyticsService {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
-  /** aaaa-mm-dd em UTC, deslocado por `offset` dias. */
-  dataISO(offset = 0) {
-    const d = new Date();
+  /**
+   * aaaa-mm-dd em UTC, deslocado por `offset` dias.
+   *
+   * `base` existe para o teste poder fixar a data. Em produção fica no
+   * padrão, que é o relógio. Copiamos antes de deslocar — mutar o argumento
+   * faria a segunda chamada partir de uma data já movida.
+   */
+  dataISO(offset = 0, base = new Date()) {
+    const d = new Date(base.getTime());
     d.setUTCDate(d.getUTCDate() + offset);
     return d.toISOString().slice(0, 10);
   }
@@ -125,6 +142,25 @@ class CloudflareAnalyticsService {
    */
   janela() {
     return { de: this.dataISO(-DIAS), ate: this.dataISO(-1) };
+  }
+
+  /**
+   * Janela do MÊS CORRENTE, do dia 1 até ontem.
+   *
+   * Existe para o painel poder acompanhar o mês enquanto ele acontece. A
+   * tabela mensal só ganha linha quando o mês FECHA (cron '0 6 2 * *'), então
+   * durante os ~30 dias de um mês o número dele não existe em lugar nenhum.
+   *
+   * O MÊS É O DE ONTEM, NÃO O DE HOJE. No dia 1º, "o mês de hoje" ainda não
+   * tem nenhum dia fechado e a janela sairia invertida (`de` depois de `ate`).
+   * Ancorando em ontem, o dia 1º de novembro devolve outubro inteiro, e no dia
+   * 2 — quando o cron mensal grava outubro como fechado — este campo já passou
+   * para novembro. A passagem acontece sozinha, sem buraco e sem sobreposição.
+   */
+  janelaDoMes(base = new Date()) {
+    const ate = this.dataISO(-1, base);
+    const primeiro = ate.slice(0, 8) + '01';
+    return { de: primeiro, ate, ref: primeiro };
   }
 
   /**
@@ -494,6 +530,9 @@ class CloudflareAnalyticsService {
       const linhasDoDia = [];
       let lotesComFalha = 0;
       let lotesUniquesComFalha = 0;
+      let lotesMesComFalha = 0;
+
+      const janelaMes = this.janelaDoMes();
 
       for (let i = 0; i < tags.length; i += ZONAS_POR_CONSULTA) {
         const lote = tags.slice(i, i + ZONAS_POR_CONSULTA);
@@ -521,11 +560,51 @@ class CloudflareAnalyticsService {
           }
         }
 
+        // Terceira consulta do lote: o mês corrente, do dia 1 até ontem.
+        //
+        // Mesma forma da segunda — sem `dimensions { date }`, que é o que faz
+        // a Cloudflare deduplicar a janela inteira. O que muda é só o
+        // período. Não dá para somar os dias da série diária para chegar
+        // nisto: a mesma pessoa voltando conta uma vez por dia, e a inflação
+        // medida neste projeto vai de 1,03x a 3,71x.
+        //
+        // Condicionada a `zonasResposta !== null` pelo mesmo motivo da
+        // segunda: se o lote já falhou, não adianta insistir e gastar cota.
+        const mesPorZona = new Map();
+
+        if (COLETA_UNIQUES && zonasResposta !== null) {
+          await this.pausa(PAUSA_ENTRE_CONSULTAS);
+          const mes = await this.consultarJanela(lote, janelaMes.de, janelaMes.ate);
+
+          if (mes === null) {
+            // Falha só no mês: os campos dele ficam como estavam e a rodada
+            // de amanhã tenta de novo. Nada mais do lote é afetado.
+            lotesMesComFalha += 1;
+          } else {
+            mes.forEach((z) => {
+              const grupo = (z.httpRequests1dGroups || [])[0];
+              if (!grupo) return;
+              mesPorZona.set(z.zoneTag, {
+                uniques_mes_corrente: Number(grupo.uniq.uniques) || 0,
+                requests_mes_corrente: Number(grupo.sum[METRICA]) || 0,
+                mes_corrente_ref: janelaMes.ref,
+              });
+            });
+          }
+        }
+
         if (zonasResposta === null) {
           lotesComFalha += 1;
         } else {
           zonasResposta.forEach((z) => {
             const campos = this.calcular(z.httpRequests1dGroups, uniquesPorZona.get(z.zoneTag));
+
+            // Os campos do mês entram DEPOIS e à parte, sem passar por
+            // `calcular`. Ela é quem monta as cinco colunas de 14 dias que
+            // alimentam Críticos, o CSV e as decisões de exclusão — e essas
+            // não podem mudar por causa desta adição.
+            const doMes = mesPorZona.get(z.zoneTag);
+            if (doMes) Object.assign(campos, doMes);
             const dominiosDaZona = porZona.get(z.zoneTag) || [];
 
             dominiosDaZona.forEach((d) => {
@@ -587,6 +666,15 @@ class CloudflareAnalyticsService {
             `(${totalUniques.toLocaleString('pt-BR')} únicos somando as zonas)` +
             (lotesUniquesComFalha ? ` · ${lotesUniquesComFalha} lote(s) sem uniques` : '')
         );
+
+        const comMes = atualizacoes.filter((a) =>
+          Number.isFinite(a.campos.uniques_mes_corrente)
+        ).length;
+        console.log(
+          `✅ [CF-ANALYTICS] ${comMes} domínios com o mês corrente medido ` +
+            `(${janelaMes.de} a ${janelaMes.ate})` +
+            (lotesMesComFalha ? ` · ${lotesMesComFalha} lote(s) sem o mês` : '')
+        );
       }
 
       return {
@@ -596,6 +684,7 @@ class CloudflareAnalyticsService {
         semZona: semZona.length,
         lotesComFalha,
         lotesUniquesComFalha,
+        lotesMesComFalha,
         uniques: COLETA_UNIQUES,
         segundos
       };
