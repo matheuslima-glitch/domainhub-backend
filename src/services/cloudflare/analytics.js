@@ -69,25 +69,57 @@ const ZONAS_POR_CONSULTA = 10;
 
 // A cota é de 300 consultas por janela de 5 minutos.
 //
-// São TRÊS consultas por lote com uniques ligado: a série diária, o total
-// deduplicado dos 14 dias, e o total deduplicado do mês corrente. Com ~601
-// zonas na conta são ~61 lotes, ou ~183 consultas por rodada — dentro da cota
-// com folga de 39%.
+// São QUATRO consultas por lote com uniques ligado:
 //
-// O número de zonas é o que manda, e ele aparece no log de toda rodada
-// ("N zonas na conta Cloudflare"). Confira ali antes de concluir qualquer
-// coisa sobre a cota: uma versão anterior deste comentário falava em ~1.030
-// zonas e dimensionava tudo em cima disso. O teto para três consultas é de
-// ~1.000 zonas (100 lotes = 300 consultas); passando disso, aumente esta
-// pausa para espalhar a rodada por mais de uma janela de 5 minutos, ou divida
-// em dois crons.
+//   1. a série diária dos 14 dias (com `dimensions { date }`)
+//   2. o total deduplicado dos 14 dias
+//   3. o total deduplicado do mês corrente
+//   4. o total deduplicado dos 30 dias
 //
-// O que NÃO fazer: juntar as consultas numa só. É a ausência da dimensão de
-// data que faz a Cloudflare deduplicar, e é por isso que a segunda e a
-// terceira existem separadas da primeira.
-const PAUSA_ENTRE_CONSULTAS = 400;
+// As três últimas existem separadas porque a dedução só acontece quando a
+// consulta NÃO tem a dimensão de data, e cada período precisa da sua. Juntar
+// qualquer uma delas na primeira destruiria a dedução — não é otimização
+// possível, é o mecanismo.
+//
+// POR QUE A PAUSA É DE UM SEGUNDO
+//
+// O que mantinha a rodada dentro da cota até aqui era o TEMPO: as consultas
+// se espalhavam por mais de uma janela de 5 minutos. Isso falha se a
+// Cloudflare responder rápido demais — aí tudo cai numa janela só.
+//
+// A pausa garante um piso de duração independente da velocidade dela. Para N
+// consultas caberem em 300 por 5 min, a rodada precisa durar pelo menos
+// N/300 × 5 minutos, e só as pausas já entregam isso:
+//
+//   1.071 zonas = 108 lotes × 4 = 432 consultas
+//   432 precisam de ≥ 7,2 min  →  108 × 4 × P ≥ 432s  →  P ≥ 1,0s
+//
+// Com 1 segundo o limite é respeitado em qualquer velocidade de resposta, e
+// até o maior número de zonas que a base comporta hoje. Custa ~4 minutos a
+// mais de madrugada, que não são cobrados por ninguém.
+//
+// O NÚMERO DE ZONAS É O QUE MANDA, e ele sai no log de toda rodada ("N zonas
+// na conta Cloudflare"). Confira ali antes de concluir qualquer coisa sobre
+// cota: uma versão anterior deste comentário falava em ~1.030 zonas e
+// dimensionava tudo em cima de um número que ninguém tinha medido.
+//
+// O preço de uma rodada mais longa é a janela em que um restart do Render a
+// mata: tudo é acumulado em memória e gravado no fim. A correção de verdade
+// para isso é gravar por lote em vez de no fim — não foi feita.
+const PAUSA_ENTRE_CONSULTAS = 1000;
 
 const DIAS = 14;
+
+/**
+ * A janela longa, em dias.
+ *
+ * 30 porque é o que a aba curta do dashboard mostra. Não dá para derivá-la
+ * das outras: janelas deduplicadas NÃO SE COMBINAM — sabendo os únicos de 14
+ * dias e os do mês, não há como chegar aos de 30, porque a sobreposição de
+ * pessoas entre os dois pedaços é desconhecida. Só a Cloudflare sabe, e só se
+ * perguntarem o período a ela.
+ */
+const DIAS_JANELA_LONGA = 30;
 const REQUEST_TIMEOUT = 30000;
 const TENTATIVAS = 3;
 const PAUSA_ENTRE_TENTATIVAS = 3000;
@@ -140,8 +172,8 @@ class CloudflareAnalyticsService {
    * Incluí-lo faria todo domínio parecer em queda, e a coluna "views do último
    * dia" mostraria sempre um número menor que a realidade.
    */
-  janela() {
-    return { de: this.dataISO(-DIAS), ate: this.dataISO(-1) };
+  janela(base = new Date()) {
+    return { de: this.dataISO(-DIAS, base), ate: this.dataISO(-1, base) };
   }
 
   /**
@@ -161,6 +193,26 @@ class CloudflareAnalyticsService {
     const ate = this.dataISO(-1, base);
     const primeiro = ate.slice(0, 8) + '01';
     return { de: primeiro, ate, ref: primeiro };
+  }
+
+  /**
+   * Janela longa: os últimos 30 dias FECHADOS, terminando ontem.
+   *
+   * É o período que a aba curta do dashboard desenha. Antes dela, aquele
+   * cartão mostrava requisições de 17 dias ao lado de pessoas do mês — duas
+   * janelas diferentes, lado a lado, sem nada avisando.
+   *
+   * Os dois números passam a sair DESTA mesma consulta, então não têm como
+   * divergir. E as requisições cobrem 30 dias de verdade desde o primeiro
+   * dia: a série diária só alcança 17 (ela nasceu em 18/09/2026 e cresce um
+   * por dia), mas a Cloudflare tem o histórico inteiro.
+   */
+  janelaLonga(base = new Date()) {
+    return {
+      de: this.dataISO(-DIAS_JANELA_LONGA, base),
+      ate: this.dataISO(-1, base),
+      dias: DIAS_JANELA_LONGA,
+    };
   }
 
   /**
@@ -531,8 +583,10 @@ class CloudflareAnalyticsService {
       let lotesComFalha = 0;
       let lotesUniquesComFalha = 0;
       let lotesMesComFalha = 0;
+      let lotes30dComFalha = 0;
 
       const janelaMes = this.janelaDoMes();
+      const janela30 = this.janelaLonga();
 
       for (let i = 0; i < tags.length; i += ZONAS_POR_CONSULTA) {
         const lote = tags.slice(i, i + ZONAS_POR_CONSULTA);
@@ -593,6 +647,43 @@ class CloudflareAnalyticsService {
           }
         }
 
+        // Quarta consulta do lote: os 30 dias, deduplicados.
+        //
+        // Os dois cartões da aba curta do dashboard saem DAQUI, da mesma
+        // resposta — por isso não têm como divergir. Antes, as requisições
+        // vinham somadas da série diária (17 dias hoje) e as pessoas do mês
+        // corrente (4 dias): duas janelas diferentes lado a lado.
+        //
+        // AQUI TAMBÉM NÃO DÁ PARA DERIVAR: janelas deduplicadas não se
+        // combinam, e somar os dias conta de novo quem voltou. Pedir os 30
+        // dias é a única forma de saber quantas pessoas foram em 30 dias.
+        //
+        // Zona sem grupo vira ZERO, não ausência — é o mesmo tratamento da
+        // segunda consulta. A Cloudflare devolve a zona com a lista vazia
+        // quando não houve acesso, e "medimos e deu zero" é informação.
+        const longaPorZona = new Map();
+
+        if (COLETA_UNIQUES && zonasResposta !== null) {
+          await this.pausa(PAUSA_ENTRE_CONSULTAS);
+          const longa = await this.consultarJanela(lote, janela30.de, janela30.ate);
+
+          if (longa === null) {
+            // Falha só nos 30 dias. É a ÚLTIMA consulta do lote de propósito:
+            // se a cota acabar, é esta que cai, e a série diária, os campos
+            // de 14 dias e o mês corrente já foram buscados.
+            lotes30dComFalha += 1;
+          } else {
+            longa.forEach((z) => {
+              const grupo = (z.httpRequests1dGroups || [])[0];
+              longaPorZona.set(z.zoneTag, {
+                uniques_30d: grupo ? Number(grupo.uniq.uniques) || 0 : 0,
+                requests_30d: grupo ? Number(grupo.sum[METRICA]) || 0 : 0,
+                stats_30d_ate: janela30.ate,
+              });
+            });
+          }
+        }
+
         if (zonasResposta === null) {
           lotesComFalha += 1;
         } else {
@@ -605,6 +696,11 @@ class CloudflareAnalyticsService {
             // não podem mudar por causa desta adição.
             const doMes = mesPorZona.get(z.zoneTag);
             if (doMes) Object.assign(campos, doMes);
+
+            // Idem para os 30 dias: entram DEPOIS de `calcular`, fora
+            // dela, para as cinco colunas de 14 dias ficarem intocadas.
+            const dos30 = longaPorZona.get(z.zoneTag);
+            if (dos30) Object.assign(campos, dos30);
             const dominiosDaZona = porZona.get(z.zoneTag) || [];
 
             dominiosDaZona.forEach((d) => {
@@ -675,6 +771,14 @@ class CloudflareAnalyticsService {
             `(${janelaMes.de} a ${janelaMes.ate})` +
             (lotesMesComFalha ? ` · ${lotesMesComFalha} lote(s) sem o mês` : '')
         );
+
+        const com30 = atualizacoes.filter((a) => Number.isFinite(a.campos.uniques_30d)).length;
+        const unicos30 = atualizacoes.reduce((s, a) => s + (a.campos.uniques_30d || 0), 0);
+        console.log(
+          `✅ [CF-ANALYTICS] ${com30} domínios com os 30 dias medidos ` +
+            `(${janela30.de} a ${janela30.ate} · ${unicos30.toLocaleString('pt-BR')} únicos)` +
+            (lotes30dComFalha ? ` · ${lotes30dComFalha} lote(s) sem os 30 dias` : '')
+        );
       }
 
       return {
@@ -685,6 +789,7 @@ class CloudflareAnalyticsService {
         lotesComFalha,
         lotesUniquesComFalha,
         lotesMesComFalha,
+        lotes30dComFalha,
         uniques: COLETA_UNIQUES,
         segundos
       };
