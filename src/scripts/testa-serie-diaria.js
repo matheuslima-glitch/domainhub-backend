@@ -144,6 +144,50 @@ ok(
 );
 ok('e `ref` e sempre o primeiro dia do mes da janela', jan('2026-10-15').ref === '2026-10-01');
 
+// ── 4c. a janela longa, de 30 dias ──────────────────────────────────
+//
+// Os dois numeros da aba curta do dashboard saem desta janela, da MESMA
+// consulta -- por isso nao tem como divergirem. Ela nao pode ser derivada das
+// outras: janelas deduplicadas nao se combinam.
+const lon = (s) => servico.janelaLonga(emDia(s));
+
+ok(
+  'a janela longa tem 30 dias e termina ONTEM',
+  lon('2026-10-05').de === '2026-09-05' && lon('2026-10-05').ate === '2026-10-04',
+  JSON.stringify(lon('2026-10-05'))
+);
+ok(
+  'atravessa a virada de mes sem tropecar',
+  lon('2026-11-02').de === '2026-10-03' && lon('2026-11-02').ate === '2026-11-01',
+  JSON.stringify(lon('2026-11-02'))
+);
+ok(
+  'e a virada de ano',
+  lon('2027-01-10').de === '2026-12-11' && lon('2027-01-10').ate === '2027-01-09',
+  JSON.stringify(lon('2027-01-10'))
+);
+// INCLUSIVE, nao a diferenca: de 05/09 a 04/10 sao 29 dias de intervalo e 30
+// dias de calendario. Minha primeira versao desta prova contou a diferenca e
+// reprovou um codigo que estava certo.
+ok(
+  'sao sempre 30 dias de calendario, em qualquer mes',
+  ['2026-03-01', '2026-03-15', '2026-05-31', '2027-01-01', '2026-10-05'].every((d) => {
+    const j = lon(d);
+    return Math.round((Date.parse(j.ate) - Date.parse(j.de)) / 86400000) + 1 === 30;
+  })
+);
+// A longa tem de CONTER a de 14 dias: as duas terminam no mesmo dia e a
+// longa comeca antes. Se um dia alguem trocar os offsets de lugar, e aqui que
+// aparece.
+ok(
+  'a janela longa CONTEM a de 14 dias',
+  ['2026-10-05', '2026-11-02', '2027-01-01'].every((d) => {
+    const curta = servico.janela(emDia(d));
+    const longa = lon(d);
+    return longa.de < curta.de && longa.ate === curta.ate;
+  })
+);
+
 // `dataISO` nao pode mutar a data que recebe: a segunda chamada partiria de
 // uma data ja deslocada.
 const fixa = emDia('2026-10-15');
