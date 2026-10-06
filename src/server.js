@@ -393,6 +393,50 @@ cron.schedule('45 */6 * * *', async () => {
 });
 
 // ============================================
+// CRON: Saldo da Namecheap
+//
+// O saldo vive em `namecheap_balance` e o painel só o LÊ. Até aqui, quem o
+// atualizava era o DASHBOARD ANTIGO, que dispara `GET /api/balance` em segundo
+// plano ao carregar. O dashboard novo lê a tabela direto e nunca pede
+// atualização — então o número congelava no dia em que alguém abriu a tela
+// antiga pela última vez.
+//
+// Medido em 06/10/2026: a tela mostrava US$ 60,18 e a Namecheap, US$ 154,50.
+// A última sincronização era de 30/09, com 5 dias e 15 horas de idade. Nada
+// avisava — saldo velho tem exatamente a mesma cara de saldo atual, e é número
+// que alguém olha antes de decidir comprar domínio.
+//
+// Às :30 porque os outros minutos já estão ocupados: :00 pelas notificações e
+// pela sincronização de domínios, :20 pela Cloudflare, :45 pelo RDAP.
+//
+// De duas em duas horas. É UMA chamada por rodada, longe de qualquer limite da
+// Namecheap, e o saldo muda a cada compra.
+//
+// ATENÇÃO: `getBalance()` também busca a cotação do dólar, e lança se TODAS as
+// APIs de câmbio falharem. Nesse caso o saldo em dólar não é gravado, mesmo já
+// tendo sido obtido. É fragilidade conhecida; desacoplar as duas coisas é
+// conserto de outro dia.
+// ============================================
+cron.schedule('30 */2 * * *', async () => {
+  console.log('💰 [CRON] Atualizando saldo da Namecheap...');
+
+  try {
+    const namecheapBalance = require('./services/namecheap/balance');
+    const supabaseBalance = require('./services/supabase/balance');
+
+    const saldo = await namecheapBalance.getBalance();
+    await supabaseBalance.save(saldo);
+
+    console.log(
+      `💰 [CRON] Saldo: US$ ${saldo.balance_usd} · R$ ${saldo.balance_brl} ` +
+      `(câmbio ${saldo.exchange_rate} via ${saldo.exchange_source})`
+    );
+  } catch (error) {
+    console.error('❌ [CRON] Erro ao atualizar saldo da Namecheap:', error.message);
+  }
+});
+
+// ============================================
 // VIEWS DIÁRIAS (CLOUDFLARE)
 //
 // Traz os três campos que a tabela mensal nunca respondeu: views nos últimos 14
@@ -445,11 +489,32 @@ app.listen(config.PORT, async () => {
   console.log('🌐 Cron de domínios externos (RDAP): A cada 6 horas');
   console.log('📊 Cron de views diárias (Cloudflare): 1x por dia às 05:20 UTC');
   console.log('📆 Cron de fechamento mensal (Cloudflare): dia 2 às 06:00 UTC');
+  console.log('💰 Cron de saldo (Namecheap): a cada 2 horas, aos :30');
 
   const namecheapBalance = require('./services/namecheap/balance');
   const ip = await namecheapBalance.getServerIP();
   console.log(`IP do servidor: ${ip}`);
   console.log('Adicione na whitelist: https://ap.www.namecheap.com/settings/tools/apiaccess/');
+
+  // Uma sincronização no boot, além do cron.
+  //
+  // Sem ela, o primeiro deploy depois desta mudança deixaria o saldo velho na
+  // tela por até duas horas — justamente o defeito que o cron existe para
+  // corrigir. Também cobre o reinício: Render reiniciando às 3h da manhã não
+  // deve significar saldo desatualizado até as 4h30.
+  //
+  // Sem `await`: falha aqui não pode impedir o servidor de subir. O cron tenta
+  // de novo em no máximo duas horas.
+  (async () => {
+    try {
+      const supabaseBalance = require('./services/supabase/balance');
+      const saldo = await namecheapBalance.getBalance();
+      await supabaseBalance.save(saldo);
+      console.log(`💰 Saldo sincronizado no boot: US$ ${saldo.balance_usd}`);
+    } catch (error) {
+      console.error('⚠️ Falha ao sincronizar saldo no boot:', error.message);
+    }
+  })();
 });
 
 process.on('SIGTERM', () => process.exit(0));
