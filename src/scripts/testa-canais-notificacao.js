@@ -136,6 +136,20 @@ async function provarTelegram() {
   await telegram.send('Pedido `abc-123` vence em 24h');
   ok('crase vira <code>', ultimoTexto().includes('<code>abc-123</code>'), ultimoTexto());
 
+  // Sublinhado: vira italico FORA de palavra, e e deixado em paz DENTRO dela.
+  // O rodape dos templates chegou no grupo com os sublinhados a mostra em
+  // 09/10/2026 -- a primeira versao nao convertia nada por medo de estragar
+  // nome de dominio.
+  await telegram.send('rodape\n_Disparado em 01/01/2030_');
+  ok('sublinhado fora de palavra vira <i>', ultimoTexto().includes('<i>Disparado em 01/01/2030</i>'), ultimoTexto());
+
+  await telegram.send('o dominio meu_site_legal.com caiu as 02/02/2030');
+  ok(
+    'mas sublinhado DENTRO de palavra fica intacto',
+    ultimoTexto().includes('meu_site_legal.com') && !ultimoTexto().includes('<i>'),
+    ultimoTexto()
+  );
+
   // 2. Escapar antes de converter
   await telegram.send('erro em <script> & cia, no *alpha* dominio');
   const t = ultimoTexto();

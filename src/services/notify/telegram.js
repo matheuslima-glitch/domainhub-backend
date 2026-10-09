@@ -153,9 +153,15 @@ class TelegramNotifier {
    * Backticks viram <code> porque o aviso de exclusão identifica o pedido com
    * `id` entre crases, e sem conversão as crases apareceriam na tela.
    *
-   * Sublinhado NÃO é convertido de propósito: `_` aparece em identificador e
-   * em nome de domínio, e um falso positivo estragaria o dado em vez de só
-   * deixar de formatá-lo. Marcador à mostra é melhor que texto corrompido.
+   * Sublinhado vira itálico, mas SÓ FORA DE PALAVRA. A primeira versão disto
+   * não convertia `_` nenhum, com medo de estragar `meu_dominio.com` — e aí o
+   * rodapé dos templates chegou no grupo com os sublinhados à mostra
+   * ("_Disparado em 09/10/2026_", visto em 09/10/2026).
+   *
+   * A guarda de borda resolve os dois lados: em `meu_dominio` o `_` tem letra
+   * dos dois lados e não casa; em `_Disparado em ..._` ele está colado a
+   * espaço ou quebra de linha e casa. Nome de domínio e identificador passam
+   * intactos.
    *
    * Nenhuma regra atravessa quebra de linha, para não juntar dois trechos
    * distintos por engano — mesma regra do canal do Discord.
@@ -164,7 +170,8 @@ class TelegramNotifier {
     return this.escaparHTML(texto)
       .replace(/\*\*([^*\n]+?)\*\*/g, '<b>$1</b>')
       .replace(/(?<!\*)\*(?!\*)([^*\n]+?)\*(?!\*)/g, '<b>$1</b>')
-      .replace(/`([^`\n]+?)`/g, '<code>$1</code>');
+      .replace(/`([^`\n]+?)`/g, '<code>$1</code>')
+      .replace(/(?<![\w_])_([^_\n]+?)_(?![\w_])/g, '<i>$1</i>');
   }
 
   /**
