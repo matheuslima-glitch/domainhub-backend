@@ -196,7 +196,7 @@ async function registrar({ domainId, domainName, userId }) {
  * janela de deduplicação de 60 segundos por conteúdo, e sem algo único dois
  * pedidos seguidos parecidos seriam engolidos.
  */
-async function avisarDiscord(lote) {
+async function avisarCanais(lote) {
   const lista = lote.dominios.slice(0, 12).map((d) => `• ${d.nome}`).join('\n');
   const resto = lote.dominios.length > 12 ? `\n• …e mais ${lote.dominios.length - 12}` : '';
 
@@ -223,11 +223,13 @@ async function avisarDiscord(lote) {
     : null;
 
   try {
-    await require('../notify/discord').send(linhas.join('\n'), { critico: true, botao });
+    // O distribuidor nunca lança e nunca deixa um canal derrubar o outro; o
+    // try/catch aqui é para o caso de o próprio módulo não carregar.
+    await require('../notify').espelhar(linhas.join('\n'), { critico: true, botao });
   } catch (e) {
     // O pedido já está gravado; falhar o aviso não pode desfazer isso.
-    console.error('❌ [EXCLUSAO] Falha ao avisar o Discord:', e.message);
+    console.error('❌ [EXCLUSAO] Falha ao avisar os canais:', e.message);
   }
 }
 
-module.exports = { verificar, registrar, avisarDiscord, idDoDominio };
+module.exports = { verificar, registrar, avisarCanais, idDoDominio };

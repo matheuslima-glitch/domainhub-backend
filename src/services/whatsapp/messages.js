@@ -85,24 +85,22 @@ class WhatsAppService {
   }
 
   /**
-   * Espelha a mensagem no canal do Discord.
+   * Espelha a mensagem nos canais paralelos: Discord e Telegram.
    *
    * ACRÉSCIMO — não interfere no envio da Z-API. É disparado sem `await` de
    * propósito: o tempo de resposta e o valor devolvido por sendMessage()
-   * continuam exatamente os mesmos de antes. Qualquer erro do Discord morre
-   * aqui dentro e nunca sobe para quem chamou.
+   * continuam exatamente os mesmos de antes. Qualquer erro dos canais morre
+   * dentro do distribuidor e nunca sobe para quem chamou.
    *
-   * O canal colapsa mensagens iguais numa janela curta, então o laço que
+   * Os canais colapsam mensagens iguais numa janela curta, então o laço que
    * percorre os contatos do WhatsApp — uma mensagem por contato — resulta em
-   * uma única mensagem no Discord. Ver services/notify/discord.js.
+   * uma única mensagem em cada grupo. Ver services/notify/.
    */
-  espelharNoDiscord(message, opts = {}) {
+  espelharNosCanais(message, opts = {}) {
     try {
-      require('../notify/discord')
-        .send(message, opts)
-        .catch((e) => console.error('❌ [DISCORD] Falha ao enviar:', e.message));
+      require('../notify').espelharEmSegundoPlano(message, opts);
     } catch (e) {
-      console.error('❌ [DISCORD] Falha ao carregar o canal:', e.message);
+      console.error('❌ [NOTIFY] Falha ao carregar o distribuidor:', e.message);
     }
   }
 
@@ -115,9 +113,9 @@ class WhatsAppService {
    * @returns {Promise<object>}
    */
   async sendMessage(phoneNumber, message, opts = {}) {
-    // Antes do guard da Z-API: assim o Discord recebe o alerta mesmo que a
-    // Z-API esteja fora de operação, que foi o cenário que motivou o canal.
-    this.espelharNoDiscord(message, opts);
+    // Antes do guard da Z-API: assim os outros canais recebem o alerta mesmo
+    // que a Z-API esteja fora de operação, que foi o cenário que os motivou.
+    this.espelharNosCanais(message, opts);
 
     if (!this.configured) {
       return {
@@ -209,7 +207,12 @@ class WhatsAppService {
 
 ⚡ *Acesse o Domain Hub para mais detalhes*`;
 
-    return this.sendMessage(phoneNumber, message);
+    // `chaveAlerta` identifica o alerta pelo que ele É, não pelo texto. O laço
+    // de contatos chama isto uma vez POR PESSOA e o texto é personalizado
+    // ("*Eduardo*, detectamos..."), então sem a chave o Discord e o Telegram
+    // receberiam uma cópia por nome distinto — 17 delas, medido em 09/10/2026.
+    // Ver chaveDedupe() em services/notify/.
+    return this.sendMessage(phoneNumber, message, { chaveAlerta: `suspenso:${domainName}` });
   }
 
   /**
@@ -259,7 +262,10 @@ ${suspended > 0 ? `🔴 *${suspended} Domínio${suspended > 1 ? 's' : ''} Suspen
 
 🕐 _Relatório gerado em: ${new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}_`;
 
-    return this.sendMessage(phoneNumber, message);
+    // O relatório é o mesmo para todo mundo numa dada rodada; o que muda é o
+    // nome de quem recebe. O total entra na chave para que uma mudança real no
+    // quadro gere um aviso novo em vez de ser engolida como duplicata.
+    return this.sendMessage(phoneNumber, message, { chaveAlerta: `criticos:${total}` });
   }
 
   /**
@@ -301,7 +307,8 @@ ${suspended > 0 ? `🔴 *${suspended} Domínio${suspended > 1 ? 's' : ''} Suspen
 
 ⚡ *Acesse o Domain Hub para mais detalhes*`;
 
-    return this.sendMessage(phoneNumber, message);
+    // Mesma razão do alerta de suspenso: uma chave por DOMÍNIO, não por texto.
+    return this.sendMessage(phoneNumber, message, { chaveAlerta: `expirado:${domainName}` });
   }
 }
 

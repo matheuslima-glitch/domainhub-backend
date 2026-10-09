@@ -70,15 +70,15 @@ async function sendSwapWhatsApp({ oldDomain, newDomain, status, errorMsg = '' })
         `❌Erro: ${errorMsg}\n` +
         `🗓️Data: ${dataFormatada} ás ${horaFormatada}`;
 
-    // ACRESCIMO: o mesmo texto tambem vai para o canal do Discord. Disparado
-    // sem `await` para nao alterar o tempo nem o resultado do envio da Z-API
-    // abaixo. Sucesso e informativo; erro e falha e marca @everyone no canal.
+    // ACRESCIMO: o mesmo texto tambem vai para os canais paralelos - Discord
+    // e Telegram. Disparado sem `await` para nao alterar o tempo nem o
+    // resultado do envio da Z-API abaixo. Sucesso e informativo e nao sai
+    // nesses canais; erro e falha e notifica.
     try {
-      require('../../services/notify/discord')
-        .send(message, { critico: status !== 'success' })
-        .catch((e) => console.error('❌ [DISCORD] Falha ao enviar:', e.message));
+      require('../../services/notify')
+        .espelharEmSegundoPlano(message, { critico: status !== 'success' });
     } catch (e) {
-      console.error('❌ [DISCORD] Falha ao carregar o canal:', e.message);
+      console.error('❌ [NOTIFY] Falha ao carregar o distribuidor:', e.message);
     }
 
     if (!config.ZAPI_INSTANCE || !config.ZAPI_CLIENT_TOKEN) {

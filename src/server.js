@@ -56,6 +56,9 @@ app.use('/api', (req, res, next) => {
 });
 
 app.use('/api/balance', balanceRoutes);
+// Diagnóstico dos canais de notificação: disparar um teste e rodar o
+// relatório de críticos sob demanda, sem esperar o cron.
+app.use('/api/notify', require('./routes/notify'));
 app.use('/api/domains', require('./routes/domains'));
 app.use('/api/domains/deactivation', require('./routes/domain-deactivation'));
 // Pedidos de exclusao em lote: criar o pedido e avisar o Discord no mesmo
@@ -437,6 +440,43 @@ cron.schedule('30 */2 * * *', async () => {
 });
 
 // ============================================
+// CRON: Relatório de domínios críticos para os GRUPOS
+//
+// Suspensos, expirados e a expirar, enviados ao Telegram e ao Discord.
+//
+// NÃO É DUPLICATA do cron de notificações lá em cima. Aquele é por PESSOA, e
+// só dispara quando sete condições coincidem: contato ativo, algum `alert_*`
+// ligado, hoje estar em `notification_days`, a hora bater com
+// `notification_interval_hours`, não ter estourado `notification_frequency`,
+// haver domínio crítico, e só então o envio — que é de onde os canais
+// paralelos eram espelhados.
+//
+// Essas condições existem porque o WhatsApp manda para PESSOAS, cada uma com
+// sua agenda. Um GRUPO não tem agenda individual, e em 09/10/2026 as
+// notificações estavam em silêncio total — pendurar o grupo na mesma corrente
+// faria o canal novo nascer mudo pelo mesmo motivo que os outros.
+//
+// 11:15 e 20:15 UTC = 08:15 e 17:15 de Brasília: começo e fim do expediente,
+// que é quando alguém pode agir sobre um domínio suspenso. Os :15 são o único
+// minuto livre — :00 é das notificações e dos domínios, :20 da Cloudflare,
+// :30 do saldo, :45 do RDAP.
+//
+// Grupo sem domínio crítico NÃO recebe nada. "Está tudo bem" é um sucesso, e
+// a política do canal é tudo exceto sucessos; avisar duas vezes por dia que
+// não há nada treina o time a ignorar o canal.
+// ============================================
+cron.schedule('15 11,20 * * *', async () => {
+  console.log('🚨 [CRON] Montando relatório de domínios críticos...');
+
+  try {
+    const relatorio = require('./services/notify/relatorio-criticos');
+    await relatorio.enviar();
+  } catch (error) {
+    console.error('❌ [CRON] Erro no relatório de críticos:', error.message);
+  }
+});
+
+// ============================================
 // VIEWS DIÁRIAS (CLOUDFLARE)
 //
 // Traz os três campos que a tabela mensal nunca respondeu: views nos últimos 14
@@ -490,11 +530,31 @@ app.listen(config.PORT, async () => {
   console.log('📊 Cron de views diárias (Cloudflare): 1x por dia às 05:20 UTC');
   console.log('📆 Cron de fechamento mensal (Cloudflare): dia 2 às 06:00 UTC');
   console.log('💰 Cron de saldo (Namecheap): a cada 2 horas, aos :30');
+  console.log('🚨 Cron de domínios críticos (grupos): 11:15 e 20:15 UTC');
 
   const namecheapBalance = require('./services/namecheap/balance');
   const ip = await namecheapBalance.getServerIP();
   console.log(`IP do servidor: ${ip}`);
   console.log('Adicione na whitelist: https://ap.www.namecheap.com/settings/tools/apiaccess/');
+
+  // Confere o Telegram no boot, sem postar no grupo.
+  //
+  // Antes disto, a única forma de saber se um canal entregava era esperar um
+  // domínio cair. O webhook do Discord virou HTTP 401 em algum momento de
+  // 2026 e ninguém percebeu — alerta que não chega é indistinguível de
+  // "não houve alerta". Duas chamadas de leitura no boot acabam com isso.
+  (async () => {
+    try {
+      const r = await require('./services/notify/telegram').verificar();
+      if (r.ok) {
+        console.log(`✅ [TELEGRAM] ${r.bot} → ${r.tipo} "${r.grupo}" · pronto para enviar`);
+      } else {
+        console.error(`❌ [TELEGRAM] Configuração não confere: ${r.erro}`);
+      }
+    } catch (e) {
+      console.error('⚠️ [TELEGRAM] Falha ao verificar a configuração:', e.message);
+    }
+  })();
 
   // Uma sincronização no boot, além do cron.
   //

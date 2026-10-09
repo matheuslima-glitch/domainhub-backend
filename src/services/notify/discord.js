@@ -72,15 +72,27 @@ class DiscordNotifier {
   /**
    * Chave usada para detectar duplicata.
    *
-   * Não dá para comparar a mensagem crua: todos os templates carimbam data e
-   * hora COM SEGUNDOS ("Detectado em: 30/04/2026, 09:11:44"). Duas cópias do
-   * mesmo alerta, enviadas para contatos diferentes com um segundo de diferença,
-   * seriam textos distintos e passariam as duas.
+   * QUEM ENVIA PODE DECLARAR A CHAVE, e deve sempre que souber: `chaveAlerta`
+   * identifica o alerta por aquilo que ele É (tipo + domínio), não pelo texto
+   * que saiu. É o único jeito confiável, porque os templates são
+   * PERSONALIZADOS — "*Eduardo*, detectamos que o domínio *xpto.com* foi
+   * suspenso" muda de contato para contato.
    *
-   * Removendo data e hora, o que sobra é o conteúdo real do alerta — que é o que
-   * define se é a mesma notificação ou não.
+   * Medido em 09/10/2026: 27 contatos ativos, 18 com número e 17 nomes
+   * distintos. O laço de alerta chama o envio uma vez por contato, então um
+   * único domínio suspenso gerava até 17 textos diferentes — e os 17 passavam
+   * pela normalização abaixo, porque ela só remove data e hora. O canal
+   * recebia 17 cópias do mesmo aviso.
+   *
+   * A NORMALIZAÇÃO DO TEXTO continua, como reserva para quem não declara:
+   * todos os templates carimbam data e hora COM SEGUNDOS ("Detectado em:
+   * 30/04/2026, 09:11:44"), e duas cópias enviadas com um segundo de
+   * diferença seriam textos distintos. Removendo data e hora, o que sobra é o
+   * conteúdo — que resolve o caso de mensagem não personalizada.
    */
-  chaveDedupe(message) {
+  chaveDedupe(message, opts = {}) {
+    if (opts.chaveAlerta) return `#${opts.chaveAlerta}`;
+
     return String(message)
       .replace(/\d{2}:\d{2}(:\d{2})?/g, '')
       .replace(/\d{2}\/\d{2}\/\d{2,4}/g, '')
@@ -128,7 +140,7 @@ class DiscordNotifier {
     const agora = Date.now();
     this.limparCacheAntigo(agora);
 
-    const chave = this.chaveDedupe(message);
+    const chave = this.chaveDedupe(message, opts);
     const jaEnviada = this.enviadasRecentemente.get(chave);
     if (jaEnviada && agora - jaEnviada < JANELA_DEDUPE_MS) {
       console.log('🔁 [DISCORD] Mesmo alerta já enviado há pouco - ignorando duplicata');

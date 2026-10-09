@@ -61,7 +61,7 @@ router.post('/', async (req, res) => {
     // O aviso vai depois do pedido gravado, e a falha dele não derruba a
     // resposta: o pedido existe e aparece na tela de aprovações de qualquer
     // forma. O que se perde é o ping, não o pedido.
-    await trava.avisarDiscord({
+    await trava.avisarCanais({
       id: loteId,
       solicitanteNome: (req.user && (req.user.user_metadata || {}).full_name) || (req.user && req.user.email) || 'Usuário',
       dominios: dominios.map((d) => ({ nome: d.nome || d.domain_name || d.id })),

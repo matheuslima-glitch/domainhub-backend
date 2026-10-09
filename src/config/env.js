@@ -140,11 +140,28 @@ if (!process.env.ZAPI_INSTANCE || !process.env.ZAPI_CLIENT_TOKEN) {
   console.warn('⚠️ Z-API não configurado - notificações WhatsApp desabilitadas');
 }
 
-// Verificar Discord — um dos DOIS canais de notificação. O outro é a Z-API
-// acima; os dois recebem os mesmos alertas e são independentes entre si.
+// Verificar Discord — um dos TRÊS canais de notificação. Os outros são a
+// Z-API acima e o Telegram abaixo; todos recebem os mesmos alertas e são
+// independentes entre si.
 if (!process.env.DISCORD_WEBHOOK_URL) {
   console.warn('⚠️ DISCORD_WEBHOOK_URL não configurada - alertas sairão só pelo WhatsApp');
   console.warn('   Configure no Render: Environment → DISCORD_WEBHOOK_URL');
+}
+
+// Verificar Telegram — terceiro canal, acrescentado em 09/10/2026 porque o
+// webhook do Discord passou a devolver HTTP 401 (código 50027, "token de
+// webhook inválido") e os alertas pararam de chegar sem nada avisar.
+//
+// Precisa dos DOIS: o token identifica o bot, o chat_id diz para qual grupo
+// postar. Com um só, o canal não sobe — e é por isso que o aviso diz qual
+// está faltando em vez de um genérico.
+const telegramVars = ['TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID'];
+const missingTelegram = telegramVars.filter(v => !process.env[v]);
+if (missingTelegram.length > 0) {
+  console.warn('⚠️ Telegram não configurado - o grupo não receberá alertas:');
+  missingTelegram.forEach(v => console.warn(`  - ${v}`));
+  console.warn('   Token: @BotFather → /newbot. Chat ID: api.telegram.org/bot<TOKEN>/getUpdates');
+  console.warn('   O chat_id de GRUPO é negativo (ex.: -1001234567890)');
 }
 
 // Log de configuração
@@ -157,6 +174,7 @@ console.log(`${missingWordpress.length === 0 ? '✅' : '⚠️'} WordPress: ${mi
 console.log(`${missingCloudflare.length === 0 ? '✅' : '⚠️'} Cloudflare: ${missingCloudflare.length === 0 ? 'Configurado' : 'Parcialmente configurado'}`);
 console.log(`${process.env.ZAPI_INSTANCE ? '✅' : '⚠️'} WhatsApp: ${process.env.ZAPI_INSTANCE ? 'Configurado' : 'Não configurado'}`);
 console.log(`${process.env.DISCORD_WEBHOOK_URL ? '✅' : '❌'} Discord: ${process.env.DISCORD_WEBHOOK_URL ? 'Configurado' : 'NÃO CONFIGURADO'}`);
+console.log(`${missingTelegram.length === 0 ? '✅' : '❌'} Telegram: ${missingTelegram.length === 0 ? 'Configurado' : 'NÃO CONFIGURADO'}`);
 console.log(`${coletaUniques ? '✅' : '⏸️'} Visitantes únicos: ${coletaUniques ? 'Coleta ligada' : 'DESLIGADA (COLETA_UNIQUES=false)'}`);
 console.log(`${coletaDiaria ? '✅' : '⏸️'} Série diária: ${coletaDiaria ? 'Coleta ligada' : 'DESLIGADA (COLETA_DIARIA=false)'}`);
 console.log(`${desativacaoEstrita ? '✅' : '⚠️'} Desativação estrita: ${desativacaoEstrita ? 'Só marca após confirmar remoção' : 'DESLIGADA - marca sem verificar'}`);
@@ -218,6 +236,12 @@ module.exports = {
 
   // Discord — segundo canal de notificações, em paralelo com a Z-API
   DISCORD_WEBHOOK_URL: process.env.DISCORD_WEBHOOK_URL,
+
+  // Telegram — terceiro canal, em paralelo com os outros dois. Sem estas duas
+  // o canal se desabilita sozinho e os demais seguem normalmente; é também o
+  // jeito de desligá-lo sem deploy.
+  TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN,
+  TELEGRAM_CHAT_ID: process.env.TELEGRAM_CHAT_ID,
 
   // cPanel Theme
   CPANEL_THEME: 'jupiter',
