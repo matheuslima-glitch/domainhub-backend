@@ -936,6 +936,34 @@ class NotificationService {
         .eq('domain_name', domainName)
         .maybeSingle();
 
+      // ── OS GRUPOS RECEBEM AQUI, ANTES E INDEPENDENTE DOS CONTATOS ────────
+      //
+      // Discord e Telegram não têm telefone e não têm nada a ver com
+      // `notification_settings`. Mesmo assim, até 09/10/2026 o alerta deles
+      // saía de DENTRO do laço abaixo — só era espelhado quando algum contato
+      // tinha número. Sem contato, ou com todos sem telefone, o grupo ficava
+      // mudo e nada avisava.
+      //
+      // O cenário não era hipotético: o time está migrando para o Telegram
+      // justamente porque a Z-API e o Discord falharam. No dia em que alguém
+      // limpasse os contatos antigos do WhatsApp, o grupo novo emudeceria
+      // junto — e ninguém ligaria uma coisa à outra.
+      //
+      // Saudação neutra porque é grupo: o texto dos contatos é personalizado
+      // ("*Eduardo*, detectamos..."), e no grupo isso não faz sentido.
+      //
+      // Disparado sem `await`: o alerta do grupo não pode atrasar nem
+      // derrubar o envio do WhatsApp.
+      whatsappService.espelharNosCanais(
+        whatsappService.montarAlertaSuspenso(
+          domainName,
+          'Equipe',
+          domainData?.monthly_visits || 0,
+          domainData?.traffic_source || null
+        ),
+        { chaveAlerta: `suspenso:${domainName}` }
+      );
+
       // Buscar TODOS os contatos com alerta de suspenso ativo
       const { data: contacts, error } = await this.client
         .from('notification_settings')
@@ -982,12 +1010,15 @@ class NotificationService {
 
           phoneNumber = phoneNumber.replace(/\D/g, '');
 
+          // `naoEspelhar`: os grupos já receberam a cópia deles antes do laço.
+          // Sem isto, cada contato postaria de novo no Discord e no Telegram.
           const result = await whatsappService.sendSuspendedDomainAlert(
             phoneNumber,
             domainName,
             displayName || 'Cliente',
             domainData?.monthly_visits || 0,
-            domainData?.traffic_source || null
+            domainData?.traffic_source || null,
+            { naoEspelhar: true }
           );
 
           if (result.success) {
@@ -1043,6 +1074,19 @@ class NotificationService {
         .eq('domain_name', domainName)
         .maybeSingle();
 
+      // Os grupos recebem aqui, independente dos contatos. Mesma razão do
+      // alerta de suspenso — ver o comentário longo lá em cima.
+      whatsappService.espelharNosCanais(
+        whatsappService.montarAlertaExpirado(
+          domainName,
+          'Equipe',
+          domainData?.monthly_visits || 0,
+          domainData?.traffic_source || null,
+          domainData?.weekly_visits || 0
+        ),
+        { chaveAlerta: `expirado:${domainName}` }
+      );
+
       // Buscar TODOS os contatos com alerta de expirado ativo
       const { data: contacts, error } = await this.client
         .from('notification_settings')
@@ -1089,13 +1133,15 @@ class NotificationService {
 
           phoneNumber = phoneNumber.replace(/\D/g, '');
 
+          // `naoEspelhar`: os grupos já receberam antes do laço.
           const result = await whatsappService.sendExpiredDomainAlert(
             phoneNumber,
             domainName,
             displayName || 'Cliente',
             domainData?.monthly_visits || 0,
             domainData?.traffic_source || null,
-            domainData?.weekly_visits || 0
+            domainData?.weekly_visits || 0,
+            { naoEspelhar: true }
           );
 
           if (result.success) {
