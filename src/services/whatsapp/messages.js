@@ -186,9 +186,37 @@ class WhatsAppService {
    * Ver `sendSuspendedDomainAlert` em services/whatsapp/notifications.js, que
    * chama isto UMA vez para os canais de grupo e depois percorre os contatos.
    */
-  montarAlertaSuspenso(domainName, userName = 'Cliente', monthlyVisits = 0, trafficSource = null) {
+  /**
+   * O tráfego do domínio, preferindo o dado VIVO.
+   *
+   * `requests_30d` é reescrita todo dia pelo coletor da Cloudflare.
+   * `monthly_visits` é a importação CONGELADA de 15/08/2026 — nada no backend
+   * escreve nela desde então (confirmado em 09/10/2026: nenhuma atribuição em
+   * todo o `src/`).
+   *
+   * A diferença não é detalhe. Medido no mesmo domínio, com sete minutos entre
+   * as duas mensagens: o relatório de críticos mostrou `mygelagen.com` com
+   * 14.087.417 req/30d e o alerta de suspensão, 27.721 acessos/mês. **508
+   * vezes.** Quem lesse o alerta concluiria que é um site pequeno e deixaria
+   * para depois, que é o oposto do que o alerta serve.
+   *
+   * A reserva continua existindo porque domínio sem zona na Cloudflare tem
+   * `requests_30d` nula — e ali o dado velho é melhor que nada. Mas vai
+   * ROTULADO como velho: número sem procedência é pior que número ausente.
+   */
+  formatarTrafego(requests30d, monthlyVisits) {
+    if (requests30d != null) {
+      return Number(requests30d).toLocaleString('pt-BR') + ' requisições em 30 dias';
+    }
+    if (monthlyVisits) {
+      return Number(monthlyVisits).toLocaleString('pt-BR') + ' acessos/mês (dado congelado em ago/2026)';
+    }
+    return 'Sem medição';
+  }
+
+  montarAlertaSuspenso(domainName, userName = 'Cliente', monthlyVisits = 0, trafficSource = null, requests30d = null) {
     const firstName = this.getFirstName(userName);
-    const visitsFormatted = monthlyVisits ? monthlyVisits.toLocaleString('pt-BR') + ' acessos/mês' : 'Nenhum acesso mensal';
+    const visitsFormatted = this.formatarTrafego(requests30d, monthlyVisits);
     const sourceFormatted = trafficSource || 'Não definido';
 
     return `🤖 *DOMAIN HUB*
@@ -226,7 +254,9 @@ class WhatsAppService {
    *        contato.
    */
   async sendSuspendedDomainAlert(phoneNumber, domainName, userName = 'Cliente', monthlyVisits = 0, trafficSource = null, opts = {}) {
-    const message = this.montarAlertaSuspenso(domainName, userName, monthlyVisits, trafficSource);
+    const message = this.montarAlertaSuspenso(
+      domainName, userName, monthlyVisits, trafficSource, opts.requests30d ?? null
+    );
 
     // `chaveAlerta` identifica o alerta pelo que ele É, não pelo texto. Fica
     // como defesa: se alguém remover o `naoEspelhar` do laço, a chave ainda
@@ -298,11 +328,25 @@ ${suspended > 0 ? `🔴 *${suspended} Domínio${suspended > 1 ? 's' : ''} Suspen
    * @returns {Promise<object>}
    */
   /** MONTA o texto do alerta de expirado, sem enviar. Ver `montarAlertaSuspenso`. */
-  montarAlertaExpirado(domainName, userName = 'Cliente', monthlyVisits = 0, trafficSource = null, weeklyVisits = 0) {
+  /**
+   * @param {number|null} requests7d - soma VIVA dos últimos 7 dias, de
+   *        `domain_daily_stats`. Substituiu `weekly_visits`, que era a mentira
+   *        mais direta do sistema: um campo rotulado "últimos 7 dias"
+   *        mostrando dado congelado em agosto. `null` quando o domínio não tem
+   *        série diária — e aí a linha some, em vez de mostrar zero.
+   */
+  montarAlertaExpirado(domainName, userName = 'Cliente', monthlyVisits = 0, trafficSource = null, requests7d = null, requests30d = null) {
     const firstName = this.getFirstName(userName);
-    const visitsFormatted = monthlyVisits ? monthlyVisits.toLocaleString('pt-BR') + ' acessos/mês' : 'Nenhum acesso mensal';
-    const weeklyFormatted = weeklyVisits ? weeklyVisits.toLocaleString('pt-BR') + ' acessos (últimos 7 dias)' : 'Nenhum acesso nos últimos 7 dias';
+    const visitsFormatted = this.formatarTrafego(requests30d, monthlyVisits);
     const sourceFormatted = trafficSource || 'Não definido';
+
+    // Sem série diária, a linha inteira sai do alerta. Escrever "Nenhum acesso
+    // nos últimos 7 dias" para um domínio que simplesmente não é medido
+    // afirmaria algo falso sobre ele.
+    const linha7d =
+      requests7d == null
+        ? ''
+        : `\n📈 *Últimos 7 dias:* ${Number(requests7d).toLocaleString('pt-BR')} requisições`;
 
     return `🤖 *DOMAIN HUB*
 
@@ -313,8 +357,7 @@ ${suspended > 0 ? `🔴 *${suspended} Domínio${suspended > 1 ? 's' : ''} Suspen
 ━━━━━━━━━━━━━━━━━━━━━
 
 🟠 *Status:* EXPIRADO
-📊 *Acessos:* ${visitsFormatted}
-📈 *Últimos 7 dias:* ${weeklyFormatted}
+📊 *Acessos:* ${visitsFormatted}${linha7d}
 📢 *Fonte:* ${sourceFormatted}
 ⏰ *Detectado em:* ${new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}
 
@@ -332,8 +375,11 @@ ${suspended > 0 ? `🔴 *${suspended} Domínio${suspended > 1 ? 's' : ''} Suspen
   }
 
   /** Envia o alerta de expirado a UM número. Ver `sendSuspendedDomainAlert`. */
-  async sendExpiredDomainAlert(phoneNumber, domainName, userName = 'Cliente', monthlyVisits = 0, trafficSource = null, weeklyVisits = 0, opts = {}) {
-    const message = this.montarAlertaExpirado(domainName, userName, monthlyVisits, trafficSource, weeklyVisits);
+  async sendExpiredDomainAlert(phoneNumber, domainName, userName = 'Cliente', monthlyVisits = 0, trafficSource = null, opts = {}) {
+    const message = this.montarAlertaExpirado(
+      domainName, userName, monthlyVisits, trafficSource,
+      opts.requests7d ?? null, opts.requests30d ?? null
+    );
 
     return this.sendMessage(phoneNumber, message, {
       chaveAlerta: `expirado:${domainName}`,

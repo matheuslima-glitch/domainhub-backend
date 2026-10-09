@@ -51,7 +51,14 @@ let telegramLanca = false;
 // Banco falso para o grupo 3. `contatosFalsos` é trocado entre as provas para
 // simular "ninguém cadastrado" e "vários contatos com nomes diferentes".
 let contatosFalsos = [];
-const DOMINIO_FALSO = { monthly_visits: 1234, weekly_visits: 56, traffic_source: 'Facebook' };
+const DOMINIO_FALSO = {
+  id: 'dom-1',
+  monthly_visits: 27721,        // congelado em ago/2026
+  requests_30d: 14087417,       // vivo, da Cloudflare
+  traffic_source: 'Facebook'
+};
+// Sete dias de série diária: 7 x 1.000 = 7.000 requisições.
+const DIAS_FALSOS = Array.from({ length: 7 }, () => ({ requests: 1000 }));
 
 function clienteFalso() {
   const cadeia = (lista, unico) => {
@@ -74,6 +81,7 @@ function clienteFalso() {
   return {
     from: (tabela) => {
       if (tabela === 'domains') return cadeia([DOMINIO_FALSO], DOMINIO_FALSO);
+      if (tabela === 'domain_daily_stats') return cadeia(DIAS_FALSOS, null);
       if (tabela === 'notification_settings') return cadeia(contatosFalsos, contatosFalsos[0] || null);
       return cadeia([], null);
     }
@@ -353,6 +361,15 @@ async function provarIndependenciaDoWhatsApp() {
     recebidoTelegram[0] && recebidoTelegram[0].m.includes('*Equipe*'),
     recebidoTelegram[0] && recebidoTelegram[0].m.split('\n')[4]
   );
+  // Prova a canalizacao inteira: o `requests_30d` saiu do select, atravessou
+  // notifications.js e chegou no texto. E o congelado NAO aparece.
+  ok(
+    'e com o trafego VIVO vindo do banco, nao o congelado',
+    recebidoTelegram[0] &&
+      recebidoTelegram[0].m.includes('14.087.417') &&
+      !recebidoTelegram[0].m.includes('27.721'),
+    recebidoTelegram[0] && recebidoTelegram[0].m.split('\n')[8]
+  );
 
   // Caso 2: VÁRIOS contatos com nomes diferentes. Uma mensagem, não N.
   contatosFalsos = [
@@ -382,10 +399,40 @@ async function provarIndependenciaDoWhatsApp() {
   );
 }
 
+/**
+ * O alerta tem de mostrar o tráfego VIVO.
+ *
+ * Visto no grupo em 09/10/2026, com sete minutos entre as duas mensagens:
+ * o relatório de críticos disse `mygelagen.com — 14.087.417 req/30d` e o
+ * alerta de suspensão, `27.721 acessos/mês`. 508 vezes de diferença, porque
+ * o alerta lia `monthly_visits`, congelada na importação de 15/08/2026.
+ */
+async function provarTrafegoVivo() {
+  const msg = require('../services/whatsapp/messages');
+
+  const vivo = msg.montarAlertaSuspenso('x.com', 'Equipe', 27721, 'google', 14087417);
+  ok('usa o numero VIVO quando existe', vivo.includes('14.087.417 requisições em 30 dias'), vivo.split('\n')[8]);
+  ok('e nao o congelado', !vivo.includes('27.721'), vivo.split('\n')[8]);
+
+  const reserva = msg.montarAlertaSuspenso('x.com', 'Equipe', 27721, 'google', null);
+  ok('cai para o congelado quando nao ha vivo', reserva.includes('27.721 acessos/mês'), reserva.split('\n')[8]);
+  ok('mas avisa que o dado e velho', reserva.includes('congelado'), reserva.split('\n')[8]);
+
+  const nada = msg.montarAlertaSuspenso('x.com', 'Equipe', 0, 'google', null);
+  ok('sem nenhum dos dois, diz "Sem medicao"', nada.includes('Sem medição'), nada.split('\n')[8]);
+
+  // A linha de 7 dias some quando nao ha serie, em vez de afirmar zero.
+  const com7 = msg.montarAlertaExpirado('x.com', 'Equipe', 0, 'google', 7000, 14087417);
+  ok('mostra os 7 dias vivos', com7.includes('7.000 requisições'), 'nao achou');
+  const sem7 = msg.montarAlertaExpirado('x.com', 'Equipe', 0, 'google', null, 14087417);
+  ok('e omite a linha quando nao ha serie', !sem7.includes('Últimos 7 dias'), 'linha ficou');
+}
+
 (async () => {
   await provarTelegram();
   await provarDistribuidor();
   await provarIndependenciaDoWhatsApp();
+  await provarTrafegoVivo();
 
   let falhas = 0;
   provas.forEach(({ rot, cond, detalhe }) => {
