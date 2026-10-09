@@ -721,6 +721,40 @@ class NotificationService {
    * @param {object} metadata - Metadados da notificação
    * @returns {Promise<void>}
    */
+  /**
+   * Soma VIVA das requisições dos últimos 7 dias, de `domain_daily_stats`.
+   *
+   * Substitui a coluna `weekly_visits`, que era rotulada "últimos 7 dias" no
+   * alerta e está congelada desde a importação de 15/08/2026 — nada no backend
+   * escreve nela (confirmado em 09/10/2026: nenhuma atribuição em todo o src/).
+   *
+   * Devolve `null` quando o domínio não tem série diária. É diferente de zero:
+   * zero afirma "não teve acesso", `null` admite "não medimos", e o alerta
+   * omite a linha em vez de mentir.
+   *
+   * No máximo 7 linhas, então não precisa paginar.
+   */
+  async somarRequests7d(domainId) {
+    if (!domainId) return null;
+
+    try {
+      const desde = new Date();
+      desde.setUTCDate(desde.getUTCDate() - 7);
+
+      const { data, error } = await this.client
+        .from('domain_daily_stats')
+        .select('requests')
+        .eq('domain_id', domainId)
+        .gte('data', desde.toISOString().slice(0, 10));
+
+      if (error || !data || !data.length) return null;
+      return data.reduce((s, l) => s + (Number(l.requests) || 0), 0);
+    } catch (e) {
+      console.warn(`⚠️ [NOTIF] Falha ao somar 7 dias de ${domainId}: ${e.message}`);
+      return null;
+    }
+  }
+
   async logNotification(userId, notificationType, metadata = {}) {
     try {
       const { error } = await this.client
@@ -932,7 +966,9 @@ class NotificationService {
       // Buscar dados do domínio (acessos e fonte de tráfego)
       const { data: domainData } = await this.client
         .from('domains')
-        .select('monthly_visits, traffic_source')
+        // `requests_30d` é o tráfego VIVO; `monthly_visits` é a importação
+        // congelada de agosto e só serve de reserva. Ver formatarTrafego().
+        .select('id, monthly_visits, traffic_source, requests_30d')
         .eq('domain_name', domainName)
         .maybeSingle();
 
@@ -959,7 +995,8 @@ class NotificationService {
           domainName,
           'Equipe',
           domainData?.monthly_visits || 0,
-          domainData?.traffic_source || null
+          domainData?.traffic_source || null,
+          domainData?.requests_30d ?? null
         ),
         { chaveAlerta: `suspenso:${domainName}` }
       );
@@ -1018,7 +1055,7 @@ class NotificationService {
             displayName || 'Cliente',
             domainData?.monthly_visits || 0,
             domainData?.traffic_source || null,
-            { naoEspelhar: true }
+            { naoEspelhar: true, requests30d: domainData?.requests_30d ?? null }
           );
 
           if (result.success) {
@@ -1070,19 +1107,27 @@ class NotificationService {
       // Buscar dados do domínio (acessos e fonte de tráfego)
       const { data: domainData } = await this.client
         .from('domains')
-        .select('monthly_visits, weekly_visits, traffic_source')
+        // `weekly_visits` saiu: congelada desde agosto e rotulada "últimos 7
+        // dias" no alerta. O número vivo vem de somarRequests7d() abaixo.
+        .select('id, monthly_visits, traffic_source, requests_30d')
         .eq('domain_name', domainName)
         .maybeSingle();
 
       // Os grupos recebem aqui, independente dos contatos. Mesma razão do
       // alerta de suspenso — ver o comentário longo lá em cima.
+      // Uma consulta de até 7 linhas, feita antes do espelho porque o número
+      // entra na mensagem. Vale o milissegundo: era este campo que dizia
+      // "últimos 7 dias" mostrando dado de agosto.
+      const req7d = await this.somarRequests7d(domainData?.id);
+
       whatsappService.espelharNosCanais(
         whatsappService.montarAlertaExpirado(
           domainName,
           'Equipe',
           domainData?.monthly_visits || 0,
           domainData?.traffic_source || null,
-          domainData?.weekly_visits || 0
+          req7d,
+          domainData?.requests_30d ?? null
         ),
         { chaveAlerta: `expirado:${domainName}` }
       );
@@ -1140,8 +1185,7 @@ class NotificationService {
             displayName || 'Cliente',
             domainData?.monthly_visits || 0,
             domainData?.traffic_source || null,
-            domainData?.weekly_visits || 0,
-            { naoEspelhar: true }
+            { naoEspelhar: true, requests7d: req7d, requests30d: domainData?.requests_30d ?? null }
           );
 
           if (result.success) {
