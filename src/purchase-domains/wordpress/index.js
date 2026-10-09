@@ -1476,15 +1476,15 @@ try {
           `🗓️Data: ${dataFormatada} ás ${horaFormatada}`;
       }
       
-      // ACRÉSCIMO: o mesmo texto também vai para o canal do Discord. Disparado
-      // sem `await` para não alterar o tempo nem o resultado do envio da Z-API
-      // abaixo. Sucesso é informativo; erro é falha e marca @everyone no canal.
+      // ACRÉSCIMO: o mesmo texto também vai para os canais paralelos — Discord
+      // e Telegram. Disparado sem `await` para não alterar o tempo nem o
+      // resultado do envio da Z-API abaixo. Sucesso é informativo e não sai
+      // nesses canais; erro é falha e notifica.
       try {
-        require('../../services/notify/discord')
-          .send(message, { critico: status !== 'success' })
-          .catch((e) => console.error('❌ [DISCORD] Falha ao enviar:', e.message));
+        require('../../services/notify')
+          .espelharEmSegundoPlano(message, { critico: status !== 'success' });
       } catch (e) {
-        console.error('❌ [DISCORD] Falha ao carregar o canal:', e.message);
+        console.error('❌ [NOTIFY] Falha ao carregar o distribuidor:', e.message);
       }
 
       if (!config.ZAPI_INSTANCE || !config.ZAPI_CLIENT_TOKEN) {

@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
-    "backfill:mensal": "node src/scripts/backfill-mensal.js"
+    "backfill:mensal": "node src/scripts/backfill-mensal.js",
+    "testa:canais": "node src/scripts/testa-canais-notificacao.js"
   },
   "dependencies": {
     "express": "^4.18.2",

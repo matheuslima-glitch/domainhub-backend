@@ -100,7 +100,7 @@ Module._load = originalLoad;
       return {
         async verificar(args) { chamadas.verificar.push(args); return respostaDaTrava; },
         async registrar(args) { chamadas.registrar.push(args); },
-        async avisarDiscord() {},
+        async avisarCanais() {},
         async idDoDominio() { return 'id-fake'; },
       };
     }
