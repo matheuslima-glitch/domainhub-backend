@@ -97,6 +97,11 @@ class WhatsAppService {
    * uma única mensagem em cada grupo. Ver services/notify/.
    */
   espelharNosCanais(message, opts = {}) {
+    // `naoEspelhar` é para quem JÁ mandou aos grupos por fora e agora está
+    // percorrendo contatos de WhatsApp. Sem ele, o laço postaria uma vez por
+    // pessoa. Ver sendSuspendedDomainAlert em whatsapp/notifications.js.
+    if (opts.naoEspelhar) return;
+
     try {
       require('../notify').espelharEmSegundoPlano(message, opts);
     } catch (e) {
@@ -171,18 +176,22 @@ class WhatsAppService {
   }
 
   /**
-   * Envia alerta imediato de domínio suspenso
-   * @param {string} phoneNumber - Número de telefone
-   * @param {string} domainName - Nome do domínio
-   * @param {string} userName - Nome do usuário
-   * @returns {Promise<object>}
+   * MONTA o texto do alerta de domínio suspenso, sem enviar.
+   *
+   * Separado do envio para o alerta do GRUPO não depender de haver contato de
+   * WhatsApp. Antes, o texto só existia dentro do laço que percorre
+   * `notification_settings` — então sem contato com telefone, nada era
+   * montado e o Discord e o Telegram não recebiam nada.
+   *
+   * Ver `sendSuspendedDomainAlert` em services/whatsapp/notifications.js, que
+   * chama isto UMA vez para os canais de grupo e depois percorre os contatos.
    */
-  async sendSuspendedDomainAlert(phoneNumber, domainName, userName = 'Cliente', monthlyVisits = 0, trafficSource = null) {
+  montarAlertaSuspenso(domainName, userName = 'Cliente', monthlyVisits = 0, trafficSource = null) {
     const firstName = this.getFirstName(userName);
     const visitsFormatted = monthlyVisits ? monthlyVisits.toLocaleString('pt-BR') + ' acessos/mês' : 'Nenhum acesso mensal';
     const sourceFormatted = trafficSource || 'Não definido';
-    
-    const message = `🤖 *DOMAIN HUB*
+
+    return `🤖 *DOMAIN HUB*
 
 ⚠️ *ALERTA URGENTE*
 
@@ -206,13 +215,26 @@ class WhatsAppService {
 ━━━━━━━━━━━━━━━━━━━━━
 
 ⚡ *Acesse o Domain Hub para mais detalhes*`;
+  }
 
-    // `chaveAlerta` identifica o alerta pelo que ele É, não pelo texto. O laço
-    // de contatos chama isto uma vez POR PESSOA e o texto é personalizado
-    // ("*Eduardo*, detectamos..."), então sem a chave o Discord e o Telegram
-    // receberiam uma cópia por nome distinto — 17 delas, medido em 09/10/2026.
-    // Ver chaveDedupe() em services/notify/.
-    return this.sendMessage(phoneNumber, message, { chaveAlerta: `suspenso:${domainName}` });
+  /**
+   * Envia alerta imediato de domínio suspenso a UM número de WhatsApp.
+   *
+   * @param {object} [opts] - repassado ao envio. Quem percorre contatos manda
+   *        `{ naoEspelhar: true }`: os canais de grupo já receberam a sua
+   *        cópia antes do laço, e espelhar de novo aqui postaria uma vez por
+   *        contato.
+   */
+  async sendSuspendedDomainAlert(phoneNumber, domainName, userName = 'Cliente', monthlyVisits = 0, trafficSource = null, opts = {}) {
+    const message = this.montarAlertaSuspenso(domainName, userName, monthlyVisits, trafficSource);
+
+    // `chaveAlerta` identifica o alerta pelo que ele É, não pelo texto. Fica
+    // como defesa: se alguém remover o `naoEspelhar` do laço, a chave ainda
+    // impede que 17 nomes distintos virem 17 mensagens no grupo.
+    return this.sendMessage(phoneNumber, message, {
+      chaveAlerta: `suspenso:${domainName}`,
+      ...opts
+    });
   }
 
   /**
@@ -275,13 +297,14 @@ ${suspended > 0 ? `🔴 *${suspended} Domínio${suspended > 1 ? 's' : ''} Suspen
    * @param {string} userName - Nome do usuário
    * @returns {Promise<object>}
    */
-  async sendExpiredDomainAlert(phoneNumber, domainName, userName = 'Cliente', monthlyVisits = 0, trafficSource = null, weeklyVisits = 0) {
+  /** MONTA o texto do alerta de expirado, sem enviar. Ver `montarAlertaSuspenso`. */
+  montarAlertaExpirado(domainName, userName = 'Cliente', monthlyVisits = 0, trafficSource = null, weeklyVisits = 0) {
     const firstName = this.getFirstName(userName);
     const visitsFormatted = monthlyVisits ? monthlyVisits.toLocaleString('pt-BR') + ' acessos/mês' : 'Nenhum acesso mensal';
     const weeklyFormatted = weeklyVisits ? weeklyVisits.toLocaleString('pt-BR') + ' acessos (últimos 7 dias)' : 'Nenhum acesso nos últimos 7 dias';
     const sourceFormatted = trafficSource || 'Não definido';
-    
-    const message = `🤖 *DOMAIN HUB*
+
+    return `🤖 *DOMAIN HUB*
 
 ⚠️ *ALERTA URGENTE*
 
@@ -306,9 +329,16 @@ ${suspended > 0 ? `🔴 *${suspended} Domínio${suspended > 1 ? 's' : ''} Suspen
 ━━━━━━━━━━━━━━━━━━━━━
 
 ⚡ *Acesse o Domain Hub para mais detalhes*`;
+  }
 
-    // Mesma razão do alerta de suspenso: uma chave por DOMÍNIO, não por texto.
-    return this.sendMessage(phoneNumber, message, { chaveAlerta: `expirado:${domainName}` });
+  /** Envia o alerta de expirado a UM número. Ver `sendSuspendedDomainAlert`. */
+  async sendExpiredDomainAlert(phoneNumber, domainName, userName = 'Cliente', monthlyVisits = 0, trafficSource = null, weeklyVisits = 0, opts = {}) {
+    const message = this.montarAlertaExpirado(domainName, userName, monthlyVisits, trafficSource, weeklyVisits);
+
+    return this.sendMessage(phoneNumber, message, {
+      chaveAlerta: `expirado:${domainName}`,
+      ...opts
+    });
   }
 }
 

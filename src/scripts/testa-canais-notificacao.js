@@ -48,8 +48,43 @@ let recebidoTelegram = [];
 let discordLanca = false;
 let telegramLanca = false;
 
+// Banco falso para o grupo 3. `contatosFalsos` é trocado entre as provas para
+// simular "ninguém cadastrado" e "vários contatos com nomes diferentes".
+let contatosFalsos = [];
+const DOMINIO_FALSO = { monthly_visits: 1234, weekly_visits: 56, traffic_source: 'Facebook' };
+
+function clienteFalso() {
+  const cadeia = (lista, unico) => {
+    const obj = {
+      select: () => obj,
+      eq: () => obj,
+      gte: () => obj,
+      order: () => obj,
+      limit: () => obj,
+      update: () => obj,
+      insert: () => Promise.resolve({ data: null, error: null }),
+      maybeSingle: () => Promise.resolve({ data: unico, error: null }),
+      single: () => Promise.resolve({ data: unico, error: null }),
+      // Torna a cadeia aguardável: `await client.from(x).select().eq()`
+      then: (res, rej) => Promise.resolve({ data: lista, error: null }).then(res, rej)
+    };
+    return obj;
+  };
+
+  return {
+    from: (tabela) => {
+      if (tabela === 'domains') return cadeia([DOMINIO_FALSO], DOMINIO_FALSO);
+      if (tabela === 'notification_settings') return cadeia(contatosFalsos, contatosFalsos[0] || null);
+      return cadeia([], null);
+    }
+  };
+}
+
 const original = Module._load;
 Module._load = function (pedido, pai, ehPrincipal) {
+  if (pedido === '@supabase/supabase-js') {
+    return { createClient: () => clienteFalso() };
+  }
   if (pedido === 'axios') {
     return {
       post: async (url, body) => {
@@ -278,9 +313,65 @@ async function provarDistribuidor() {
   telegramLanca = false;
 }
 
+/**
+ * A prova que o Matheus pediu em 09/10/2026: "a notificação para o Telegram
+ * não deve depender do WhatsApp".
+ *
+ * Antes, o espelho saía de DENTRO do laço que percorre `notification_settings`
+ * — então sem contato com telefone, o grupo não recebia nada, apesar de grupo
+ * não ter telefone nenhum.
+ */
+async function provarIndependenciaDoWhatsApp() {
+  dublarCanais = true;
+  const notificacoes = require('../services/whatsapp/notifications');
+
+  // Caso 1: NENHUM contato cadastrado. O grupo tem de receber assim mesmo.
+  contatosFalsos = [];
+  recebidoTelegram = [];
+  recebidoDiscord = [];
+  await notificacoes.sendSuspendedDomainAlert('user-1', 'semcontatos.com');
+  await new Promise((r) => setTimeout(r, 30)); // o espelho é disparado sem await
+
+  ok('sem NENHUM contato, o grupo recebe', recebidoTelegram.length === 1, `telegram=${recebidoTelegram.length}`);
+  ok('e o Discord tambem', recebidoDiscord.length === 1, `discord=${recebidoDiscord.length}`);
+  ok(
+    'com saudacao neutra, nao com nome de pessoa',
+    recebidoTelegram[0] && recebidoTelegram[0].m.includes('*Equipe*'),
+    recebidoTelegram[0] && recebidoTelegram[0].m.split('\n')[4]
+  );
+
+  // Caso 2: VÁRIOS contatos com nomes diferentes. Uma mensagem, não N.
+  contatosFalsos = [
+    { id: 1, user_id: null, display_name: 'Eduardo', whatsapp_number: '5511999990001' },
+    { id: 2, user_id: null, display_name: 'Matheus', whatsapp_number: '5511999990002' },
+    { id: 3, user_id: null, display_name: 'William', whatsapp_number: '5511999990003' },
+    { id: 4, user_id: null, display_name: 'Rhanna', whatsapp_number: '5511999990004' }
+  ];
+  recebidoTelegram = [];
+  recebidoDiscord = [];
+  await notificacoes.sendSuspendedDomainAlert('user-1', 'comcontatos.com');
+  await new Promise((r) => setTimeout(r, 30));
+
+  ok('com 4 contatos, o grupo recebe UMA vez', recebidoTelegram.length === 1, `telegram=${recebidoTelegram.length}`);
+
+  // Caso 3: expirado segue a mesma regra.
+  contatosFalsos = [];
+  recebidoTelegram = [];
+  await notificacoes.sendExpiredDomainAlert('user-1', 'expirado-sem-contato.com');
+  await new Promise((r) => setTimeout(r, 30));
+
+  ok('expirado sem contato tambem chega', recebidoTelegram.length === 1, `telegram=${recebidoTelegram.length}`);
+  ok(
+    'e o texto e o de expirado',
+    recebidoTelegram[0] && recebidoTelegram[0].m.includes('expirou'),
+    recebidoTelegram[0] && recebidoTelegram[0].m.slice(0, 60)
+  );
+}
+
 (async () => {
   await provarTelegram();
   await provarDistribuidor();
+  await provarIndependenciaDoWhatsApp();
 
   let falhas = 0;
   provas.forEach(({ rot, cond, detalhe }) => {
