@@ -63,6 +63,9 @@ app.use('/api/notify', require('./routes/notify'));
 // sem esta rota, quem aplica a migration espera até 24h para ver preço na
 // tela, sem saber se o vazio é espera ou falha.
 app.use('/api/precos', require('./routes/precos'));
+// Sonda do Cloudflare Registrar: só consulta, não registra nada. Serve para
+// decidir se a compra de .com pela Cloudflare é viável antes de construí-la.
+app.use('/api/registrar', require('./routes/registrar'));
 app.use('/api/domains', require('./routes/domains'));
 app.use('/api/domains/deactivation', require('./routes/domain-deactivation'));
 // Pedidos de exclusao em lote: criar o pedido e avisar o Discord no mesmo

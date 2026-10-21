@@ -204,6 +204,19 @@ module.exports = {
   CLOUDFLARE_ACCOUNT_ID: process.env.CLOUDFLARE_ACCOUNT_ID,
   CLOUDFLARE_MAIN_ZONE_ID: process.env.CLOUDFLARE_MAIN_ZONE_ID,
 
+  // ── Cloudflare Registrar: a CONTA NOVA, que vai registrar os .com ──────
+  //
+  // OPCIONAL de propósito. Sem estas duas, a sonda responde dizendo o que
+  // falta e o resto do sistema segue igual — dá para mergear e deployar
+  // antes de a conta existir.
+  //
+  // É OUTRA CONTA, separada de `CLOUDFLARE_ACCOUNT_ID`: aquela cuida de DNS
+  // e analytics dos domínios atuais; esta vai comprar. Autenticação também é
+  // diferente — token Bearer com permissão de Registrar write, não o par
+  // e-mail + chave global que o resto do código usa.
+  CLOUDFLARE_REGISTRAR_ACCOUNT_ID: process.env.CLOUDFLARE_REGISTRAR_ACCOUNT_ID,
+  CLOUDFLARE_REGISTRAR_API_TOKEN: process.env.CLOUDFLARE_REGISTRAR_API_TOKEN,
+
   // Interruptor da coleta de visitantes únicos. Ver o bloco acima.
   COLETA_UNIQUES: coletaUniques,
 
