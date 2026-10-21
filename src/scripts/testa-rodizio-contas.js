@@ -124,6 +124,27 @@ ok(
   contas.escolher({ principal: 2, paulo: 100 }) === 'principal',
 );
 
+// ── O PLACAR CRESCE COM AS COMPRAS GRAVADAS ─────────────────────────────
+//
+// `escolherContaParaCompra` le este placar do banco contando linhas com
+// `registrar_account` preenchido. Aqui a leitura e simulada, mas a regra
+// de decisao e a mesma funcao pura de producao.
+//
+// O cenario que importa: a base tem 2.705 dominios com a coluna NULA. Se
+// eles entrassem na conta, a razao da principal seria 1352 contra 0 da
+// nova, e o rodizio mandaria mais de mil compras seguidas para la.
+
+ok(
+  'as 2.705 linhas antigas NAO entram no placar -- se entrassem, a conta '
+    + 'nova receberia ~1.350 compras seguidas tentando compensar o passado',
+  contas.escolher({ principal: 0, paulo: 0 }) === 'principal',
+);
+ok(
+  'e com o historico incluido por engano, a escolha mudaria -- esta prova '
+    + 'documenta o estrago',
+  contas.escolher({ principal: 2705, paulo: 0 }) === 'paulo',
+);
+
 // ── SEM A SEGUNDA CONTA, NADA MUDA ──────────────────────────────────────
 //
 // O caso que vai valer em producao ate as credenciais do Paulo entrarem no

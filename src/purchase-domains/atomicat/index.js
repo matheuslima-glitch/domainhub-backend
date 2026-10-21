@@ -19,6 +19,9 @@ const cancelledSessions = new Set();
 // `../tld.js`, um módulo sem dependência nenhuma, compartilhado com o
 // fluxo do WordPress — trocar a terminação é trocar UMA linha, lá.
 const { SUFIXO, FORMATO, DENTRO_DO_TEXTO } = require('../tld');
+// Qual conta da Namecheap usar. Ver src/services/namecheap/contas.js.
+const contas = require('../../services/namecheap/contas');
+const { escolherContaParaCompra } = require('../../services/namecheap/conta-do-dominio');
 
 class AtomiCatDomainPurchase {
   constructor() {
@@ -207,7 +210,16 @@ class AtomiCatDomainPurchase {
             await this.updateProgress(sessionId, 'checking', 'in_progress', 
               `Verificando disponibilidade de ${generatedDomain}...`);
             
-            const availabilityCheck = await this.checkDomainAvailability(generatedDomain);
+            // A CONTA DESTE DOMÍNIO, escolhida uma vez e usada em todas as
+            // chamadas dele: checar, comprar, consultar e gravar. Dentro de
+            // uma compra, misturar conta falharia -- comprar numa e
+            // consultar na outra devolve "domínio não encontrado".
+            //
+            // Vale só para a compra por IA. A manual não rodizia: quem
+            // digita o nome espera que ele caia na conta de sempre.
+            const contaDaCompra = await escolherContaParaCompra();
+
+            const availabilityCheck = await this.checkDomainAvailability(generatedDomain, contaDaCompra);
             
             if (!availabilityCheck.available) {
               console.log(`❌ Domínio indisponível: ${generatedDomain}`);
@@ -235,7 +247,7 @@ class AtomiCatDomainPurchase {
             await this.updateProgress(sessionId, 'purchasing', 'in_progress', 
               `Comprando ${generatedDomain}...`);
             
-            const purchaseResult = await this.purchaseDomainNamecheap(generatedDomain, false);
+            const purchaseResult = await this.purchaseDomainNamecheap(generatedDomain, false, contaDaCompra);
             
             if (purchaseResult.success) {
               domain = generatedDomain;
@@ -250,7 +262,7 @@ class AtomiCatDomainPurchase {
                 `Domínio ${generatedDomain} comprado com sucesso!`, generatedDomain);
               
               // Processar pós-compra com sessionId, trafficSource, plataforma e PREÇO
-              await this.processPostPurchase(domain, userId, sessionId, trafficSource, plataforma, false, availabilityCheck.price);
+              await this.processPostPurchase(domain, userId, sessionId, trafficSource, plataforma, false, availabilityCheck.price, contaDaCompra);
               
             } else {
               console.error(`❌ Erro na compra: ${purchaseResult.error}`);
@@ -333,7 +345,13 @@ class AtomiCatDomainPurchase {
    * - Salvar log de atividade
    * - Enviar notificação WhatsApp
    */
-  async processPostPurchase(domain, userId, sessionId = null, trafficSource = null, plataforma = null, isManual = false, purchasePrice = null) {
+  /**
+   * `conta` é o apelido da conta que comprou. Vem do rodízio na compra por
+   * IA e fica na principal na manual — e precisa atravessar daqui até o
+   * gravador, senão o domínio entra no banco sem dizer de quem é, e a
+   * sincronia e a troca de nameserver passam a procurá-lo na conta errada.
+   */
+  async processPostPurchase(domain, userId, sessionId = null, trafficSource = null, plataforma = null, isManual = false, purchasePrice = null, conta = contas.PRINCIPAL) {
     try {
       console.log(`🔧 [POST-PURCHASE-ATOMICAT] Iniciando para ${domain}`);
       if (trafficSource) {
@@ -351,10 +369,10 @@ class AtomiCatDomainPurchase {
       await this.delay(5000);
       
       // Buscar informações do domínio na Namecheap
-      const namecheapInfo = await this.getDomainInfoFromNamecheap(domain);
+      const namecheapInfo = await this.getDomainInfoFromNamecheap(domain, conta);
       
       // Salvar no Supabase com dados reais, fonte de tráfego, plataforma e preço
-      const savedDomain = await this.saveDomainToSupabase(domain, userId, namecheapInfo, trafficSource, plataforma, purchasePrice);
+      const savedDomain = await this.saveDomainToSupabase(domain, userId, namecheapInfo, trafficSource, plataforma, purchasePrice, conta);
       
       // Salvar log de atividade
       if (savedDomain?.id) {
@@ -375,7 +393,7 @@ class AtomiCatDomainPurchase {
   /**
    * VERIFICAR DISPONIBILIDADE E PREÇO - NAMECHEAP
    */
-  async checkDomainAvailability(domain) {
+  async checkDomainAvailability(domain, conta = contas.PRINCIPAL) {
     if (!config.NAMECHEAP_API_KEY || !config.NAMECHEAP_API_USER) {
       console.error('❌ [NAMECHEAP-ATOMICAT] API não configurada!');
       return { available: false, error: 'Namecheap API não configurada' };
@@ -401,9 +419,7 @@ class AtomiCatDomainPurchase {
       console.log(`🔍 [NAMECHEAP-ATOMICAT] Verificando: ${domain}...`);
       
       const checkParams = {
-        ApiUser: config.NAMECHEAP_API_USER,
-        ApiKey: config.NAMECHEAP_API_KEY,
-        UserName: config.NAMECHEAP_API_USER,
+        ...contas.parametros(conta),
         Command: 'namecheap.domains.check',
         ClientIp: config.NAMECHEAP_CLIENT_IP,
         DomainList: domain
@@ -447,9 +463,7 @@ class AtomiCatDomainPurchase {
         
         try {
           const pricingParams = {
-            ApiUser: config.NAMECHEAP_API_USER,
-            ApiKey: config.NAMECHEAP_API_KEY,
-            UserName: config.NAMECHEAP_API_USER,
+            ...contas.parametros(conta),
             Command: 'namecheap.users.getPricing',
             ClientIp: config.NAMECHEAP_CLIENT_IP,
             ProductType: 'DOMAIN',
@@ -617,7 +631,7 @@ class AtomiCatDomainPurchase {
   /**
    * COMPRAR DOMÍNIO NA NAMECHEAP
    */
-  async purchaseDomainNamecheap(domain, isManual = false) {
+  async purchaseDomainNamecheap(domain, isManual = false, conta = contas.PRINCIPAL) {
     try {
       console.log(`💳 [NAMECHEAP-ATOMICAT] Comprando: ${domain}`);
       
@@ -645,9 +659,7 @@ class AtomiCatDomainPurchase {
       console.log(`📝 [NAMECHEAP-ATOMICAT] Enviando domínio completo: ${domain}`);
       
       const params = {
-        ApiUser: config.NAMECHEAP_API_USER,
-        ApiKey: config.NAMECHEAP_API_KEY,
-        UserName: config.NAMECHEAP_API_USER,
+        ...contas.parametros(conta),
         Command: 'namecheap.domains.create',
         ClientIp: config.NAMECHEAP_CLIENT_IP,
         DomainName: domain,
@@ -760,14 +772,12 @@ class AtomiCatDomainPurchase {
   /**
    * BUSCAR INFORMAÇÕES DO DOMÍNIO NA NAMECHEAP
    */
-  async getDomainInfoFromNamecheap(domain) {
+  async getDomainInfoFromNamecheap(domain, conta = contas.PRINCIPAL) {
     try {
       console.log(`🔍 [NAMECHEAP-INFO] Buscando informações de ${domain}...`);
       
       const params = {
-        ApiUser: config.NAMECHEAP_API_USER,
-        ApiKey: config.NAMECHEAP_API_KEY,
-        UserName: config.NAMECHEAP_API_USER,
+        ...contas.parametros(conta),
         Command: 'namecheap.domains.getInfo',
         ClientIp: config.NAMECHEAP_CLIENT_IP,
         DomainName: domain
@@ -827,7 +837,7 @@ class AtomiCatDomainPurchase {
    * SALVAR NO SUPABASE - VERSÃO MELHORADA
    * Usa informações REAIS da Namecheap
    */
-  async saveDomainToSupabase(domain, userId, namecheapInfo, trafficSource = null, plataforma = null, purchasePrice = null) {
+  async saveDomainToSupabase(domain, userId, namecheapInfo, trafficSource = null, plataforma = null, purchasePrice = null, conta = contas.PRINCIPAL) {
     try {
       console.log(`💾 [SUPABASE-ATOMICAT] Salvando ${domain}...`);
       if (purchasePrice) {
@@ -913,6 +923,13 @@ class AtomiCatDomainPurchase {
         updateFields.purchase_price = purchasePrice;
       }
       
+      // A CONTA VAI JUNTO, sempre -- inclusive na compra manual, em que ela
+      // é `principal`. Gravar explicitamente, em vez de deixar nulo, separa
+      // "comprado na principal" de "comprado antes de isto existir". O
+      // rodízio conta só as linhas preenchidas, e é essa diferença que
+      // impede o histórico de distorcer a proporção.
+      updateFields.registrar_account = conta;
+
       if (Object.keys(updateFields).length > 0) {
         console.log(`💾 [SUPABASE-ATOMICAT] Atualizando campos adicionais:`, updateFields);
         const { error: updateError } = await supabase
@@ -1088,12 +1105,10 @@ class AtomiCatDomainPurchase {
   /**
    * VERIFICAR SALDO NA NAMECHEAP
    */
-  async checkBalance() {
+  async checkBalance(conta = contas.PRINCIPAL) {
     try {
       const params = {
-        ApiUser: config.NAMECHEAP_API_USER,
-        ApiKey: config.NAMECHEAP_API_KEY,
-        UserName: config.NAMECHEAP_API_USER,
+        ...contas.parametros(conta),
         Command: 'namecheap.users.getBalances',
         ClientIp: config.NAMECHEAP_CLIENT_IP
       };
