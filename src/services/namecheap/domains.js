@@ -1,5 +1,6 @@
 const axios = require('axios');
 const config = require('../../config/env');
+const contas = require('./contas');
 
 class NamecheapDomainsService {
   constructor() {
@@ -230,13 +231,11 @@ class NamecheapDomainsService {
     }
   }
 
-  async listDomains(page = 1, pageSize = 100) {
+  async listDomains(page = 1, pageSize = 100, conta = contas.PRINCIPAL) {
     const clientIP = await this.getClientIP();
     
     const params = {
-      ApiUser: config.NAMECHEAP_API_USER,
-      ApiKey: config.NAMECHEAP_API_KEY,
-      UserName: config.NAMECHEAP_API_USER,
+      ...contas.parametros(conta),
       Command: 'namecheap.domains.getList',
       ClientIp: clientIP,
       PageSize: pageSize,
@@ -310,13 +309,11 @@ class NamecheapDomainsService {
     };
   }
 
-  async getDomainInfo(domainName) {
+  async getDomainInfo(domainName, conta = contas.PRINCIPAL) {
     const clientIP = await this.getClientIP();
     
     const params = {
-      ApiUser: config.NAMECHEAP_API_USER,
-      ApiKey: config.NAMECHEAP_API_KEY,
-      UserName: config.NAMECHEAP_API_USER,
+      ...contas.parametros(conta),
       Command: 'namecheap.domains.getInfo',
       ClientIp: clientIP,
       DomainName: domainName
@@ -546,25 +543,77 @@ class NamecheapDomainsService {
     }
   }
 
-  async syncAllDomains() {
-    const allDomains = [];
+  /** Todas as páginas de UMA conta. */
+  async listarConta(conta) {
+    const encontrados = [];
     let currentPage = 1;
     let hasMore = true;
 
-    console.log('🔄 Iniciando listagem de todos os domínios...');
-    
     while (hasMore) {
-      const result = await this.listDomains(currentPage);
-      allDomains.push(...result.domains);
-      
-      console.log(`📋 Página ${currentPage}/${result.pagination.totalPages} - ${result.domains.length} domínios`);
-      
+      const result = await this.listDomains(currentPage, 100, conta);
+      // Carimba a conta em cada linha: quem consome precisa saber de onde
+      // veio, senão a origem se perde na hora de juntar as duas listas.
+      for (const d of result.domains) encontrados.push({ ...d, registrar_account: conta });
+
+      console.log(
+        `📋 [${conta}] Página ${currentPage}/${result.pagination.totalPages} - ${result.domains.length} domínios`
+      );
+
       hasMore = result.pagination.hasMore;
       currentPage++;
-      
-      if (hasMore) {
-        await this.delay(200);
+
+      if (hasMore) await this.delay(200);
+    }
+
+    return encontrados;
+  }
+
+  /**
+   * Todos os domínios, de TODAS as contas configuradas.
+   *
+   * ── POR QUE PERCORRER TODAS ──────────────────────────────────────────
+   *
+   * `domains.getList` responde pela conta da credencial. Com as compras
+   * divididas, listar só a principal faria os domínios da outra pararem de
+   * ser atualizados — expiração, lock e status congelariam.
+   *
+   * E seria um congelamento SILENCIOSO: nada some da tela, o cron diz que
+   * terminou, e os números só ficam velhos. Esse é o pior tipo de falha
+   * porque ninguém vai procurar.
+   *
+   * ── UMA CONTA QUE FALHA NÃO CANCELA AS OUTRAS ────────────────────────
+   *
+   * Em sequência, não em paralelo: a Namecheap limita a 20 chamadas por
+   * minuto POR CONTA, mas o IP é o mesmo e não vale arriscar o limite
+   * global para economizar segundos num cron de 4 em 4 horas.
+   *
+   * Se uma conta falhar — IP fora da whitelist é o caso provável —, as
+   * outras seguem e o erro vai para o log. Interromper tudo deixaria a
+   * base inteira sem sincronia por causa de uma conta.
+   */
+  async syncAllDomains() {
+    const lista = contas.listar();
+    console.log(`🔄 Iniciando listagem de domínios em ${lista.length} conta(s)...`);
+
+    const allDomains = [];
+    const falhas = [];
+
+    for (const c of lista) {
+      try {
+        allDomains.push(...(await this.listarConta(c.apelido)));
+      } catch (error) {
+        console.error(`❌ [SYNC] Conta "${c.apelido}" falhou: ${error.message}`);
+        falhas.push(c.apelido);
       }
+    }
+
+    if (falhas.length === lista.length) {
+      throw new Error(`Nenhuma conta respondeu a listagem: ${falhas.join(', ')}`);
+    }
+    if (falhas.length) {
+      console.warn(
+        `⚠️ [SYNC] ${falhas.join(', ')} não respondeu — os domínios dessa conta NÃO foram atualizados nesta rodada`
+      );
     }
 
     console.log(`✅ Total de ${allDomains.length} domínios listados`);

@@ -1,5 +1,6 @@
 const axios = require('axios');
 const config = require('../../config/env');
+const contas = require('./contas');
 
 class NamecheapNameserversService {
   constructor() {
@@ -29,7 +30,7 @@ class NamecheapNameserversService {
    * @param {string[]} nameservers - Array de nameservers (mínimo 2, máximo 12)
    * @returns {Promise<Object>} - Resultado da operação
    */
-  async setNameservers(domainName, nameservers) {
+  async setNameservers(domainName, nameservers, conta = contas.PRINCIPAL) {
     try {
       console.log(`🔄 Iniciando atualização de nameservers para ${domainName}`);
       console.log(`   Nameservers fornecidos: ${nameservers.length}`);
@@ -103,9 +104,7 @@ class NamecheapNameserversService {
       // ═══════════════════════════════════════════════════════════════
       
       const params = {
-        ApiUser: config.NAMECHEAP_API_USER,
-        ApiKey: config.NAMECHEAP_API_KEY,
-        UserName: config.NAMECHEAP_API_USER,
+        ...contas.parametros(conta),
         Command: 'namecheap.domains.dns.setCustom',
         ClientIp: clientIP,
         SLD: SLD,
@@ -214,7 +213,7 @@ class NamecheapNameserversService {
    * @param {string} domainName - Nome do domínio
    * @returns {Promise<Object>} - Informações dos nameservers
    */
-  async getNameservers(domainName) {
+  async getNameservers(domainName, conta = contas.PRINCIPAL) {
     try {
       console.log(`🔍 Consultando nameservers atuais de ${domainName}`);
       
@@ -235,9 +234,7 @@ class NamecheapNameserversService {
       const clientIP = await this.getClientIP();
       
       const params = {
-        ApiUser: config.NAMECHEAP_API_USER,
-        ApiKey: config.NAMECHEAP_API_KEY,
-        UserName: config.NAMECHEAP_API_USER,
+        ...contas.parametros(conta),
         Command: 'namecheap.domains.dns.getList',
         ClientIp: clientIP,
         SLD: SLD,
@@ -287,7 +284,7 @@ class NamecheapNameserversService {
    * @param {string} dnsType - Tipo de DNS: 'BasicDNS'
    * @returns {Promise<Object>} - Resultado da operação
    */
-  async setDefaultDNS(domainName, dnsType) {
+  async setDefaultDNS(domainName, dnsType, conta = contas.PRINCIPAL) {
     try {
       console.log(`🔄 Configurando ${dnsType} para ${domainName}`);
       
@@ -333,9 +330,7 @@ class NamecheapNameserversService {
       // ═══════════════════════════════════════════════════════════════
       
       const params = {
-        ApiUser: config.NAMECHEAP_API_USER,
-        ApiKey: config.NAMECHEAP_API_KEY,
-        UserName: config.NAMECHEAP_API_USER,
+        ...contas.parametros(conta),
         Command: 'namecheap.domains.dns.setDefault',
         ClientIp: clientIP,
         SLD: SLD,

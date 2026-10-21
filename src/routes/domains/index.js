@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const namecheapService = require('../../services/namecheap/domains');
+const { contaDoDominio } = require('../../services/namecheap/conta-do-dominio');
 const supabaseService = require('../../services/supabase/domains');
 
 // Importar rotas de nameservers
@@ -38,7 +39,10 @@ router.post('/sync', async (req, res, next) => {
       console.log(`📋 [${processedCount}/${domains.length}] Processando: ${domain.domain_name}`);
       
       // Buscar informações detalhadas do domínio
-      let details = await namecheapService.getDomainInfo(domain.domain_name);
+      let details = await namecheapService.getDomainInfo(
+        domain.domain_name,
+        await contaDoDominio(domain.domain_name),
+      );
       
       // ============================================
       // FLUXO 1: DOMÍNIO SEM ERROS (ACTIVE/EXPIRED)
@@ -81,7 +85,10 @@ router.post('/sync', async (req, res, next) => {
         
         // Tentar novamente após o wait
         console.log(`🔄 Tentando novamente: ${domain.domain_name}`);
-        details = await namecheapService.getDomainInfo(domain.domain_name);
+        details = await namecheapService.getDomainInfo(
+        domain.domain_name,
+        await contaDoDominio(domain.domain_name),
+      );
         
         if (!details.has_error) {
           console.log(`✅ Sucesso após retry: ${domain.domain_name}`);

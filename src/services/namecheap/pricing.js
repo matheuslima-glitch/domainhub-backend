@@ -24,6 +24,21 @@
  * por dia. Em laço, 400 terminações levariam 20 minutos e comeriam metade da
  * cota horária. Assim custa UMA requisição por dia.
  *
+ * ── SEMPRE A CONTA PRINCIPAL, E ISSO TEM UM PORÉM ────────────────────────
+ *
+ * O catálogo é lido só da conta principal, de propósito: `tld_pricing` tem
+ * uma linha por terminação, não uma por conta, e o painel mostra um preço
+ * só.
+ *
+ * O porém é que `YourPrice` é o preço DAQUELA conta, com os descontos
+ * dela. Se a conta do Paulo tiver desconto diferente, o custo de manter no
+ * painel fica certo para os domínios da principal e errado para os dela.
+ *
+ * Fica assim por ora porque a diferença, se existir, é de centavos por
+ * domínio, e resolver exigiria preço por conta no banco e na tela. Vale
+ * conferir quando a segunda conta estiver comprando: basta comparar
+ * `getPricing` nas duas.
+ *
  * ── O QUE ISTO AINDA NÃO É ───────────────────────────────────────────────
  *
  * Preço de TABELA da conta, não o contratado domínio a domínio. Um domínio
@@ -35,6 +50,7 @@ const axios = require('axios');
 const { createClient } = require('@supabase/supabase-js');
 const config = require('../../config/env');
 const { lerPrecos, ANOS } = require('./pricing-xml');
+const contas = require('./contas');
 
 const API = 'https://api.namecheap.com/xml.response';
 
@@ -69,9 +85,7 @@ async function obterIP() {
 async function buscarXML() {
   const { data } = await axios.get(API, {
     params: {
-      ApiUser: config.NAMECHEAP_API_USER,
-      ApiKey: config.NAMECHEAP_API_KEY,
-      UserName: config.NAMECHEAP_API_USER,
+      ...contas.parametros(contas.PRINCIPAL),
       Command: 'namecheap.users.getPricing',
       ClientIp: await obterIP(),
       ProductType: 'DOMAIN',
@@ -161,9 +175,7 @@ async function consultar(tld) {
 
   const { data: xml } = await axios.get(API, {
     params: {
-      ApiUser: config.NAMECHEAP_API_USER,
-      ApiKey: config.NAMECHEAP_API_KEY,
-      UserName: config.NAMECHEAP_API_USER,
+      ...contas.parametros(contas.PRINCIPAL),
       Command: 'namecheap.users.getPricing',
       ClientIp: await obterIP(),
       ProductType: 'DOMAIN',

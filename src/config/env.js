@@ -195,6 +195,20 @@ module.exports = {
   NAMECHEAP_API_KEY: process.env.NAMECHEAP_API_KEY,
   NAMECHEAP_CLIENT_IP: process.env.NAMECHEAP_CLIENT_IP,
 
+  // ── Segunda conta da Namecheap (a do Paulo) ───────────────────────────
+  //
+  // OPCIONAIS. Sem elas o sistema roda com uma conta só, exatamente como
+  // antes — dá para mergear e deployar antes de as credenciais existirem.
+  //
+  // PRÉ-REQUISITO FORA DO CÓDIGO: o IP do Render precisa estar na whitelist
+  // DAQUELA conta. A whitelist da Namecheap é por conta, não por chave.
+  // Sem isso, toda chamada para lá volta com erro de IP.
+  //
+  // Não há `NAMECHEAP_2_CLIENT_IP`: o IP é do servidor que chama, o mesmo
+  // para as duas. Quem muda é o lado de lá, autorizando-o.
+  NAMECHEAP_2_API_USER: process.env.NAMECHEAP_2_API_USER,
+  NAMECHEAP_2_API_KEY: process.env.NAMECHEAP_2_API_KEY,
+
   // OpenAI (Geração de domínios com IA)
   OPENAI_API_KEY: process.env.OPENAI_API_KEY,
 
