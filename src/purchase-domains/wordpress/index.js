@@ -26,6 +26,10 @@ const supabase = createClient(
 // Cache global de sessões canceladas (compartilhado entre instâncias)
 const cancelledSessions = new Set();
 
+// A terminação que a IA registra. Mora em `../tld.js`, compartilhada com o
+// fluxo do Atomicat — trocar a terminação é trocar UMA linha, lá.
+const { SUFIXO } = require('../tld');
+
 class WordPressDomainPurchase {
   constructor() {
     // Configurações de APIs
@@ -618,8 +622,30 @@ class WordPressDomainPurchase {
         const domain = parsed.domains?.[0] || parsed.domain;
         
         if (domain) {
-          console.log(`✅ [OPENAI] Domínio gerado: ${domain}`);
-          return domain.toLowerCase().trim();
+          const limpo = domain.toLowerCase().trim();
+          console.log(`✅ [OPENAI] Domínio gerado: ${limpo}`);
+
+          // AVISO, NÃO BARREIRA — e a diferença é proposital.
+          //
+          // Este fluxo nunca validou a terminação: só pede no prompt e
+          // compra o que vier. O Atomicat valida e rejeita.
+          //
+          // Rejeitar aqui também seria mais coerente, mas mudaria o
+          // comportamento de compra sem ninguém ter pedido: se a IA às
+          // vezes devolve outra terminação e essas compras hoje passam,
+          // barrar derrubaria a taxa de sucesso de um dia para o outro.
+          //
+          // Então por ora só se registra. Depois de algumas rodadas, o log
+          // diz se a IA obedece — e aí a decisão de barrar vira dado, não
+          // palpite.
+          if (!limpo.endsWith(SUFIXO)) {
+            console.warn(
+              `⚠️ [OPENAI] Terminação fora do esperado: veio "${limpo}", pedimos "${SUFIXO}". ` +
+                `Comprando assim mesmo — este fluxo não barra terminação.`,
+            );
+          }
+
+          return limpo;
         }
       }
       
@@ -1627,17 +1653,17 @@ try {
     
     let prompt = `
     Gere um nome de domínio seguindo EXATAMENTE estas regras:
-    1. Use SEMPRE a extensão .online
-    2. Use SEMPRE exatamente 3 palavras juntas (exemplo: saudevidanatural.online)
+    1. Use SEMPRE a extensão ${SUFIXO}
+    2. Use SEMPRE exatamente 3 palavras juntas (exemplo: saudevidanatural${SUFIXO})
     3. NUNCA use acentos, cedilha, traços ou caracteres especiais
     4. O domínio deve ser em ${lang}
     5. Relacionado ao nicho: ${nicho}
     6. Seja criativo e único
     
     Retorne APENAS um JSON no formato:
-    {"domains": ["dominio.online"]}
+    {"domains": ["dominio${SUFIXO}"]}
     `;
-    
+
     if (isRetry) {
       prompt += '\n\nSeja MUITO criativo e use combinações incomuns.';
     }

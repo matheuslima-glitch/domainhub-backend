@@ -15,6 +15,11 @@ const supabase = createClient(
 // Cache global de sessões canceladas (compartilhado entre instâncias)
 const cancelledSessions = new Set();
 
+// A terminação que a IA registra, e as expressões que a validam. Mora em
+// `../tld.js`, um módulo sem dependência nenhuma, compartilhado com o
+// fluxo do WordPress — trocar a terminação é trocar UMA linha, lá.
+const { SUFIXO, FORMATO, DENTRO_DO_TEXTO } = require('../tld');
+
 class AtomiCatDomainPurchase {
   constructor() {
     // Configurações de APIs
@@ -577,7 +582,7 @@ class AtomiCatDomainPurchase {
         const parsed = JSON.parse(cleanContent);
         domains = parsed.domains || [];
       } catch (parseError) {
-        const match = content.match(/([a-z0-9]+)\.online/i);
+        const match = content.match(DENTRO_DO_TEXTO);
         if (match) {
           domains = [match[0].toLowerCase()];
         }
@@ -590,12 +595,12 @@ class AtomiCatDomainPurchase {
       
       const domain = domains[0].toLowerCase().trim();
       
-      if (!domain.endsWith('.online')) {
-        console.error(`❌ Domínio inválido (sem .online): ${domain}`);
+      if (!domain.endsWith(SUFIXO)) {
+        console.error(`❌ Domínio inválido (sem ${SUFIXO}): ${domain}`);
         return null;
       }
       
-      if (!/^[a-z0-9]+\.online$/.test(domain)) {
+      if (!FORMATO.test(domain)) {
         console.error(`❌ Domínio com caracteres inválidos: ${domain}`);
         return null;
       }
@@ -622,13 +627,14 @@ class AtomiCatDomainPurchase {
         return { success: false, error: 'Formato de domínio inválido' };
       }
       
-      // Validar que termina com .online APENAS para compra com IA (não manual)
-      if (!isManual && !domain.endsWith('.online')) {
-        console.error(`❌ [NAMECHEAP] Domínio deve terminar com .online: ${domain}`);
-        return { success: false, error: 'Domínio deve terminar com .online' };
+      // Validar o sufixo APENAS para compra com IA (a manual aceita qualquer
+      // terminação: quem digita o nome sabe o que está comprando).
+      if (!isManual && !domain.endsWith(SUFIXO)) {
+        console.error(`❌ [NAMECHEAP] Domínio deve terminar com ${SUFIXO}: ${domain}`);
+        return { success: false, error: `Domínio deve terminar com ${SUFIXO}` };
       }
       
-      // Validar caracteres (apenas letras e números antes do .online)
+      // Validar caracteres (apenas letras e números antes do ponto)
       const domainParts = domain.split('.');
       const domainName = domainParts.slice(0, -1).join('');
       if (!/^[a-z0-9]+$/i.test(domainName)) {
@@ -1123,7 +1129,7 @@ class AtomiCatDomainPurchase {
     
     let prompt = `
     Gere um nome de domínio GENÉRICO e VERSÁTIL:
-    1. Use SEMPRE a extensão .online
+    1. Use SEMPRE a extensão ${SUFIXO}
     2. Use 2 ou 3 palavras juntas genéricas
     3. NUNCA use acentos, cedilha, traços ou caracteres especiais
     4. O domínio deve ser em ${lang}
@@ -1133,7 +1139,7 @@ class AtomiCatDomainPurchase {
     8. Quero apenas domínios que ainda não foram criados
     
     Retorne APENAS um JSON no formato:
-    {"domains": ["dominio.online"]}
+    {"domains": ["dominio${SUFIXO}"]}
     `;
     
     if (isRetry) {
