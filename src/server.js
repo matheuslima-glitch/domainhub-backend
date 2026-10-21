@@ -59,6 +59,10 @@ app.use('/api/balance', balanceRoutes);
 // Diagnóstico dos canais de notificação: disparar um teste e rodar o
 // relatório de críticos sob demanda, sem esperar o cron.
 app.use('/api/notify', require('./routes/notify'));
+// Coleta de preços sob demanda. O cron é 1x/dia e o shell do Render é pago:
+// sem esta rota, quem aplica a migration espera até 24h para ver preço na
+// tela, sem saber se o vazio é espera ou falha.
+app.use('/api/precos', require('./routes/precos'));
 app.use('/api/domains', require('./routes/domains'));
 app.use('/api/domains/deactivation', require('./routes/domain-deactivation'));
 // Pedidos de exclusao em lote: criar o pedido e avisar o Discord no mesmo
