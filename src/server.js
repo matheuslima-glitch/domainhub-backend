@@ -484,6 +484,34 @@ cron.schedule('15 11,20 * * *', async () => {
 // série do Cloudflare é diária, então consultar de hora em hora não traria nada
 // novo, e o horário evita colidir com os outros três crons.
 // ============================================
+// ============================================
+// PREÇO DE RENOVAÇÃO POR TERMINAÇÃO (NAMECHEAP)
+//
+// Copia o catálogo de renovação para `tld_pricing`, de onde o painel lê o
+// custo de manter. Substituiu uma tabela de 51 terminações digitada à mão
+// no repositório do painel, que envelhecia em silêncio.
+//
+// UMA requisição por dia: `getPricing` sem `ProductName` traz o catálogo
+// inteiro. O limite da Namecheap é 20/min e 8.000/dia, então isto não
+// chega perto.
+//
+// 04:40 UTC, antes do coletor diário da Cloudflare das 05:20: são APIs
+// diferentes e não disputam nada, mas manter as coletas em horários
+// separados deixa o log legível quando alguma falha.
+// ============================================
+cron.schedule('40 4 * * *', async () => {
+  console.log('💲 [CRON] Iniciando coleta de preços de renovação (Namecheap)...');
+
+  try {
+    const precos = require('./services/namecheap/pricing');
+    await precos.sincronizar();
+  } catch (error) {
+    // Falhar aqui não derruba nada: a tabela mantém a coleta de ontem, e
+    // `atualizado_em` mostra na tela que ela parou de ser atualizada.
+    console.error('❌ [CRON] Erro na coleta de preços:', error.message);
+  }
+});
+
 cron.schedule('20 5 * * *', async () => {
   console.log('📊 [CRON] Iniciando coleta de views diárias (Cloudflare)...');
 
@@ -530,6 +558,7 @@ app.listen(config.PORT, async () => {
   console.log('📊 Cron de views diárias (Cloudflare): 1x por dia às 05:20 UTC');
   console.log('📆 Cron de fechamento mensal (Cloudflare): dia 2 às 06:00 UTC');
   console.log('💰 Cron de saldo (Namecheap): a cada 2 horas, aos :30');
+  console.log('💲 Cron de preços de renovação (Namecheap): 1x por dia às 04:40 UTC');
   console.log('🚨 Cron de domínios críticos (grupos): 11:15 e 20:15 UTC');
 
   const namecheapBalance = require('./services/namecheap/balance');
