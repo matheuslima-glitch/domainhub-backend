@@ -1,6 +1,9 @@
 const express = require('express');
 const router = express.Router();
 const namecheapNameservers = require('../../services/namecheap/nameservers');
+// Cada chamada age sobre UM dominio, entao precisa da credencial da conta
+// DELE. Com uma conta so, devolve sempre a principal e nada muda.
+const { contaDoDominio } = require('../../services/namecheap/conta-do-dominio');
 const { createClient } = require('@supabase/supabase-js');
 
 // Inicializar Supabase
@@ -53,7 +56,11 @@ router.post('/update', async (req, res, next) => {
     }
     
     // Atualizar nameservers na Namecheap
-    const result = await namecheapNameservers.setNameservers(domainName, nameservers);
+    const result = await namecheapNameservers.setNameservers(
+      domainName,
+      nameservers,
+      await contaDoDominio(domainName),
+    );
     
     console.log(`\n✅ [API] Nameservers atualizados com sucesso`);
     console.log(`   Domínio: ${result.domain}`);
@@ -109,7 +116,11 @@ router.post('/set-default', async (req, res, next) => {
     // ETAPA 1: Configurar DNS predefinido na Namecheap
     // ═══════════════════════════════════════════════════════════════
     
-    const result = await namecheapNameservers.setDefaultDNS(domainName, dnsType);
+    const result = await namecheapNameservers.setDefaultDNS(
+      domainName,
+      dnsType,
+      await contaDoDominio(domainName),
+    );
     
     console.log(`\n✅ [API] ${dnsType} configurado com sucesso na Namecheap`);
     console.log(`   Domínio: ${result.domain}`);
@@ -121,7 +132,10 @@ router.post('/set-default', async (req, res, next) => {
     
     console.log(`\n🔍 [API] Buscando nameservers atualizados da Namecheap...`);
     
-    const nameserversData = await namecheapNameservers.getNameservers(domainName);
+    const nameserversData = await namecheapNameservers.getNameservers(
+      domainName,
+      await contaDoDominio(domainName),
+    );
     const newNameservers = nameserversData.nameservers || [];
     
     console.log(`   Nameservers obtidos: ${newNameservers.length}`);
@@ -189,7 +203,10 @@ router.get('/:domainName', async (req, res, next) => {
     }
     
     // Consultar nameservers na Namecheap
-    const result = await namecheapNameservers.getNameservers(domainName);
+    const result = await namecheapNameservers.getNameservers(
+      domainName,
+      await contaDoDominio(domainName),
+    );
     
     console.log(`\n✅ [API] Nameservers consultados com sucesso`);
     
