@@ -136,4 +136,77 @@ async function sincronizar() {
   return { gravadas: precos.length };
 }
 
-module.exports = { sincronizar };
+/**
+ * Preço de REGISTRO e de RENOVAÇÃO de UMA terminação. Não grava nada.
+ *
+ * Existe para responder uma pergunta que a tabela `tld_pricing` não
+ * responde: ela guarda só renovação, e quem decide se a compra por IA
+ * consegue comprar é o preço de REGISTRO, contra o teto de US$ 5,00 que
+ * `wordpress/index.js` e `atomicat/index.js` aplicam.
+ *
+ * Os dois são preços independentes. `.online` registra barato por promoção
+ * de primeiro ano e renova por US$ 35,88 — um não diz nada sobre o outro.
+ *
+ * UMA chamada traz as duas: pedindo `ProductName` sem `ProductCategory`, a
+ * Namecheap devolve todas as categorias daquela terminação.
+ *
+ * O teto é lido da própria classe de compra, não copiado para cá. O
+ * construtor dela só atribui propriedades — nenhum I/O, nenhuma conexão —,
+ * então instanciar é barato e garante que esta resposta diga o teto REAL.
+ * Um `5.00` digitado aqui viraria mentira no dia em que alguém mudasse lá.
+ */
+async function consultar(tld) {
+  const limpo = String(tld || '').trim().toLowerCase().replace(/^\./, '');
+  if (!/^[a-z0-9.]+$/.test(limpo)) throw new Error(`Terminação inválida: ${tld}`);
+
+  const { data: xml } = await axios.get(API, {
+    params: {
+      ApiUser: config.NAMECHEAP_API_USER,
+      ApiKey: config.NAMECHEAP_API_KEY,
+      UserName: config.NAMECHEAP_API_USER,
+      Command: 'namecheap.users.getPricing',
+      ClientIp: await obterIP(),
+      ProductType: 'DOMAIN',
+      ProductName: limpo,
+      // ProductCategory omitido: traz register, renew, transfer e reativação
+      // de uma vez, e queremos as duas primeiras.
+    },
+    timeout: 60000,
+  });
+
+  const erro = String(xml).match(/<Error Number="(\d+)">([^<]*)<\/Error>/i);
+  if (erro) throw new Error(`Namecheap recusou (${erro[1]}): ${erro[2]}`);
+
+  const achar = (categoria) =>
+    lerPrecos(xml, categoria).find((p) => p.tld === '.' + limpo) ?? null;
+
+  const registro = achar('register');
+  const renovacao = achar('renew');
+
+  const { priceLimit } = new (require('../../purchase-domains/wordpress'))();
+
+  // O custo que o teto compara é preço + ICANN: é assim que o fluxo de
+  // compra soma antes de decidir. Comparar só o `YourPrice` daria um
+  // "passa" otimista em terminação que estoura por causa da taxa.
+  const custoDeRegistro = registro ? registro.renovacao + registro.icann : null;
+
+  return {
+    tld: '.' + limpo,
+    registro: registro && {
+      preco: registro.renovacao,
+      icann: registro.icann,
+      total: Number(custoDeRegistro.toFixed(2)),
+    },
+    renovacao: renovacao && {
+      preco: renovacao.renovacao,
+      icann: renovacao.icann,
+      total: Number((renovacao.renovacao + renovacao.icann).toFixed(2)),
+    },
+    tetoDaCompraPorIA: priceLimit,
+    // `null` quando a Namecheap não deu preço de registro: aí não dá para
+    // afirmar nem que passa nem que não passa.
+    passaNoTeto: custoDeRegistro === null ? null : custoDeRegistro <= priceLimit,
+  };
+}
+
+module.exports = { sincronizar, consultar };

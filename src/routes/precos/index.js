@@ -44,4 +44,35 @@ router.post('/coletar', async (req, res, next) => {
   }
 });
 
+/**
+ * Preço de registro e de renovação de UMA terminação. Só leitura.
+ *
+ *   GET /api/precos/consultar?tld=site
+ *
+ * GET aqui é correto, diferente da rota acima: não grava nada e não tem
+ * efeito nenhum além de uma consulta à Namecheap. Repetir não muda nada.
+ *
+ * Existe para decidir troca de terminação na compra por IA com número na
+ * mão. A tabela `tld_pricing` guarda só RENOVAÇÃO, e quem decide se a
+ * compra consegue comprar é o preço de REGISTRO, contra o teto de US$ 5,00
+ * aplicado em `wordpress/index.js` e `atomicat/index.js`.
+ *
+ * Os dois preços são independentes: `.online` registra barato por promoção
+ * de primeiro ano e renova por US$ 35,88. Um não diz nada sobre o outro, e
+ * foi por isso que esta rota precisou existir.
+ */
+router.get('/consultar', async (req, res, next) => {
+  const { tld } = req.query;
+  if (!tld) {
+    return res.status(400).json({ success: false, erro: 'Informe ?tld=site' });
+  }
+
+  try {
+    const resultado = await require('../../services/namecheap/pricing').consultar(tld);
+    res.json({ success: true, ...resultado });
+  } catch (error) {
+    res.status(502).json({ success: false, erro: error.message });
+  }
+});
+
 module.exports = router;

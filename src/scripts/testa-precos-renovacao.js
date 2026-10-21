@@ -182,6 +182,45 @@ ok(
   ),
 );
 
+// ── leitura por CATEGORIA ───────────────────────────────────────────────
+//
+// O mesmo documento traz `renew` e `register`, e os dois sao precos bem
+// diferentes: registrar .com sai por US$ 0,99 no primeiro ano contra
+// US$ 18,48 de renovar. Confundir os dois e o erro mais facil aqui -- e o
+// que decide se a compra por IA passa no teto de US$ 5,00 e o REGISTRO.
+
+const registro = lerPrecos(XML, 'register');
+const porTldReg = new Map(registro.map((p) => [p.tld, p]));
+
+ok(
+  'le o bloco register quando pedido, com OUTRO preco',
+  porTldReg.get('.com')?.renovacao === 0.99,
+  String(porTldReg.get('.com')?.renovacao),
+);
+ok(
+  'OS DOIS NAO SE MISTURAM: o mesmo .com da 18,48 em renew e 0,99 em '
+    + 'register, no MESMO documento',
+  tem('.com').renovacao === 18.48 && porTldReg.get('.com').renovacao === 0.99,
+);
+ok(
+  'terminacao que so existe em register nao vaza para renew',
+  !tem('.sonoregister') && porTldReg.has('.sonoregister'),
+);
+ok(
+  'o padrao continua sendo renew -- o coletor diario chama sem argumento',
+  lerPrecos(XML).length === lerPrecos(XML, 'renew').length,
+);
+ok(
+  'categoria inexistente devolve lista vazia, nao quebra',
+  lerPrecos(XML, 'inexistente').length === 0,
+);
+ok(
+  'CATEGORIA SO ACEITA LETRAS -- ela entra numa expressao regular, e vem de '
+    + 'query string na rota de consulta',
+  lerPrecos(XML, 'renew">([sS]*?)<').length === 0
+    && lerPrecos(XML, '.*').length === 0,
+);
+
 // ── resultado ───────────────────────────────────────────────────────────
 
 console.log('\nPROVAS — LEITOR DE PRECOS DA NAMECHEAP\n');
