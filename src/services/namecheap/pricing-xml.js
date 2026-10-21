@@ -56,20 +56,32 @@ function atributo(trecho, nome) {
 }
 
 /**
- * Lê o catálogo de RENOVAÇÃO e devolve `[{ tld, renovacao, icann }]`.
+ * Lê uma categoria do catálogo e devolve `[{ tld, renovacao, icann }]`.
  *
- * Só o bloco `renew`. O mesmo documento traz `register`, e os dois são
- * preços bem diferentes — registrar um `.com` sai por US$ 0,99 no primeiro
- * ano contra US$ 18,48 de renovar.
+ * `categoria` é `renew` por padrão, que é o que o coletor diário usa. O
+ * mesmo documento traz `register`, e os dois são preços BEM diferentes —
+ * registrar um `.com` sai por US$ 0,99 no primeiro ano contra US$ 18,48 de
+ * renovar. Confundir os dois é o erro mais fácil de cometer aqui.
+ *
+ * O campo continua se chamando `renovacao` mesmo lendo `register`: é "o
+ * preço desta categoria". Rebatizar daria dois formatos de retorno para a
+ * mesma função, e quem chama já sabe o que pediu.
  */
-function lerPrecos(xml) {
-  const categoria = String(xml || '').match(
-    /<ProductCategory\s+Name="renew">([\s\S]*?)<\/ProductCategory>/i,
+function lerPrecos(xml, categoria = 'renew') {
+  // A categoria entra numa expressão regular, então só se aceita palavra:
+  // sem isto, um valor vindo de query string poderia alterar o padrão.
+  if (!/^[a-z]+$/i.test(String(categoria))) return [];
+
+  const bloco = String(xml || '').match(
+    new RegExp(
+      '<ProductCategory\\s+Name="' + categoria + '">([\\s\\S]*?)</ProductCategory>',
+      'i',
+    ),
   );
-  if (!categoria) return [];
+  if (!bloco) return [];
 
   const achados = [];
-  const produtos = categoria[1].matchAll(
+  const produtos = bloco[1].matchAll(
     /<Product\s+Name="([^"]+)">([\s\S]*?)<\/Product>/gi,
   );
 
