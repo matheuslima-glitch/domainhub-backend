@@ -53,4 +53,35 @@ function lerRenovacao(xml) {
   };
 }
 
-module.exports = { lerRenovacao };
+/**
+ * A data da Namecheap em `YYYY-MM-DD`.
+ *
+ * O `getInfo` devolve `MM/DD/YYYY`; o banco guarda `YYYY-MM-DD`. Comparar
+ * os dois sem converter dá resultado silenciosamente errado — e essa
+ * comparação é o que decide se uma renovação foi confirmada.
+ *
+ * Errar aqui para MAIS é o pior defeito possível neste fluxo: o domínio
+ * ficaria no banco com data futura falsa, o painel pararia de sinalizá-lo,
+ * e ele morreria recebendo tráfego pago.
+ *
+ * Por isso devolve `null` em qualquer formato que não reconheça, em vez de
+ * tentar adivinhar. Nulo faz quem chama NÃO confirmar a renovação, que é o
+ * lado seguro do erro.
+ */
+function normalizarData(bruta) {
+  const t = String(bruta ?? '').trim();
+  if (!t) return null;
+
+  const m = t.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (m) {
+    const [, mes, dia, ano] = m;
+    if (Number(mes) < 1 || Number(mes) > 12 || Number(dia) < 1 || Number(dia) > 31) return null;
+    return `${ano}-${mes.padStart(2, '0')}-${dia.padStart(2, '0')}`;
+  }
+
+  // Já em ISO, com ou sem hora.
+  const iso = t.slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(iso) ? iso : null;
+}
+
+module.exports = { lerRenovacao, normalizarData };

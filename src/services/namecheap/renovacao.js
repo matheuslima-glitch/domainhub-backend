@@ -44,7 +44,7 @@ const { createClient } = require('@supabase/supabase-js');
 const config = require('../../config/env');
 const contas = require('./contas');
 const { contaDoDominio } = require('./conta-do-dominio');
-const { lerRenovacao } = require('./renovacao-resposta');
+const { lerRenovacao, normalizarData } = require('./renovacao-resposta');
 
 const API = 'https://api.namecheap.com/xml.response';
 
@@ -102,6 +102,30 @@ async function renovadoHaPouco(domainId) {
 }
 
 /**
+ * A expiração que a NAMECHEAP mostra para este domínio, agora.
+ *
+ * Chamada depois de renovar, para confirmar que a renovação pegou. É a
+ * diferença entre "a API disse que renovou" e "a renovação existe".
+ *
+ * Devolve `null` quando não deu para ler — e `null` NÃO é tratado como
+ * confirmação. Quem chama mantém o domínio sinalizado como vencendo, que
+ * é o estado seguro.
+ */
+async function confirmarExpiracao(domainName, conta) {
+  try {
+    const info = await require('./domains').getDomainInfo(domainName, conta);
+    const bruta = info?.expiration_date ?? null;
+    if (!bruta) return { expiracao: null, erro: 'Namecheap não devolveu a expiração' };
+
+    // A conversao mora em `renovacao-resposta.js`, com provas: o getInfo
+    // devolve MM/DD/YYYY e o banco guarda YYYY-MM-DD.
+    return { expiracao: normalizarData(bruta), erro: null };
+  } catch (e) {
+    return { expiracao: null, erro: e.message };
+  }
+}
+
+/**
  * Renova UM domínio. Devolve o que aconteceu, nunca lança por falha da
  * Namecheap — quem chama precisa do resultado de cada um para montar o
  * relatório do lote.
@@ -141,9 +165,39 @@ async function renovarUm(dominio, solicitadoPor) {
     // Se a gravação falhar, a renovação ACONTECEU mesmo assim. Por isso o
     // erro sai com o OrderID: é o que permite achar a cobrança na fatura
     // da Namecheap e lançar à mão depois.
-    const nova = new Date(expiration_date || Date.now());
-    nova.setUTCFullYear(nova.getUTCFullYear() + ANOS);
-    const expiracaoNova = nova.toISOString().slice(0, 10);
+
+    // A NOVA EXPIRAÇÃO VEM DA NAMECHEAP, NÃO DA NOSSA ARITMÉTICA.
+    //
+    // A primeira versão calculava `expiração anterior + 1 ano` e gravava.
+    // Era o defeito mais perigoso deste arquivo, e não por imprecisão de
+    // data: um domínio cuja renovação saísse diferente do previsto ficaria
+    // no banco com uma data futura CONFIANTE e falsa. O painel pararia de
+    // sinalizá-lo, ninguém olharia, e o domínio morreria recebendo tráfego
+    // pago.
+    //
+    // Errar para mais aqui é muito pior que cobrar duas vezes: a cobrança
+    // dupla custa o preço de um domínio, o domínio morto custa a mídia que
+    // continua sendo injetada nele até alguém perceber.
+    //
+    // E não é hipótese: a própria Namecheap documenta que renovação após o
+    // vencimento soma à data ORIGINAL, não à data do pedido.
+    const confirmacao = await confirmarExpiracao(domain_name, conta);
+    const anterior = expiration_date ? String(expiration_date).slice(0, 10) : null;
+    const expiracaoNova = confirmacao.expiracao;
+
+    // Avançou de verdade? Esta é a pergunta que define se a renovação
+    // funcionou -- `Renew="true"` é o que a Namecheap AFIRMA, isto é o que
+    // ela MOSTRA depois.
+    const confirmado =
+      expiracaoNova !== null && (anterior === null || expiracaoNova > anterior);
+
+    if (!confirmado) {
+      console.error(
+        `🚨 [RENOVACAO] ${domain_name} FOI COBRADO (US$ ${r.cobradoUsd}, OrderID ${r.orderId}) ` +
+          `mas a expiração NÃO avançou: antes ${anterior}, agora ${expiracaoNova ?? 'não lida'}. ` +
+          `CONFERIR NA NAMECHEAP ANTES DE MANDAR TRÁFEGO.`
+      );
+    }
 
     const { error: erroGravacao } = await banco().from('domain_renewals').insert({
       domain_id: id,
@@ -153,7 +207,9 @@ async function renovarUm(dominio, solicitadoPor) {
       conta: _apelido,
       order_id: r.orderId,
       transaction_id: r.transactionId,
-      expiracao_anterior: expiration_date ? String(expiration_date).slice(0, 10) : null,
+      expiracao_anterior: anterior,
+      // Só o que a Namecheap confirmou. Nulo é honesto: diz "cobramos e
+      // não conseguimos confirmar", que é informação, não ausência dela.
       expiracao_nova: expiracaoNova,
       solicitado_por: solicitadoPor || null,
     });
@@ -165,26 +221,39 @@ async function renovarUm(dominio, solicitadoPor) {
       );
     }
 
-    // A expiração em `domains` é atualizada aqui para a tela não continuar
-    // mostrando o domínio como vencendo. O cron de 4h também corrigiria,
-    // mas só na próxima rodada — e quem acabou de renovar olha agora.
-    await banco()
-      .from('domains')
-      .update({ expiration_date: expiracaoNova })
-      .eq('id', id);
+    // `domains.expiration_date` SÓ é atualizado com data confirmada. Sem
+    // confirmação, o domínio continua aparecendo como vencendo no painel —
+    // que é o estado seguro: melhor alguém olhar um domínio que já está
+    // pago do que ignorar um que não está.
+    if (confirmado) {
+      await banco()
+        .from('domains')
+        .update({ expiration_date: expiracaoNova })
+        .eq('id', id);
+    }
 
     console.log(
-      `✅ [RENOVACAO] ${domain_name} · US$ ${r.cobradoUsd} · conta ${_apelido} · vence ${expiracaoNova}`
+      `${confirmado ? '✅' : '⚠️'} [RENOVACAO] ${domain_name} · US$ ${r.cobradoUsd} · ` +
+        `conta ${_apelido} · vence ${expiracaoNova ?? '??'}${confirmado ? '' : ' (NÃO CONFIRMADO)'}`
     );
 
     return {
       dominio: domain_name,
+      // `ok` é sobre a COBRANÇA ter dado certo. `confirmado` é sobre a
+      // expiração ter avançado. Os dois são verdadeiros no caso normal, e
+      // separá-los é o que permite a tela avisar sobre o caso anormal em
+      // vez de mostrar um check verde.
       ok: true,
+      confirmado,
       conta: _apelido,
       cobradoUsd: r.cobradoUsd,
       orderId: r.orderId,
+      expiracaoAnterior: anterior,
       expiracaoNova,
       gravado: !erroGravacao,
+      aviso: confirmado
+        ? null
+        : 'Cobrado, mas a expiração não avançou na Namecheap. NÃO mande tráfego antes de conferir.',
     };
   } catch (error) {
     console.error(`❌ [RENOVACAO] ${domain_name}: ${error.message}`);

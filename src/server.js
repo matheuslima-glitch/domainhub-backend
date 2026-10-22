@@ -509,6 +509,34 @@ cron.schedule('15 11,20 * * *', async () => {
 // diferentes e não disputam nada, mas manter as coletas em horários
 // separados deixa o log legível quando alguma falha.
 // ============================================
+// ============================================
+// AVISO DE DOMINIO VENCENDO COM TRAFEGO
+//
+// Todo dia as 11:40 UTC. Avisa no Telegram sobre dominios ativos que vencem
+// nos proximos 30 dias, ORDENADOS POR TRAFEGO.
+//
+// O prejuizo que isto evita e o mais caro do sistema: dominio que morre
+// recebendo trafego pago. A midia continua sendo injetada, as conversoes
+// vao a zero, e ninguem percebe -- diferente de uma cobranca dupla, que
+// aparece na fatura.
+//
+// Independente do fluxo de renovacao de proposito: pega renovacao que nao
+// pegou, dominio que ninguem lembrou, recusa por saldo, e dominio que nem
+// passou pelo DomainHub. Olha o estado do mundo, nao o nosso registro dele.
+//
+// 11:40 UTC: 25 minutos depois do relatorio de criticos das 11:15, para as
+// duas mensagens nao chegarem coladas no grupo e uma esconder a outra.
+// ============================================
+cron.schedule('40 11 * * *', async () => {
+  console.log('⏳ [CRON] Verificando dominios vencendo...');
+
+  try {
+    await require('./services/notify/vencendo-com-trafego').enviar();
+  } catch (error) {
+    console.error('❌ [CRON] Erro no aviso de vencimento:', error.message);
+  }
+});
+
 cron.schedule('40 4 * * *', async () => {
   console.log('💲 [CRON] Iniciando coleta de preços de renovação (Namecheap)...');
 
@@ -570,6 +598,7 @@ app.listen(config.PORT, async () => {
   console.log('💰 Cron de saldo (Namecheap): a cada 2 horas, aos :30');
   console.log('💲 Cron de preços de renovação (Namecheap): 1x por dia às 04:40 UTC');
   console.log('🚨 Cron de domínios críticos (grupos): 11:15 e 20:15 UTC');
+  console.log('⏳ Cron de domínios vencendo: 1x por dia às 11:40 UTC');
 
   const namecheapBalance = require('./services/namecheap/balance');
   const ip = await namecheapBalance.getServerIP();

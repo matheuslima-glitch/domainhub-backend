@@ -62,4 +62,18 @@ router.post('/criticos', async (req, res, next) => {
   }
 });
 
+/**
+ * Roda AGORA o aviso de domínios vencendo, sem esperar o cron das 11:40.
+ *
+ * Mesmo caminho do cron, então testar isto testa o que vai para produção.
+ */
+router.post('/vencendo', async (req, res, next) => {
+  try {
+    const resultado = await require('../../services/notify/vencendo-com-trafego').enviar();
+    res.json(resultado);
+  } catch (error) {
+    next(error);
+  }
+});
+
 module.exports = router;
