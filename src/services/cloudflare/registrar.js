@@ -36,6 +36,7 @@
 
 const axios = require('axios');
 const config = require('../../config/env');
+const { interpretar } = require('./registrar-resposta');
 
 const API = 'https://api.cloudflare.com/client/v4';
 
@@ -92,65 +93,54 @@ async function sondar(dominio) {
     };
   }
 
-  const resposta = await pedir('POST', '/registrar/domain-check', { domain_names: [nome] });
+  // O campo é `domains`, PLURAL e sem "name". A primeira versão mandava
+  // `domain_names` -- nome inventado por mim, não lido da documentação -- e
+  // a Cloudflare respondia `1006: domains array must contain at least one
+  // domain`, que parece lista vazia e não campo errado.
+  const resposta = await pedir('POST', '/registrar/domain-check', { domains: [nome] });
 
-  if (!resposta?.success) {
-    const erros = (resposta?.errors || []).map((e) => `${e.code}: ${e.message}`);
-    return {
-      configurado: true,
-      ok: false,
-      // O erro mais provável aqui é token sem a permissão certa, e a
-      // mensagem da Cloudflare diz isso com todas as letras.
-      erro: erros.length ? erros.join(' · ') : 'Resposta sem sucesso e sem erro declarado',
-      bruto: resposta,
-    };
-  }
-
-  // O formato do `result` ainda pode mudar: a API está em beta. Por isso a
-  // leitura é defensiva e o bruto vai junto.
-  const lista = Array.isArray(resposta.result) ? resposta.result : [resposta.result];
-  const achado = lista.find((d) => d?.domain_name === nome) ?? lista[0] ?? null;
-
-  return {
-    configurado: true,
-    ok: true,
-    dominio: nome,
-    disponivel: achado?.available ?? null,
-    // `reason` é o campo que distingue "alguém já tem" de "a API não vende
-    // esta terminação" — são conclusões opostas e a sonda existe por causa
-    // dessa diferença.
-    motivo: achado?.reason ?? null,
-    registravelPorApi: achado?.reason !== 'extension_not_supported_via_api',
-    precoUsd: achado?.price ?? achado?.fees?.registration ?? null,
-    moeda: achado?.currency ?? null,
-    bruto: achado,
-  };
+  const { priceLimit } = new (require('../../purchase-domains/wordpress'))();
+  return { configurado: true, ...interpretar(resposta, nome, priceLimit) };
 }
 
 /**
- * A conta está pronta para registrar?
+ * O token alcança a API de Registrar?
  *
- * Só confirma que o token alcança a conta e devolve o nome dela. NÃO há
- * endpoint público que diga "tem cartão cadastrado" — isso só se descobre
- * no primeiro registro, que é exatamente o que esta sonda NÃO faz.
+ * ── POR QUE NÃO `GET /accounts/{id}` ─────────────────────────────────────
  *
- * Então isto responde metade da pergunta, e a função diz qual metade.
+ * Era assim na primeira versão, e estava errado: ler os dados da conta
+ * exige permissão de conta, e um token CORRETAMENTE MÍNIMO — só
+ * `Registrar Domains: Admin` — não tem. A verificação falhava justamente
+ * quando o token estava certo, e respondia `9109: Unauthorized`, mandando
+ * quem investiga desconfiar da permissão que estava boa.
+ *
+ * Agora bate no próprio `domain-check`, que é o endpoint que importa. Se
+ * ele responde, o token serve para o que vamos fazer.
+ *
+ * ── O QUE ISTO NÃO RESPONDE ──────────────────────────────────────────────
+ *
+ * Se há cartão cadastrado, contato de registrante e aceite do contrato.
+ * Não existe endpoint público para isso: só aparece no primeiro registro
+ * de verdade, que é o que esta sonda NÃO faz.
  */
 async function conferirConta() {
   if (!credenciais()) return { configurado: false };
 
-  const resposta = await pedir('GET', '');
+  // Nome fixo e improvável. Só interessa se a chamada PASSA, não a resposta.
+  const resposta = await pedir('POST', '/registrar/domain-check', {
+    domains: ['zz-sonda-de-token-nao-registrar.com'],
+  });
+
+  const ok = !!resposta?.success;
   return {
     configurado: true,
-    ok: !!resposta?.success,
-    conta: resposta?.result?.name ?? null,
-    id: resposta?.result?.id ?? null,
-    erro: resposta?.success
-      ? null
-      : (resposta?.errors || []).map((e) => `${e.code}: ${e.message}`).join(' · '),
-    aviso:
-      'Token e conta alcançáveis. NÃO confirma cartão, contato de registrante ' +
-      'nem aceite do contrato — isso só aparece no primeiro registro de verdade.',
+    ok,
+    erro: ok ? null : (resposta?.errors || []).map((e) => `${e.code}: ${e.message}`).join(' · '),
+    aviso: ok
+      ? 'Token válido e com permissão de Registrar. NÃO confirma cartão, contato de '
+        + 'registrante nem aceite do contrato — isso só aparece no primeiro registro.'
+      : 'Se vier 9109, o token não tem "Registrar Domains: Admin" no escopo da conta certa. '
+        + 'Se vier erro de IP, o filtro do token não inclui o IP do Render.',
   };
 }
 
