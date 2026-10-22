@@ -184,6 +184,14 @@ class AtomiCatDomainPurchase {
         
         let domain = null;
         let retries = 0;
+
+        // Contas que falharam NESTA sessão de compra. Conta sem saldo ou
+        // com chave revogada falha sempre, e como a compra que falha não
+        // grava linha, o placar dela não sobe — sem isto, ela seria
+        // escolhida de novo a cada tentativa e as 10 do domínio seriam
+        // gastas ali, sem nunca tentar a outra.
+        const contasQueFalharam = [];
+
         
         while (!domain && retries < this.maxRetries) {
           try {
@@ -217,7 +225,7 @@ class AtomiCatDomainPurchase {
             //
             // Vale só para a compra por IA. A manual não rodizia: quem
             // digita o nome espera que ele caia na conta de sempre.
-            const contaDaCompra = await escolherContaParaCompra();
+            const contaDaCompra = await escolherContaParaCompra(contasQueFalharam);
 
             const availabilityCheck = await this.checkDomainAvailability(generatedDomain, contaDaCompra);
             
@@ -266,6 +274,14 @@ class AtomiCatDomainPurchase {
               
             } else {
               console.error(`❌ Erro na compra: ${purchaseResult.error}`);
+
+              // A conta sai da disputa para as próximas tentativas DESTE
+              // domínio. Se a falha era passageira, a próxima sessão a
+              // escolhe de novo — a lista morre com o laço.
+              if (!contasQueFalharam.includes(contaDaCompra)) {
+                contasQueFalharam.push(contaDaCompra);
+                console.warn(`⚠️ [CONTAS] "${contaDaCompra}" falhou e sai das próximas tentativas deste domínio`);
+              }
               
               // Se erro contém "Invalid", tentar outro domínio
               if (purchaseResult.error.includes('Invalid') || purchaseResult.error.includes('invalid')) {

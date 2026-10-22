@@ -124,6 +124,48 @@ ok(
   contas.escolher({ principal: 2, paulo: 100 }) === 'principal',
 );
 
+// ── CONTA QUEBRADA NAO PRENDE O LACO ────────────────────────────────────
+//
+// Defeito real, encontrado antes de morder. A escolha acontece DENTRO do
+// laco de 10 tentativas, e compra que falha nao grava linha -- entao o
+// placar da conta nao sobe e ela seria escolhida de novo, sempre.
+//
+// Conta sem saldo, chave revogada ou IP fora da whitelist falha TODA vez.
+// Sem exclusao, um dominio que caisse nela gastaria as 10 tentativas ali e
+// desistiria, sem nunca tentar a outra.
+//
+// E esse e o estado INICIAL de uma conta nova: a Namecheap so libera API
+// com saldo de US$ 50, 20 dominios ou US$ 50 em compras.
+
+ok(
+  'sem exclusao, a MESMA conta e escolhida de novo apos falhar -- e a '
+    + 'autocorrecao funcionando, e o problema quando a falha e permanente',
+  contas.escolher({ principal: 1, paulo: 0 }) === 'paulo'
+    && contas.escolher({ principal: 1, paulo: 0 }) === 'paulo',
+);
+ok(
+  'COM a conta excluida, a vez passa para a outra em vez de insistir',
+  contas.escolher({ principal: 1, paulo: 0 }, ['paulo']) === 'principal',
+);
+ok(
+  'e excluir a principal manda para a nova',
+  contas.escolher({ principal: 0, paulo: 0 }, ['principal']) === 'paulo',
+);
+ok(
+  'TODAS excluidas volta para a principal, nao devolve nulo -- nao e '
+    + 'esperanca de dar certo, e nao piorar: quem chama ja sabe desistir '
+    + 'pelas tentativas',
+  contas.escolher({ principal: 5, paulo: 5 }, ['principal', 'paulo']) === 'principal',
+);
+ok(
+  'exclusao com apelido que nao existe nao atrapalha',
+  contas.escolher({ principal: 0, paulo: 0 }, ['fantasma']) === 'principal',
+);
+ok(
+  'lista de exclusao vazia se comporta como antes',
+  contas.escolher({ principal: 1, paulo: 0 }, []) === 'paulo',
+);
+
 // ── O PLACAR CRESCE COM AS COMPRAS GRAVADAS ─────────────────────────────
 //
 // `escolherContaParaCompra` le este placar do banco contando linhas com

@@ -85,6 +85,14 @@ async function contaDoDominio(domainName) {
  * migration: carimbá-las mandaria as próximas ~1.350 compras seguidas para
  * a conta nova, compensando um passado que não é para compensar.
  *
+ * ── `excluir`: CONTAS QUE JA FALHARAM NESTA SESSAO ───────────────────────
+ *
+ * Conta sem saldo ou com chave revogada falha SEMPRE. Como a compra que
+ * falha não grava linha, o placar dela não sobe — e ela seria escolhida de
+ * novo a cada tentativa, gastando as 10 do domínio numa conta quebrada.
+ *
+ * Quem chama acumula os apelidos que falharam e passa aqui.
+ *
  * ── FALHA CAI NA PRINCIPAL ───────────────────────────────────────────────
  *
  * Se o banco não responder, compra na principal em vez de não comprar. O
@@ -92,7 +100,7 @@ async function contaDoDominio(domainName) {
  * a proporção de uma compra é barato, e a razão dela se corrige sozinha na
  * próxima — perder a compra, não.
  */
-async function escolherContaParaCompra() {
+async function escolherContaParaCompra(excluir = []) {
   if (!contas.temRodizio()) return contas.PRINCIPAL;
 
   try {
@@ -108,9 +116,11 @@ async function escolherContaParaCompra() {
       placar[c.apelido] = count ?? 0;
     }
 
-    const escolhida = contas.escolher(placar);
+    const escolhida = contas.escolher(placar, excluir);
     console.log(
-      `🎲 [CONTAS] Placar ${JSON.stringify(placar)} → próxima compra na conta "${escolhida}"`
+      `🎲 [CONTAS] Placar ${JSON.stringify(placar)}` +
+        (excluir.length ? ` · fora: ${excluir.join(', ')}` : '') +
+        ` → próxima compra na conta "${escolhida}"`
     );
     return escolhida;
   } catch (e) {
