@@ -24,6 +24,15 @@ class SupabaseBalanceService {
         user_id: config.SUPABASE_USER_ID,
         balance_usd: balanceData.balance_usd,
         balance_brl: balanceData.balance_brl,
+        // O detalhe por conta. Era calculado por `getBalance()`, devolvido
+        // na resposta da rota e DESCARTADO aqui -- e o painel lê esta
+        // tabela, não a rota. Resultado: a tela mostrava a soma de duas
+        // contas como se fosse uma, escondendo a que está quase vazia.
+        //
+        // `?? null` e não `?? []`: lista vazia diria "nenhuma conta", e o
+        // que queremos dizer é "não informado" -- o caso das linhas
+        // gravadas antes de a segunda conta existir.
+        por_conta: balanceData.por_conta ?? null,
         last_synced_at: balanceData.last_synced_at
       }, {
         onConflict: 'user_id'
