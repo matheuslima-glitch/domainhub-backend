@@ -15,12 +15,16 @@ const express = require('express');
 const router = express.Router();
 
 /**
- * O token alcança a conta nova?
+ * O token alcança a API de Registrar?
  *
  *   GET /api/registrar/conta
  *
  * Primeira coisa a rodar: se isto falhar, o resto falha pelo mesmo motivo e
  * não adianta investigar preço.
+ *
+ * Bate no `domain-check` com um nome fixo. A primeira versão lia os dados
+ * da conta, o que exige uma permissão que um token corretamente mínimo não
+ * tem — e aí ela falhava justamente quando o token estava certo.
  */
 router.get('/conta', async (req, res) => {
   try {
@@ -40,9 +44,19 @@ router.get('/conta', async (req, res) => {
  * específico: é sobre a TERMINAÇÃO. Um nome já tomado responde
  * `disponivel: false` e não diz nada sobre `.com` ser vendável por API.
  *
- * O campo que decide é `registravelPorApi`. `extension_not_supported_via_api`
- * significa que a Cloudflare vende aquela terminação no painel mas não pela
- * API — e aí a compra automática de `.com` não é possível do jeito pedido.
+ * O campo que decide é `registravelPorApi`. Quando ele é `false`, `motivo`
+ * diz por quê, e os casos levam a conclusões OPOSTAS:
+ *
+ *   domain_unavailable               o NOME está tomado. Tente outro; não
+ *                                    diz nada sobre a terminação.
+ *   extension_not_supported_via_api  a terminação existe no painel mas não
+ *                                    na API. Mata a compra automática.
+ *   domain_premium                   nome premium, que esta API não
+ *                                    registra. É sobre o nome, não a
+ *                                    terminação.
+ *
+ * A resposta traz REGISTRO e RENOVAÇÃO na mesma chamada, e compara o
+ * registro com o teto de US$ 5,00 que o fluxo de compra aplica.
  */
 router.get('/sonda', async (req, res) => {
   const { dominio } = req.query;
