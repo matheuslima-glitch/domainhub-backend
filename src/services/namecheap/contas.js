@@ -127,10 +127,37 @@ function parametros(apelido) {
  * dela não sobe, e ela é escolhida de novo na vez seguinte. Um contador
  * guardado em algum lugar não teria essa propriedade — ele avançaria mesmo
  * na falha, e o desvio seria permanente.
+ *
+ * ── FALHA PERSISTENTE: POR QUE `excluir` EXISTE ──────────────────────────
+ *
+ * Essa autocorreção é certa para falha PASSAGEIRA e errada para falha
+ * PERSISTENTE. Se a conta está sem saldo, com a chave revogada ou com o IP
+ * fora da whitelist, ela falha sempre — e, como o placar dela não sobe,
+ * seria escolhida de novo a cada tentativa.
+ *
+ * O laço de compra faz até 10 tentativas por domínio. Sem `excluir`, um
+ * domínio que caísse numa conta quebrada gastaria as 10 ali e desistiria,
+ * sem nunca tentar a outra.
+ *
+ * E esse é o estado INICIAL esperado de uma conta nova: a Namecheap só
+ * libera API com saldo de US$ 50, 20 domínios ou US$ 50 em compras. Uma
+ * conta recém-habilitada e ainda sem saldo falha em toda compra.
+ *
+ * Quem chama acumula os apelidos que falharam naquela sessão e passa aqui.
  */
-function escolher(contagens = {}) {
-  const contas = listar();
-  if (contas.length <= 1) return PRINCIPAL;
+function escolher(contagens = {}, excluir = []) {
+  const todas = listar();
+  if (todas.length <= 1) return PRINCIPAL;
+
+  // Contas que já falharam NESTA sessão de compra saem da disputa. Ver o
+  // bloco "FALHA PERSISTENTE" na documentação acima.
+  const fora = new Set(excluir);
+  const contas = todas.filter((c) => !fora.has(c.apelido));
+
+  // Todas falharam: volta para a principal. Não é esperança de que dê
+  // certo -- é não piorar. Devolver `null` obrigaria quem chama a tratar
+  // mais um caso, e o laço de tentativas já sabe desistir sozinho.
+  if (!contas.length) return PRINCIPAL;
 
   let melhor = contas[0];
   let menorRazao = Infinity;
