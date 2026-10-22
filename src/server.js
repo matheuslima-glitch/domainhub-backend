@@ -66,6 +66,9 @@ app.use('/api/precos', require('./routes/precos'));
 // Sonda do Cloudflare Registrar: só consulta, não registra nada. Serve para
 // decidir se a compra de .com pela Cloudflare é viável antes de construí-la.
 app.use('/api/registrar', require('./routes/registrar'));
+// Renovacao escolhida: a equipe marca na tela, isto executa. E a UNICA rota
+// que gasta dinheiro a pedido de um clique -- ver as travas no servico.
+app.use('/api/renovacao', require('./routes/renovacao'));
 app.use('/api/domains', require('./routes/domains'));
 app.use('/api/domains/deactivation', require('./routes/domain-deactivation'));
 // Pedidos de exclusao em lote: criar o pedido e avisar o Discord no mesmo
