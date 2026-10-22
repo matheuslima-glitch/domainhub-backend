@@ -29,6 +29,9 @@ const cancelledSessions = new Set();
 // A terminação que a IA registra. Mora em `../tld.js`, compartilhada com o
 // fluxo do Atomicat — trocar a terminação é trocar UMA linha, lá.
 const { SUFIXO } = require('../tld');
+// Qual conta da Namecheap usar. Ver src/services/namecheap/contas.js.
+const contas = require('../../services/namecheap/contas');
+const { escolherContaParaCompra } = require('../../services/namecheap/conta-do-dominio');
 
 class WordPressDomainPurchase {
   constructor() {
@@ -282,11 +285,20 @@ class WordPressDomainPurchase {
               continue;
             }
             
+            // A CONTA DESTE DOMÍNIO, escolhida uma vez e usada em todas as
+            // chamadas dele: checar, comprar, consultar e gravar. Dentro de
+            // uma compra, misturar conta falharia -- comprar numa e
+            // consultar na outra devolve "domínio não encontrado".
+            //
+            // Vale só para a compra por IA. A manual não rodizia: quem
+            // digita o nome espera que ele caia na conta de sempre.
+            const contaDaCompra = await escolherContaParaCompra();
+
             console.log(`🔍 [GODADDY] Verificando: ${generatedDomain}`);
             await this.updateProgress(sessionId, 'checking', 'in_progress', 
               `Verificando disponibilidade de ${generatedDomain}...`);
             
-            const availabilityCheck = await this.checkDomainAvailability(generatedDomain);
+            const availabilityCheck = await this.checkDomainAvailability(generatedDomain, contaDaCompra);
             
             if (!availabilityCheck.available) {
               console.log(`❌ Domínio indisponível: ${generatedDomain}`);
@@ -314,7 +326,7 @@ class WordPressDomainPurchase {
             await this.updateProgress(sessionId, 'purchasing', 'in_progress', 
               `Comprando ${generatedDomain}...`);
             
-            const purchaseResult = await this.purchaseDomainNamecheap(generatedDomain);
+            const purchaseResult = await this.purchaseDomainNamecheap(generatedDomain, contaDaCompra);
             
             if (purchaseResult.success) {
               domain = generatedDomain;
@@ -330,7 +342,7 @@ class WordPressDomainPurchase {
                 // Não interrompe aqui, deixa salvar no Supabase pelo menos
               }
               
-              await this.processPostPurchase(domain, userId, sessionId, trafficSource, plataforma, false, availabilityCheck.price);
+              await this.processPostPurchase(domain, userId, sessionId, trafficSource, plataforma, false, availabilityCheck.price, contaDaCompra);
             } else {
               console.error(`❌ Erro na compra: ${purchaseResult.error}`);
               retries++;
@@ -383,7 +395,7 @@ class WordPressDomainPurchase {
   /**
    * VERIFICAR DISPONIBILIDADE E PREÇO - NAMECHEAP
    */
-  async checkDomainAvailability(domain) {
+  async checkDomainAvailability(domain, conta = contas.PRINCIPAL) {
     if (!config.NAMECHEAP_API_KEY || !config.NAMECHEAP_API_USER) {
       console.error('❌ [NAMECHEAP] API não configurada!');
       return { available: false, error: 'Namecheap API não configurada' };
@@ -409,9 +421,7 @@ class WordPressDomainPurchase {
       console.log(`🔍 [NAMECHEAP] Verificando disponibilidade de ${domain}...`);
       
       const checkParams = {
-        ApiUser: config.NAMECHEAP_API_USER,
-        ApiKey: config.NAMECHEAP_API_KEY,
-        UserName: config.NAMECHEAP_API_USER,
+        ...contas.parametros(conta),
         Command: 'namecheap.domains.check',
         ClientIp: config.NAMECHEAP_CLIENT_IP,
         DomainList: domain
@@ -457,9 +467,7 @@ class WordPressDomainPurchase {
           console.log(`💰 [PRICING] Buscando preço para TLD: .${tld}`);
           
           const pricingParams = {
-            ApiUser: config.NAMECHEAP_API_USER,
-            ApiKey: config.NAMECHEAP_API_KEY,
-            UserName: config.NAMECHEAP_API_USER,
+            ...contas.parametros(conta),
             Command: 'namecheap.users.getPricing',
             ClientIp: config.NAMECHEAP_CLIENT_IP,
             ProductType: 'DOMAIN',
@@ -665,7 +673,7 @@ class WordPressDomainPurchase {
   /**
    * COMPRAR DOMÍNIO - NAMECHEAP
    */
-  async purchaseDomainNamecheap(domain) {
+  async purchaseDomainNamecheap(domain, conta = contas.PRINCIPAL) {
     if (!config.NAMECHEAP_API_KEY || !config.NAMECHEAP_API_USER) {
       console.error('❌ [NAMECHEAP] API não configurada!');
       return { success: false, error: 'Namecheap API não configurada' };
@@ -675,9 +683,7 @@ class WordPressDomainPurchase {
       console.log(`💳 [NAMECHEAP] Iniciando compra de ${domain}...`);
       
       const params = {
-        ApiUser: config.NAMECHEAP_API_USER,
-        ApiKey: config.NAMECHEAP_API_KEY,
-        UserName: config.NAMECHEAP_API_USER,
+        ...contas.parametros(conta),
         Command: 'namecheap.domains.create',
         ClientIp: config.NAMECHEAP_CLIENT_IP,
         DomainName: domain,
@@ -779,15 +785,13 @@ class WordPressDomainPurchase {
   /**
    * CONFIGURAR WHOISGUARD AUTO-RENEW (1 ANO)
    */
-  async configureWhoisGuard(domain) {
+  async configureWhoisGuard(domain, conta = contas.PRINCIPAL) {
     try {
       console.log(`🔒 [WHOISGUARD] Configurando WhoisGuard para ${domain}...`);
       
       // Passo 1: Buscar WhoisGuard ID associado ao domínio
       const listParams = {
-        ApiUser: config.NAMECHEAP_API_USER,
-        ApiKey: config.NAMECHEAP_API_KEY,
-        UserName: config.NAMECHEAP_API_USER,
+        ...contas.parametros(conta),
         Command: 'namecheap.whoisguard.getList',
         ClientIp: config.NAMECHEAP_CLIENT_IP,
         PageSize: 100
@@ -841,9 +845,7 @@ class WordPressDomainPurchase {
       // Passo 2: Ativar auto-renew (duração padrão: 1 ano)
       console.log(`🔄 [WHOISGUARD] Ativando renovação automática...`);
       const autoRenewParams = {
-        ApiUser: config.NAMECHEAP_API_USER,
-        ApiKey: config.NAMECHEAP_API_KEY,
-        UserName: config.NAMECHEAP_API_USER,
+        ...contas.parametros(conta),
         Command: 'namecheap.whoisguard.autorenew',
         ClientIp: config.NAMECHEAP_CLIENT_IP,
         WhoisguardID: whoisguardId,
@@ -876,7 +878,13 @@ class WordPressDomainPurchase {
    * PROCESSAR PÓS-COMPRA
    * 🔥 CLOUDFLARE + SUPABASE + WORDPRESS + WHATSAPP
    */
-  async processPostPurchase(domain, userId, sessionId, trafficSource = null, plataforma = null, isManual = false, purchasePrice = null) {
+  /**
+   * `conta` é o apelido da conta que comprou. Vem do rodízio na compra por
+   * IA e fica na principal na manual — e precisa atravessar daqui até o
+   * gravador, senão o domínio entra no banco sem dizer de quem é, e a
+   * sincronia e a troca de nameserver passam a procurá-lo na conta errada.
+   */
+  async processPostPurchase(domain, userId, sessionId, trafficSource = null, plataforma = null, isManual = false, purchasePrice = null, conta = contas.PRINCIPAL) {
     try {
       console.log(`🔧 [POST-PURCHASE] Iniciando configurações para ${domain}`);
       if (trafficSource) {
@@ -917,7 +925,7 @@ class WordPressDomainPurchase {
             // ETAPA 2: NAMESERVERS
             await this.updateProgress(sessionId, 'nameservers', 'in_progress', 
               `Alterando nameservers de ${domain}...`, domain);
-            await this.setNameservers(domain, cloudflareSetup.nameservers);
+            await this.setNameservers(domain, cloudflareSetup.nameservers, conta);
           }
         }
         
@@ -932,7 +940,7 @@ class WordPressDomainPurchase {
         await this.updateProgress(sessionId, 'whoisguard', 'in_progress', 
           `Configurando WhoisGuard para ${domain}...`, domain);
         await this.delay(5000); // Aguardar propagação do WhoisGuard na Namecheap
-        const whoisResult = await this.configureWhoisGuard(domain);
+        const whoisResult = await this.configureWhoisGuard(domain, conta);
         if (whoisResult) {
           await this.updateProgress(sessionId, 'whoisguard', 'completed', 
             `WhoisGuard configurado: 1 ano + auto-renew`, domain);
@@ -947,7 +955,7 @@ class WordPressDomainPurchase {
       await this.updateProgress(sessionId, 'supabase', 'in_progress', 
         `Salvando informações de ${domain}...`, domain);
       
-      const savedDomain = await this.saveDomainToSupabase(domain, userId, cloudflareSetup, trafficSource, plataforma, purchasePrice);
+      const savedDomain = await this.saveDomainToSupabase(domain, userId, cloudflareSetup, trafficSource, plataforma, purchasePrice, conta);
       
       if (savedDomain?.id) {
         await this.updateProgress(sessionId, 'supabase', 'completed', 
@@ -1277,16 +1285,14 @@ try {
   /**
    * ALTERAR NAMESERVERS
    */
-  async setNameservers(domain, nameservers) {
+  async setNameservers(domain, nameservers, conta = contas.PRINCIPAL) {
     try {
       const domainParts = domain.split('.');
       const tld = domainParts.pop();
       const sld = domainParts.join('.');
       
       const params = {
-        ApiUser: config.NAMECHEAP_API_USER,
-        ApiKey: config.NAMECHEAP_API_KEY,
-        UserName: config.NAMECHEAP_API_USER,
+        ...contas.parametros(conta),
         Command: 'namecheap.domains.dns.setCustom',
         ClientIp: config.NAMECHEAP_CLIENT_IP,
         SLD: sld,
@@ -1312,14 +1318,14 @@ try {
   /**
    * SALVAR NO SUPABASE
    */
-  async saveDomainToSupabase(domain, userId, cloudflareSetup, trafficSource = null, plataforma = null, purchasePrice = null) {
+  async saveDomainToSupabase(domain, userId, cloudflareSetup, trafficSource = null, plataforma = null, purchasePrice = null, conta = contas.PRINCIPAL) {
     try {
       console.log(`💾 [SUPABASE] Buscando informações completas antes de salvar...`);
       if (purchasePrice) {
         console.log(`   💰 Preço de compra: $${purchasePrice}`);
       }
       
-      const namecheapInfo = await this.getDomainInfoFromNamecheap(domain);
+      const namecheapInfo = await this.getDomainInfoFromNamecheap(domain, conta);
       
       const currentDate = new Date().toISOString();
       
@@ -1395,6 +1401,13 @@ try {
         updateFields.purchase_price = purchasePrice;
       }
       
+      // A CONTA VAI JUNTO, sempre -- inclusive na compra manual, em que ela
+      // é `principal`. Gravar explicitamente, em vez de deixar nulo, separa
+      // "comprado na principal" de "comprado antes de isto existir". O
+      // rodízio conta só as linhas preenchidas, e é essa diferença que
+      // impede o histórico de distorcer a proporção.
+      updateFields.registrar_account = conta;
+
       if (Object.keys(updateFields).length > 0) {
         console.log(`💾 [SUPABASE] Atualizando campos adicionais:`, updateFields);
         const { error: updateError } = await supabase
@@ -1577,7 +1590,7 @@ try {
   /**
    * BUSCAR INFORMAÇÕES DO DOMÍNIO NA NAMECHEAP
    */
-  async getDomainInfoFromNamecheap(domain) {
+  async getDomainInfoFromNamecheap(domain, conta = contas.PRINCIPAL) {
     try {
       console.log(`📋 [NAMECHEAP] Buscando informações de ${domain}...`);
       
@@ -1586,9 +1599,7 @@ try {
       const sld = domainParts.join('.');
       
       const params = {
-        ApiUser: config.NAMECHEAP_API_USER,
-        ApiKey: config.NAMECHEAP_API_KEY,
-        UserName: config.NAMECHEAP_API_USER,
+        ...contas.parametros(conta),
         Command: 'namecheap.domains.getInfo',
         ClientIp: config.NAMECHEAP_CLIENT_IP,
         DomainName: domain

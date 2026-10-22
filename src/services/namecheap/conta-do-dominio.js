@@ -64,4 +64,61 @@ async function contaDoDominio(domainName) {
   }
 }
 
-module.exports = { contaDoDominio };
+/**
+ * Qual conta deve receber a PRÓXIMA compra.
+ *
+ * Lê o placar no banco e entrega a decisão para `contas.escolher()`, que é
+ * pura e tem as provas.
+ *
+ * ── UMA CONTAGEM POR CONTA, E NÃO UM SELECT ──────────────────────────────
+ *
+ * `count: 'exact', head: true` por conta, em vez de trazer as linhas e
+ * contar aqui. Não é preciosismo: o PostgREST corta em MIL LINHAS EM
+ * SILÊNCIO, e este projeto já foi mordido por isso quatro vezes. Passando
+ * de mil compras, a contagem no JavaScript travaria em 1.000 e o rodízio
+ * passaria a decidir com número errado — sem erro nenhum aparecer.
+ *
+ * ── SÓ AS COMPRAS DO RODÍZIO ─────────────────────────────────────────────
+ *
+ * O filtro é `registrar_account = apelido`, que por construção exclui as
+ * ~2.705 linhas com `null` — as compradas antes disto existir. Ver a
+ * migration: carimbá-las mandaria as próximas ~1.350 compras seguidas para
+ * a conta nova, compensando um passado que não é para compensar.
+ *
+ * ── FALHA CAI NA PRINCIPAL ───────────────────────────────────────────────
+ *
+ * Se o banco não responder, compra na principal em vez de não comprar. O
+ * rodízio é uma preferência de distribuição; a compra é o trabalho. Perder
+ * a proporção de uma compra é barato, e a razão dela se corrige sozinha na
+ * próxima — perder a compra, não.
+ */
+async function escolherContaParaCompra() {
+  if (!contas.temRodizio()) return contas.PRINCIPAL;
+
+  try {
+    const placar = {};
+
+    for (const c of contas.listar()) {
+      const { count, error } = await banco()
+        .from('domains')
+        .select('id', { count: 'exact', head: true })
+        .eq('registrar_account', c.apelido);
+
+      if (error) throw new Error(error.message);
+      placar[c.apelido] = count ?? 0;
+    }
+
+    const escolhida = contas.escolher(placar);
+    console.log(
+      `🎲 [CONTAS] Placar ${JSON.stringify(placar)} → próxima compra na conta "${escolhida}"`
+    );
+    return escolhida;
+  } catch (e) {
+    console.error(
+      `⚠️ [CONTAS] Não deu para ler o placar do rodízio, comprando na principal: ${e.message}`
+    );
+    return contas.PRINCIPAL;
+  }
+}
+
+module.exports = { contaDoDominio, escolherContaParaCompra };
