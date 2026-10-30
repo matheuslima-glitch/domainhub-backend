@@ -519,6 +519,28 @@ cron.schedule('40 4 * * *', async () => {
   }
 });
 
+// ============================================
+// PRESENÇA NA CLOUDFLARE E NO WHM
+//
+// Grava em `domains` se cada domínio tem zona na Cloudflare e conta no WHM.
+// A aba "Sem acesso" do painel só lista quem está nos dois.
+//
+// Custa ~22 chamadas por rodada: ~21 páginas de zonas na Cloudflare e um
+// `listaccts` no WHM. Se uma das duas falhar, a rodada não grava nada e as
+// colunas ficam com a conferência de ontem.
+//
+// 05:00 UTC, entre os preços das 04:40 e o coletor das 05:20.
+// ============================================
+cron.schedule('0 5 * * *', async () => {
+  console.log('🔎 [CRON] Iniciando conferência de presença (Cloudflare e WHM)...');
+
+  try {
+    await require('./services/presenca').conferir();
+  } catch (error) {
+    console.error('❌ [CRON] Erro na conferência de presença:', error.message);
+  }
+});
+
 cron.schedule('20 5 * * *', async () => {
   console.log('📊 [CRON] Iniciando coleta de views diárias (Cloudflare)...');
 
@@ -566,6 +588,7 @@ app.listen(config.PORT, async () => {
   console.log('📆 Cron de fechamento mensal (Cloudflare): dia 2 às 06:00 UTC');
   console.log('💰 Cron de saldo (Namecheap): a cada 2 horas, aos :30');
   console.log('💲 Cron de preços de renovação (Namecheap): 1x por dia às 04:40 UTC');
+  console.log('🔎 Cron de presença (Cloudflare e WHM): 1x por dia às 05:00 UTC');
   console.log('🚨 Cron de domínios críticos (grupos): 11:15 e 20:15 UTC');
 
   const namecheapBalance = require('./services/namecheap/balance');

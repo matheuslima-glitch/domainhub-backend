@@ -236,4 +236,26 @@ router.post('/sync-external', async (req, res, next) => {
   }
 });
 
+/**
+ * POST /api/domains/presenca
+ *
+ * Confere AGORA se cada domínio está na Cloudflare e no WHM, sem esperar o
+ * cron das 05:00 UTC. Mesmo caminho do cron. Existe para quem acabou de
+ * aplicar a migration não passar um dia com a aba "Sem acesso" vazia.
+ *
+ * POST porque grava no banco. O erro vai no corpo: "coluna não existe" (a
+ * migration não rodou) e "WHM devolveu 0 contas" (token ou IP) se distinguem
+ * por ali, e não pela tela.
+ */
+router.post('/presenca', async (req, res) => {
+  try {
+    const resultado = await require('../../services/presenca').conferir();
+    // Gravação parcial não é sucesso: parte da base ficou com a conferência velha.
+    res.status(resultado.sucesso ? 200 : 502).json({ success: resultado.sucesso, ...resultado });
+  } catch (error) {
+    console.error('❌ Erro na conferência de presença:', error.message);
+    res.status(502).json({ success: false, erro: error.message });
+  }
+});
+
 module.exports = router;
