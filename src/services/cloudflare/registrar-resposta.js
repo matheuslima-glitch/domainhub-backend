@@ -1,5 +1,5 @@
 /**
- * LEITURA DA RESPOSTA DO `domain-check` DO CLOUDFLARE REGISTRAR
+ * LEITURA DAS RESPOSTAS DO CLOUDFLARE REGISTRAR
  *
  * Função pura, SEM NENHUMA DEPENDÊNCIA — nem `config`, nem `axios`. Mora
  * separada de `registrar.js` por isso: `config/env` lança quando falta
@@ -83,4 +83,129 @@ function interpretar(resposta, nome, teto) {
   };
 }
 
-module.exports = { interpretar };
+/**
+ * Estados em que o registro não muda mais sozinho.
+ *
+ * `action_required` e `blocked` entram aqui de propósito: não são sucesso nem
+ * falha, mas a documentação manda parar e mostrar para a pessoa, porque eles
+ * não se resolvem esperando.
+ */
+const ESTADOS_FINAIS = new Set(['succeeded', 'failed', 'action_required', 'blocked']);
+
+/**
+ * LÊ A RESPOSTA DE `POST /registrations` E DE `registration-status`.
+ *
+ * As duas devolvem o mesmo `WorkflowStatus`. Função pura, sem rede.
+ */
+function interpretarRegistro(resposta) {
+  const r = resposta?.result;
+  if (!resposta?.success || !r) {
+    const erros = (resposta?.errors || []).map((e) => `${e.code}: ${e.message}`);
+    return {
+      ok: false,
+      erro: erros.length ? erros.join(' · ') : 'Resposta sem sucesso e sem erro declarado',
+      bruto: resposta,
+    };
+  }
+
+  const registro = r.context?.registration ?? null;
+
+  return {
+    ok: true,
+    estado: r.state ?? null,
+    terminou: ESTADOS_FINAIS.has(r.state),
+    registrado: r.state === 'succeeded',
+    expiraEm: registro?.expires_at ?? null,
+    renovacaoAutomatica: registro?.auto_renew ?? null,
+    erro: r.error ? `${r.error.code}: ${r.error.message}` : null,
+    // Em `action_required`, é aqui que a Cloudflare diz o que falta fazer.
+    acao: r.context?.action ?? null,
+    bruto: r,
+  };
+}
+
+/** Nome em minúsculo se for um `.com` bem formado; senão `null`. */
+function nomeCom(dominio) {
+  const nome = String(dominio ?? '').trim().toLowerCase();
+  return /^[a-z0-9]([a-z0-9-]*[a-z0-9])?\.com$/.test(nome) ? nome : null;
+}
+
+/**
+ * O PEDIDO FAZ SENTIDO? Roda antes de qualquer chamada à Cloudflare.
+ *
+ * `confirmar` precisa repetir o domínio: esta rota gasta dinheiro sem
+ * reembolso, e um valor colado errado não pode bastar para isso.
+ */
+function motivoParaRecusarPedido(dominio, confirmar) {
+  const nome = nomeCom(dominio);
+  if (!nome) return `Só aceita um domínio .com válido. Recebido: ${dominio}`;
+  if (nomeCom(confirmar) !== nome) return 'O campo `confirmar` precisa repetir o domínio, igual.';
+  return null;
+}
+
+/**
+ * A CONSULTA DE AGORA LIBERA A COMPRA?
+ *
+ * Recebe o que `sondar()` devolveu. Tudo que não for um "sim" claro recusa:
+ * nesta função, dúvida custa uma nova tentativa, e o contrário custa dinheiro.
+ */
+function motivoParaRecusarConsulta(consulta, teto) {
+  if (!consulta?.configurado) return 'Conta do Registrar não configurada no Render.';
+  if (!consulta.ok) return `A consulta falhou: ${consulta.erro}`;
+  if (consulta.registravelPorApi !== true) {
+    return `A Cloudflare não libera este registro: ${consulta.motivo ?? 'motivo não informado'}`;
+  }
+  if (consulta.tier !== 'standard') return `Só compra nome comum. Veio: ${consulta.tier}`;
+  if (consulta.moeda !== 'USD') return `Só compra em dólar. Veio: ${consulta.moeda}`;
+  if (!(consulta.registroUsd > 0)) return `Preço inválido: ${consulta.registroUsd}`;
+  if (consulta.registroUsd > teto) {
+    return `US$ ${consulta.registroUsd} passa do teto do teste, US$ ${teto}.`;
+  }
+  return null;
+}
+
+/**
+ * O APONTAMENTO ESTÁ DE PÉ?
+ *
+ * `pronto` só é verdadeiro com a zona, o Custom Hostname e o certificado
+ * ativos: é a prova de que zona numa conta e Custom Hostname na outra
+ * funcionam juntos, que é a pergunta deste teste.
+ */
+function resumirApontamento(zona, hostname, registro, alvo) {
+  const erros = [
+    ...(hostname?.verification_errors ?? []),
+    ...(hostname?.ssl?.validation_errors ?? []).map((e) => e?.message ?? String(e)),
+  ];
+
+  return {
+    pronto: zona?.status === 'active'
+      && hostname?.status === 'active'
+      && hostname?.ssl?.status === 'active'
+      && registro?.content === alvo,
+    zona: {
+      id: zona?.id ?? null,
+      status: zona?.status ?? null,
+      conta: zona?.account?.id ?? null,
+      nameservers: zona?.name_servers ?? [],
+    },
+    customHostname: {
+      status: hostname?.status ?? null,
+      certificado: hostname?.ssl?.status ?? null,
+      erros,
+    },
+    apontamento: {
+      destino: registro?.content ?? null,
+      // Proxy ligado na zona nova mudaria o caminho do tráfego.
+      proxied: registro?.proxied ?? null,
+    },
+  };
+}
+
+module.exports = {
+  interpretar,
+  interpretarRegistro,
+  nomeCom,
+  motivoParaRecusarPedido,
+  motivoParaRecusarConsulta,
+  resumirApontamento,
+};

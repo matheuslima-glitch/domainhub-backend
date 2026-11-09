@@ -63,8 +63,8 @@ app.use('/api/notify', require('./routes/notify'));
 // sem esta rota, quem aplica a migration espera até 24h para ver preço na
 // tela, sem saber se o vazio é espera ou falha.
 app.use('/api/precos', require('./routes/precos'));
-// Sonda do Cloudflare Registrar: só consulta, não registra nada. Serve para
-// decidir se a compra de .com pela Cloudflare é viável antes de construí-la.
+// Sonda e registro de teste do Cloudflare Registrar. As rotas de registro
+// gastam dinheiro e têm trava própria, além desta autenticação.
 app.use('/api/registrar', require('./routes/registrar'));
 app.use('/api/domains', require('./routes/domains'));
 app.use('/api/domains/deactivation', require('./routes/domain-deactivation'));
