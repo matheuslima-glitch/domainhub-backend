@@ -12,6 +12,7 @@
     "testa:tld": "node src/scripts/testa-tld-da-compra.js",
     "testa:rodizio": "node src/scripts/testa-rodizio-contas.js",
     "testa:registrar": "node src/scripts/testa-sonda-registrar.js",
+    "testa:registro": "node src/scripts/testa-registro-teste.js",
     "testa:presenca": "node src/scripts/testa-presenca.js"
   },
   "dependencies": {

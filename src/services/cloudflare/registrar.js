@@ -1,9 +1,11 @@
 /**
- * SONDA DO CLOUDFLARE REGISTRAR
+ * SONDA E REGISTRO DO CLOUDFLARE REGISTRAR
  *
- * SÓ CONSULTA. Não registra domínio, não gasta dinheiro, não grava no banco.
- * Existe para decidir se a compra de `.com` pela Cloudflare é viável, com
- * número na mão, antes de escrever o fluxo de compra.
+ * `sondar` e `conferirConta` SÓ CONSULTAM: não gastam dinheiro. Existem para
+ * decidir se a compra de `.com` pela Cloudflare é viável, com número na mão.
+ *
+ * `registrar` GASTA DINHEIRO, sem reembolso. Só `registro-teste.js` chama, com
+ * as travas dele.
  *
  * ── O QUE PRECISA SER RESPONDIDO ANTES DE CONSTRUIR ──────────────────────
  *
@@ -36,7 +38,7 @@
 
 const axios = require('axios');
 const config = require('../../config/env');
-const { interpretar } = require('./registrar-resposta');
+const { interpretar, interpretarRegistro } = require('./registrar-resposta');
 
 const API = 'https://api.cloudflare.com/client/v4';
 
@@ -144,4 +146,28 @@ async function conferirConta() {
   };
 }
 
-module.exports = { sondar, conferirConta };
+/**
+ * REGISTRA UM DOMÍNIO. GASTA DINHEIRO, SEM REEMBOLSO.
+ *
+ * `auto_renew: false` é explícito porque a documentação se contradiz: a
+ * referência diz que o padrão é desligado, e o exemplo do anúncio mostra
+ * ligado. Um domínio de teste não pode renovar sozinho.
+ *
+ * A Cloudflare espera até 10 segundos e responde 201 (pronto) ou 202 (ainda
+ * processando). Depois de um 202 não se reenvia: acompanha-se o status.
+ */
+async function registrar(dominio) {
+  const resposta = await pedir('POST', '/registrar/registrations', {
+    domain_name: dominio,
+    auto_renew: false,
+  });
+  return interpretarRegistro(resposta);
+}
+
+/** Em que pé está o registro. Só consulta. */
+async function statusDoRegistro(dominio) {
+  const resposta = await pedir('GET', `/registrar/registrations/${dominio}/registration-status`);
+  return interpretarRegistro(resposta);
+}
+
+module.exports = { sondar, conferirConta, registrar, statusDoRegistro };

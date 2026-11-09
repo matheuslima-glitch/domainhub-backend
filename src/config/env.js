@@ -135,6 +135,11 @@ if (!coletaDiaria) {
   console.warn('   O coletor segue atualizando views_14d; só o detalhe por dia é descartado');
 }
 
+// Rotas de registro de teste do Cloudflare Registrar. Elas GASTAM DINHEIRO, por
+// isso aqui o padrão é desligado, ao contrário dos interruptores de coleta: só
+// `true` escrito no Render liga.
+const registroTesteLigado = String(process.env.REGISTRO_TESTE_LIGADO ?? 'false').toLowerCase() === 'true';
+
 // Verificar variáveis WhatsApp
 if (!process.env.ZAPI_INSTANCE || !process.env.ZAPI_CLIENT_TOKEN) {
   console.warn('⚠️ Z-API não configurado - notificações WhatsApp desabilitadas');
@@ -177,6 +182,7 @@ console.log(`${process.env.DISCORD_WEBHOOK_URL ? '✅' : '❌'} Discord: ${proce
 console.log(`${missingTelegram.length === 0 ? '✅' : '❌'} Telegram: ${missingTelegram.length === 0 ? 'Configurado' : 'NÃO CONFIGURADO'}`);
 console.log(`${coletaUniques ? '✅' : '⏸️'} Visitantes únicos: ${coletaUniques ? 'Coleta ligada' : 'DESLIGADA (COLETA_UNIQUES=false)'}`);
 console.log(`${coletaDiaria ? '✅' : '⏸️'} Série diária: ${coletaDiaria ? 'Coleta ligada' : 'DESLIGADA (COLETA_DIARIA=false)'}`);
+console.log(`${registroTesteLigado ? '⚠️' : '✅'} Registro de teste: ${registroTesteLigado ? 'LIGADO - pode gastar dinheiro' : 'Desligado'}`);
 console.log(`${desativacaoEstrita ? '✅' : '⚠️'} Desativação estrita: ${desativacaoEstrita ? 'Só marca após confirmar remoção' : 'DESLIGADA - marca sem verificar'}`);
 console.log('=====================================\n');
 
@@ -230,6 +236,9 @@ module.exports = {
   // e-mail + chave global que o resto do código usa.
   CLOUDFLARE_REGISTRAR_ACCOUNT_ID: process.env.CLOUDFLARE_REGISTRAR_ACCOUNT_ID,
   CLOUDFLARE_REGISTRAR_API_TOKEN: process.env.CLOUDFLARE_REGISTRAR_API_TOKEN,
+
+  // Libera as rotas de registro de teste. Ver o bloco acima.
+  REGISTRO_TESTE_LIGADO: registroTesteLigado,
 
   // Interruptor da coleta de visitantes únicos. Ver o bloco acima.
   COLETA_UNIQUES: coletaUniques,
