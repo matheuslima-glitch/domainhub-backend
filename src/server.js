@@ -66,6 +66,9 @@ app.use('/api/precos', require('./routes/precos'));
 // Sonda e registro de teste do Cloudflare Registrar. As rotas de registro
 // gastam dinheiro e têm trava própria, além desta autenticação.
 app.use('/api/registrar', require('./routes/registrar'));
+// Antibot em lote: coloca ou tira a regra de desafio da Cloudflare na zona de
+// cada domínio. Só super admin, e o modo padrão é simular (não altera nada).
+app.use('/api/antibot', require('./routes/antibot'));
 app.use('/api/domains', require('./routes/domains'));
 app.use('/api/domains/deactivation', require('./routes/domain-deactivation'));
 // Pedidos de exclusao em lote: criar o pedido e avisar o Discord no mesmo
