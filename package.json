@@ -14,7 +14,8 @@
     "testa:registrar": "node src/scripts/testa-sonda-registrar.js",
     "testa:registro": "node src/scripts/testa-registro-teste.js",
     "testa:presenca": "node src/scripts/testa-presenca.js",
-    "testa:antibot": "node src/scripts/testa-antibot.js"
+    "testa:antibot": "node src/scripts/testa-antibot.js",
+    "testa:criticos": "node src/scripts/testa-relatorio-criticos.js"
   },
   "dependencies": {
     "express": "^4.18.2",

@@ -150,7 +150,9 @@ class DiscordNotifier {
     let conteudo = this.converterFormatacao(message);
 
     // A mencao entra ANTES do truncamento para nunca ser cortada
-    const prefixo = critico ? `${PREFIXO_MENCAO}\n` : '';
+    // `mencionar: false` = continuação de um relatório em partes: só a 1ª
+    // parte chama o grupo, as outras chegam sem @everyone.
+    const prefixo = critico && opts.mencionar !== false ? `${PREFIXO_MENCAO}\n` : '';
     const limiteTexto = LIMITE_DISCORD - prefixo.length;
 
     if (conteudo.length > limiteTexto) {

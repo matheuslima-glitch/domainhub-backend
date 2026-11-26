@@ -28,9 +28,13 @@
 // chamadores que já escreviam `.send(...)`. São a mesma função.
 // =====================================================
 
+// `parte`: tamanho máximo de cada mensagem quando um texto longo é dividido
+// (espelharEmPartes). Fica abaixo do limite de cada canal — Discord 2.000, já
+// contando o "@everyone", e Telegram 4.096 — com folga para a conversão de
+// formatação (o Telegram troca *x* por <b>x</b>).
 const CANAIS = [
-  { nome: 'DISCORD', caminho: './discord' },
-  { nome: 'TELEGRAM', caminho: './telegram' }
+  { nome: 'DISCORD', caminho: './discord', parte: 1800 },
+  { nome: 'TELEGRAM', caminho: './telegram', parte: 3800 }
 ];
 
 /**
@@ -65,6 +69,46 @@ async function espelhar(message, opts = {}) {
 }
 
 /**
+ * Entrega um texto LONGO, dividido em partes no tamanho de cada canal.
+ *
+ * `dividir(limite)` devolve a lista de partes para aquele limite. Cada canal
+ * recebe as suas partes EM ORDEM, uma depois da outra; os canais correm em
+ * paralelo e um não derruba o outro, como em `espelhar`.
+ *
+ * Por que por canal: o Telegram, canal principal, aceita o dobro do Discord.
+ * Dividir tudo no tamanho do Discord mandaria ao Telegram o dobro de mensagens
+ * sem necessidade.
+ *
+ * Só a primeira parte vai com `mencionar: true` — as demais são continuação,
+ * e o Discord não repete o @everyone nelas.
+ *
+ * Como `espelhar`, NUNCA rejeita. Devolve um resultado por parte enviada.
+ *
+ * @param {(limite: number) => string[]} dividir
+ * @param {object} [opts] - os mesmos de `espelhar`
+ */
+async function espelharEmPartes(dividir, opts = {}) {
+  const porCanal = await Promise.all(
+    CANAIS.map(async ({ nome, caminho, parte }) => {
+      const resultados = [];
+      try {
+        const canal = require(caminho);
+        const partes = dividir(parte);
+        for (let i = 0; i < partes.length; i++) {
+          const r = await canal.send(partes[i], { ...opts, mencionar: i === 0 });
+          resultados.push({ canal: nome, parte: i + 1, partes: partes.length, ...(r || {}) });
+        }
+      } catch (e) {
+        console.error(`❌ [${nome}] Falha no canal: ${e.message}`);
+        resultados.push({ canal: nome, success: false, error: e.message });
+      }
+      return resultados;
+    })
+  );
+  return porCanal.flat();
+}
+
+/**
  * Dispara sem esperar, para quem não pode pagar o tempo da rede.
  *
  * É o que os fluxos de compra e swap precisam: o alerta sai, mas o tempo de
@@ -76,4 +120,4 @@ function espelharEmSegundoPlano(message, opts = {}) {
   );
 }
 
-module.exports = { espelhar, espelharEmSegundoPlano, send: espelhar, CANAIS };
+module.exports = { espelhar, espelharEmPartes, espelharEmSegundoPlano, send: espelhar, CANAIS };
